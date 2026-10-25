@@ -136,8 +136,9 @@ jobs:
             $request = '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"github-ci","version":"1"}}}'
             $reply = Invoke-WebRequest -Uri $url -Method POST -ContentType 'application/json' -Headers $headers -Body $request -TimeoutSec 15
             if ($reply.StatusCode -ne 200 -or $reply.Content -notmatch '"serverInfo"') { throw 'MCP initialize failed' }
-            $session = $reply.Headers['mcp-session-id']
-            if (-not $session) { throw 'Missing MCP session ID' }
+            $sessionValues = @($reply.Headers['mcp-session-id'])
+            $session = [string]$sessionValues[0]
+            if ([string]::IsNullOrWhiteSpace($session)) { throw 'Missing MCP session ID' }
             $headers['Mcp-Session-Id'] = $session
             $notification = '{"jsonrpc":"2.0","method":"notifications/initialized"}'
             Invoke-WebRequest -Uri $url -Method POST -ContentType 'application/json' -Headers $headers -Body $notification -TimeoutSec 10 | Out-Null

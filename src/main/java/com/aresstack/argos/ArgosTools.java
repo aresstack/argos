@@ -15,11 +15,19 @@ import java.util.function.Function;
 
 /** MCP definitions and small adapters; browser operations live in CamoufoxBrowser. */
 public final class ArgosTools {
+    static final String VERSION = "0.1.0";
+    private static final ObjectMapper JSON = new ObjectMapper();
     private final CamoufoxBrowser browser;
-    private final ObjectMapper json = new ObjectMapper();
 
     public ArgosTools(CamoufoxBrowser browser) {
         this.browser = browser;
+    }
+
+    public List<SyncToolSpecification> forProfile(ToolProfile profile) {
+        if (profile == ToolProfile.LEGACY) return all();
+        List<SyncToolSpecification> tools = new ArrayList<>(all());
+        tools.addAll(new NetworkTools(browser).expertTools());
+        return List.copyOf(tools);
     }
 
     public List<SyncToolSpecification> all() {
@@ -45,8 +53,10 @@ public final class ArgosTools {
         tools.add(tool("browser_evaluate", "Evaluate JavaScript in the current website and return its result. This can change the page.",
                 Map.of("expression", field("string", "JavaScript expression or function, e.g. () => document.title")),
                 List.of("expression"), args -> browser.evaluate(string(args, "expression"))));
-        tools.add(tool("browser_network", "List recent page requests and responses (URLs have query parameters redacted).",
-                Map.of(), List.of(), args -> browser.networkEvents()));
+        tools.add(tool("browser_network", "List recent page requests and responses, one line per request with an id "
+                        + "(URLs have query parameters redacted). Optional filter, e.g. \"xhr\", \"json\", \"failed\" or \"api/\".",
+                Map.of("filter", field("string", "Optional case-insensitive text matched against url, type, mime, kind, status")),
+                List.of(), args -> browser.networkEvents(optionalString(args, "filter"))));
         tools.add(SyncToolSpecification.builder()
                 .tool(Tool.builder().name("browser_screenshot")
                         .description("Take a PNG screenshot of the current Camoufox page.")
@@ -64,7 +74,7 @@ public final class ArgosTools {
         return List.copyOf(tools);
     }
 
-    private SyncToolSpecification tool(String name, String description,
+    static SyncToolSpecification tool(String name, String description,
                                       Map<String, Object> properties, List<String> required,
                                       Function<Map<String, Object>, Object> handler) {
         return SyncToolSpecification.builder()
@@ -74,7 +84,7 @@ public final class ArgosTools {
                     try {
                         Object response = handler.apply(request.arguments() == null ? Map.of() : request.arguments());
                         return CallToolResult.builder()
-                                .addTextContent(json.writeValueAsString(response)).build();
+                                .addTextContent(JSON.writeValueAsString(response)).build();
                     } catch (Exception error) {
                         return failure(error);
                     }
@@ -85,11 +95,11 @@ public final class ArgosTools {
         return new JsonSchema("object", properties, required, false, Map.of(), Map.of());
     }
 
-    private static Map<String, Object> field(String type, String description) {
+    static Map<String, Object> field(String type, String description) {
         return Map.of("type", type, "description", description);
     }
 
-    private static String string(Map<String, Object> arguments, String name) {
+    static String string(Map<String, Object> arguments, String name) {
         Object value = arguments.get(name);
         if (!(value instanceof String text)) {
             throw new IllegalArgumentException("Missing string field: " + name);
@@ -97,7 +107,16 @@ public final class ArgosTools {
         return text;
     }
 
-    private static int number(Map<String, Object> args, String field, int fallback) {
+    static String optionalString(Map<String, Object> arguments, String name) {
+        return arguments.get(name) instanceof String text ? text : null;
+    }
+
+    static boolean flag(Map<String, Object> arguments, String name) {
+        Object value = arguments.get(name);
+        return value instanceof Boolean b ? b : value instanceof String text && Boolean.parseBoolean(text);
+    }
+
+    static int number(Map<String, Object> args, String field, int fallback) {
         Object value = args.get(field);
         return value instanceof Number n ? n.intValue() : fallback;
     }

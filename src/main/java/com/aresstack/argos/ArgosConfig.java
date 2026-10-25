@@ -12,13 +12,21 @@ import java.util.Properties;
 /** Environment-first configuration compatible with AresStack / Pyloros. */
 public record ArgosConfig(
         String host, int port, Path executable, Path launchOptions, Path profile, boolean headless,
-        String publicOrigin, String securityMode, String centralOauthIssuer, String requiredScope) {
+        String publicOrigin, String securityMode, String centralOauthIssuer, String requiredScope,
+        ToolProfile toolProfile, boolean networkBodies) {
 
     // Direct browser-test construction remains independent of server configuration.
     public ArgosConfig(String host, int port, Path executable, Path launchOptions,
                        Path profile, boolean headless) {
         this(host, port, executable, launchOptions, profile, headless,
                 null, "central-oauth", null, "argos");
+    }
+
+    public ArgosConfig(String host, int port, Path executable, Path launchOptions, Path profile,
+                       boolean headless, String publicOrigin, String securityMode,
+                       String centralOauthIssuer, String requiredScope) {
+        this(host, port, executable, launchOptions, profile, headless, publicOrigin, securityMode,
+                centralOauthIssuer, requiredScope, ToolProfile.LEGACY, false);
     }
 
     public static ArgosConfig fromEnvironment() throws IOException {
@@ -75,7 +83,10 @@ public record ArgosConfig(
                 options == null ? null : Path.of(options).toAbsolutePath(),
                 Path.of(profile).toAbsolutePath(),
                 Boolean.parseBoolean(setting("ARGOS_HEADLESS", application, "browser.headless", "false")),
-                publicOrigin, securityMode, issuer, requiredScope);
+                publicOrigin, securityMode, issuer, requiredScope,
+                ToolProfile.parse(setting("ARGOS_TOOL_PROFILE", application, "tools.profile", null)),
+                // Opt-in: eagerly keeps (masked) document/XHR/fetch bodies for browser_network_detail.
+                Boolean.parseBoolean(setting("ARGOS_NETWORK_BODIES", application, "network.bodies", "false")));
     }
 
     private static Properties readProperties(Path path) throws IOException {

@@ -143,9 +143,27 @@ Der Login allein ist **keine** Discovery-Abnahme. Nach erfolgreicher OAuth-Verbi
 | `browser_fill` | Eingabefelder ausfüllen |
 | `browser_evaluate` | JavaScript in der Webseite ausführen |
 | `browser_screenshot` | Screenshot als MCP-Image zurückgeben |
-| `browser_network` | Letzte HTTP-Requests, Responses und Fehler untersuchen |
+| `browser_network` | Letzte HTTP-Requests, Responses und Fehler untersuchen (eine Zeile je Request mit ID, optional `filter`) |
 
-`browser_network` entfernt Query-Parameter und Benutzerinformationen aus den protokollierten URLs. Bis zu 200 Ereignisse bleiben im Speicher. `browser_evaluate` kann Webseiten verändern und ist deshalb nur für ausdrücklich autorisierte Nutzer über das gesicherte MCP-Plugin bestimmt.
+`browser_network` entfernt Query-Parameter und Benutzerinformationen aus den protokollierten URLs. Bis zu 200 Requests bleiben im Speicher; jeder Request erscheint einmal mit `id` (z. B. `n12`), `kind` (`request`, `response`, `failed`), `status`, `type`, `mime` und Dauer `ms`. Der optionale Parameter `filter` sucht ohne Groß-/Kleinschreibung in URL, Typ, MIME-Typ, Status und Zustand, z. B. `xhr`, `json` oder `failed`.
+
+### Netzwerkanalyse im Profil `expert`
+
+Mit `ARGOS_TOOL_PROFILE=expert` (Property `tools.profile`) veröffentlicht Argos zusätzlich:
+
+| Tool | Zweck |
+| --- | --- |
+| `browser_network_detail` | Einen Request per `id` vollständig anzeigen: URL mit maskierten Query-Werten, Status, MIME-Typ, Timing-Phasen (DNS, Verbindung, TLS, Warten, Empfang), Request-/Response-Header, POST-Daten, Weiterleitungskette; mit `body=true` zusätzlich den Text-Body (max. 32 000 Zeichen) |
+| `browser_network_har` | Die neuesten Requests (`limit`, Standard 50) als HAR 1.2 exportieren |
+| `browser_network_clear` | Aufzeichnung leeren, um eine einzelne Aktion isoliert zu beobachten |
+
+Ohne Angabe gilt das bisherige Profil (`legacy`) mit genau den neun Werkzeugen oben.
+
+**Tarnung:** Die Aufzeichnung nutzt ausschließlich die Netzwerkereignisse von WebDriver BiDi über Playwright. Es wird kein Skript in die Seite injiziert und kein Request umgeleitet. Bodies und vollständige Header werden erst bei Bedarf und nie innerhalb eines Event-Handlers über das Protokoll abgefragt. Binäre Antworten (PDF, Bilder) werden nicht gelesen.
+
+**Maskierung:** Alle Ausgaben laufen durch `SecretMasker`. `Authorization`, `Proxy-Authorization` und Header mit Namen wie `token`, `secret`, `api-key`, `session`, `csrf` werden vollständig ersetzt; bei `Cookie`/`Set-Cookie` bleiben nur Cookie-Namen und Attribute sichtbar. Query-, Formular- und JSON-Werte mit sensiblen Namen (`password`, `access_token`, `client_secret`, `code`, `key` …), versteckte Formularfelder sowie JWTs und `Bearer`-Werte im Text werden durch `[REDACTED]` ersetzt. Benutzerinformationen und Fragmente werden aus URLs entfernt.
+
+`ARGOS_NETWORK_BODIES=true` (Property `network.bodies`) speichert Text-Bodies von Dokument-, XHR- und Fetch-Antworten bereits beim Laden, damit sie auch nach einer weiteren Navigation noch abrufbar sind. Standard ist `false`; dann werden Bodies nur auf Anfrage geladen, solange der Browser sie noch vorhält. `browser_evaluate` kann Webseiten verändern und ist deshalb nur für ausdrücklich autorisierte Nutzer über das gesicherte MCP-Plugin bestimmt.
 
 ## GitHub Actions und Releases
 

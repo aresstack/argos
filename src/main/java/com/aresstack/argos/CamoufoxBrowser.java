@@ -8,13 +8,12 @@ import com.microsoft.playwright.Page;
 import com.microsoft.playwright.Playwright;
 import com.microsoft.playwright.Response;
 import com.microsoft.playwright.options.WaitUntilState;
+import com.aresstack.argos.network.NetworkRecorder;
+import com.aresstack.argos.network.SecretMasker;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.time.Instant;
-import java.util.ArrayDeque;
 import java.util.ArrayList;
-import java.util.Deque;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -30,23 +29,30 @@ import java.util.concurrent.TimeUnit;
  * onto a single driver thread. Never attaches to an existing user's browser.
  */
 public final class CamoufoxBrowser implements AutoCloseable {
-    private static final int MAX_NETWORK_EVENTS = 200;
     private final ArgosConfig config;
     private final ExecutorService driver = Executors.newSingleThreadExecutor(
             runnable -> Thread.ofPlatform().name("argos-camoufox-driver").unstarted(runnable));
     private final ObjectMapper mapper = new ObjectMapper();
-    private final Deque<Map<String, Object>> network = new ArrayDeque<>();
+    private final NetworkRecorder network;
     private Playwright playwright;
     private BrowserContext context;
     private Page page;
 
     public CamoufoxBrowser(ArgosConfig config) {
         this.config = config;
+        this.network = new NetworkRecorder(new SecretMasker(), config.networkBodies());
     }
 
     public <T> T onBrowser(Callable<T> action) {
         try {
-            Future<T> result = driver.submit(action);
+            Future<T> result = driver.submit(() -> {
+                try {
+                    return action.call();
+                } finally {
+                    // Outside Playwright event handlers, so protocol calls are safe here.
+                    if (page != null && !page.isClosed()) network.captureQueuedBodies();
+                }
+            });
             return result.get(90, TimeUnit.SECONDS);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
@@ -112,26 +118,9 @@ public final class CamoufoxBrowser implements AutoCloseable {
         }
         page = context.pages().stream().filter(p -> !p.isClosed()).findFirst()
                 .orElseGet(context::newPage);
-        page.onRequest(request -> record("request", request.method(), request.url(), 0));
-        page.onResponse(response -> record("response", response.request().method(), response.url(), response.status()));
-        page.onRequestFailed(request -> record("failed", request.method(), request.url(), 0));
+        // Protocol-level BiDi network events only; nothing is injected into the page.
+        network.attach(page);
         return page;
-    }
-
-    private void record(String kind, String method, String originalUrl, int status) {
-        String sanitized = originalUrl;
-        try {
-            java.net.URI uri = java.net.URI.create(originalUrl);
-            sanitized = new java.net.URI(uri.getScheme(), null, uri.getHost(), uri.getPort(),
-                    uri.getPath(), null, null).toString();
-        } catch (Exception ignored) {
-            // Unknown schemes may not have a host; keep only the scheme.
-            int colon = originalUrl.indexOf(':');
-            if (colon >= 0) sanitized = originalUrl.substring(0, colon + 1);
-        }
-        if (network.size() >= MAX_NETWORK_EVENTS) network.removeFirst();
-        network.addLast(Map.of("at", Instant.now().toString(), "kind", kind,
-                "method", method, "url", sanitized, "status", status));
     }
 
     public Map<String, Object> navigate(String target) {
@@ -206,7 +195,26 @@ public final class CamoufoxBrowser implements AutoCloseable {
     }
 
     public List<Map<String, Object>> networkEvents() {
-        return onBrowser(() -> List.copyOf(network));
+        return networkEvents(null);
+    }
+
+    public List<Map<String, Object>> networkEvents(String filter) {
+        return onBrowser(() -> network.summary(filter));
+    }
+
+    public Map<String, Object> networkDetail(String id, boolean includeBody) {
+        return onBrowser(() -> network.detail(id, includeBody));
+    }
+
+    public Map<String, Object> networkHar(int limit) {
+        return onBrowser(() -> network.har(limit, ArgosTools.VERSION));
+    }
+
+    public Map<String, Object> clearNetwork() {
+        return onBrowser(() -> {
+            network.clear();
+            return Map.of("cleared", true);
+        });
     }
 
     public Map<String, Object> status() {

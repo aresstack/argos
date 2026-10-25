@@ -51,4 +51,43 @@ class CamoufoxBrowserTest {
             site.stop(0);
         }
     }
+
+    @Test @Timeout(value=160,unit=TimeUnit.SECONDS)
+    void recordsMaskedNetworkDetailsWithoutTouchingThePage() throws Exception {
+        Assumptions.assumeTrue(Boolean.getBoolean("argos.testCamoufox"), "Opt-in real browser smoke");
+        ArgosConfig local = ArgosConfig.fromEnvironment();
+        local.requireBrowserConfiguration();
+        byte[] html = ("<html><head><title>Network</title></head><body><p id='out'>…</p><script>"
+                + "fetch('/api/data?q=x&token=abc').then(r=>r.json()).then(d=>document.querySelector('#out').textContent=d.name)"
+                + "</script></body></html>").getBytes(StandardCharsets.UTF_8);
+        byte[] json = "{\"name\":\"Ada\",\"access_token\":\"top-secret\"}".getBytes(StandardCharsets.UTF_8);
+        HttpServer site = HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0);
+        site.createContext("/", exchange -> {
+            boolean api = exchange.getRequestURI().getPath().startsWith("/api/");
+            byte[] body = api ? json : html;
+            exchange.getResponseHeaders().add("Content-Type", api ? "application/json" : "text/html; charset=utf-8");
+            if (api) exchange.getResponseHeaders().add("Set-Cookie", "sid=cookie-secret; Path=/; HttpOnly");
+            exchange.sendResponseHeaders(200, body.length);
+            try (var out = exchange.getResponseBody()) { out.write(body); }
+        });
+        site.start();
+        try (CamoufoxBrowser browser = new CamoufoxBrowser(new ArgosConfig(
+                "127.0.0.1", 0, local.executable(), local.launchOptions(),
+                temporary.resolve("profile"), true, null, "none", null, "argos", ToolProfile.EXPERT, true))) {
+            browser.navigate("http://localhost:" + site.getAddress().getPort() + "/");
+            assertEquals("Ada", browser.evaluate("() => document.querySelector('#out').textContent"));
+            var api = browser.networkEvents("/api/data");
+            assertEquals(1, api.size());
+            String id = (String) api.get(0).get("id");
+            Map<String, Object> detail = browser.networkDetail(id, true);
+            assertEquals("application/json", detail.get("mime"));
+            String rendered = detail.toString() + browser.networkHar(50);
+            assertTrue(rendered.contains("Ada"));
+            assertFalse(rendered.contains("top-secret"));
+            assertFalse(rendered.contains("cookie-secret"));
+            assertFalse(rendered.contains("token=abc"));
+        } finally {
+            site.stop(0);
+        }
+    }
 }

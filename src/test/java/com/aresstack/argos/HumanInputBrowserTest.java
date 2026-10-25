@@ -14,7 +14,6 @@ import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -52,9 +51,10 @@ class HumanInputBrowserTest {
             if (!chromium) options.setChannel("moz-firefox");
             try (Browser browser = type.launch(options)) {
                 Page page = browser.newPage(new Browser.NewPageOptions().setViewportSize(1200, 700));
-                page.setContent(PAGE);
                 RealInput input = new RealInput(new HumanInputSettings(
                         HumanInputSettings.Mode.NATURAL, 1, 0, 2026L, HumanInputSettings.UnicodePolicy.STRICT));
+                input.probeUnicode(page);
+                page.setContent(PAGE);
 
                 input.click(page, page.locator("#far"));
                 Map<String, Object> seen = (Map<String, Object>) page.evaluate("() => window.seen");
@@ -80,11 +80,22 @@ class HumanInputBrowserTest {
                 assertEquals(0, ((Number) seen.get("untrusted")).intValue(), "only trusted events");
                 assertEquals(List.of(), seen.get("traces"), "no Playwright marker events");
 
-                if (!chromium) {
-                    // Firefox via BiDi: Playwright Core refuses umlauts as real keys (playwright4j#36).
-                    assertThrows(IllegalStateException.class,
-                            () -> input.replaceText(page, page.locator("#q"), "Grüße"));
-                    assertEquals("", page.evaluate("() => document.getElementById('q').value"), "nothing half-typed is left behind");
+                // Playwright Core 1.62 refuses umlauts as real keys (playwright4j#36): fail closed, before the field
+                // is focused or cleared. Once Playwright4J sends them through performActions, they must arrive as
+                // trusted keys with the right event.key.
+                int keysBefore = keys.size();
+                try {
+                    input.replaceText(page, page.locator("#q"), "Grüße äöüÄÖÜß€");
+                    seen = (Map<String, Object>) page.evaluate("() => window.seen");
+                    assertEquals("Grüße äöüÄÖÜß€", page.evaluate("() => document.getElementById('q').value"));
+                    assertTrue(((List<List<Object>>) seen.get("keys")).stream().anyMatch(k -> "ß".equals(k.get(0))));
+                    assertEquals(0, ((Number) seen.get("untrusted")).intValue(), "umlauts as trusted keys");
+                } catch (IllegalStateException refused) {
+                    assertTrue(refused.getMessage().contains("playwright4j#36"), refused.getMessage());
+                    assertEquals("Hallo Welt", page.evaluate("() => document.getElementById('q').value"),
+                            "the field is untouched");
+                    seen = (Map<String, Object>) page.evaluate("() => window.seen");
+                    assertEquals(keysBefore, ((List<?>) seen.get("keys")).size(), "not a single key was pressed");
                 }
             }
         }

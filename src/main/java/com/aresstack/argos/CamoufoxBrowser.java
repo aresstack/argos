@@ -201,8 +201,21 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
                 shutDown();
                 throw error;
             }
+            probeUnicode();
             // Tabs opened by websites (target=_blank, window.open) are adopted like our own.
             context.onPage(this::adopt);
+        }
+    }
+
+    /** Probes real Unicode keys on a blank tab before any website is opened. */
+    private void probeUnicode() {
+        Optional<Page> blank = context.pages().stream()
+                .filter(p -> !p.isClosed() && "about:blank".equals(p.url())).findFirst();
+        Page probe = blank.orElseGet(context::newPage);
+        try {
+            input.probeUnicode(probe);
+        } finally {
+            if (blank.isEmpty()) probe.close();
         }
     }
 

@@ -48,6 +48,12 @@ public final class CamoufoxBrowser implements AutoCloseable {
     /** Source documents above this size are not pulled through the protocol for a snapshot. */
     private static final long MAX_SOURCE_BYTES = 8_000_000;
     private static final int PROBE_TIMEOUT_MS = 2_000;
+    private static final long SAVED_DOCUMENT_WAIT_NANOS = 5_000_000_000L;
+    /** Requests whose transfer ended, from context-level protocol events (driver thread); by identity, weak. */
+    private final java.util.Set<Request> finishedRequests =
+            java.util.Collections.newSetFromMap(new java.util.WeakHashMap<>());
+    private final java.util.Set<Request> failedRequests =
+            java.util.Collections.newSetFromMap(new java.util.WeakHashMap<>());
     private final ArgosConfig config;
     private final ExecutorService driver = Executors.newSingleThreadExecutor(
             runnable -> Thread.ofPlatform().name("argos-camoufox-driver").unstarted(runnable));
@@ -134,6 +140,9 @@ public final class CamoufoxBrowser implements AutoCloseable {
                 playwright = null;
                 throw error;
             }
+            // Protocol events: when a download's transfer ended (its request may not belong to the page any more).
+            context.onRequestFinished(finishedRequests::add);
+            context.onRequestFailed(failedRequests::add);
         }
         Page current = context.pages().stream().filter(p -> !p.isClosed()).findFirst()
                 .orElseGet(context::newPage);
@@ -153,6 +162,9 @@ public final class CamoufoxBrowser implements AutoCloseable {
             record("request", request.method(), request.url(), 0);
         });
         current.onDownload(started -> download = started);
+        current.onFrameNavigated(frame -> {
+            if (frame == current.mainFrame()) saved = null; // also same-document navigations
+        });
         current.onResponse(response -> {
             if (isMainDocument(current, response.request())) {
                 MainDocument document = new MainDocument(response);
@@ -251,6 +263,7 @@ public final class CamoufoxBrowser implements AutoCloseable {
     public Map<String, Object> waitFor(String selector, String text, int timeoutMillis) {
         return onBrowser(() -> {
             Page p = activePage();
+            if (saved != null) return savedWaitResult(saved, selector, text);
             ReadinessPolicy configured = config.readiness().settles() ? config.readiness() : ReadinessPolicy.balanced();
             ReadinessPolicy policy = configured.withTimeout(Math.max(500, Math.min(60_000, timeoutMillis)));
             Locator target = null;
@@ -353,19 +366,29 @@ public final class CamoufoxBrowser implements AutoCloseable {
      */
     private Optional<SavedDocument> savedSourceDocument(Page p, MainDocument response) {
         if (response == null || response.attachment()) return Optional.empty();
-        if (!DocumentType.classify(response.contentType(), response.url()).isSourceDocument()) return Optional.empty();
+        DocumentType type = DocumentType.classify(response.contentType(), response.url());
+        if (!type.isSourceDocument()) return Optional.empty();
+        Long length = response.contentLength();
+        if (length != null && length > MAX_SOURCE_BYTES) return Optional.empty();
+        // Never wait for an unfinished download on the driver thread (Download.path() has no deadline): only a
+        // download the browser reports finished within a few seconds is read, anything else stays a download.
+        long deadline = System.nanoTime() + SAVED_DOCUMENT_WAIT_NANOS;
+        String url = response.url();
+        if (!pumpUntil(p, () -> download != null && url.equals(download.url()), deadline)) return Optional.empty();
+        Download file = download;
+        download = null;
+        // This response's own request: an earlier transfer of the same URL may end in the meantime.
+        Request request = response.request();
+        if (!pumpUntil(p, () -> finishedRequests.contains(request) || failedRequests.contains(request), deadline)
+                || failedRequests.contains(request)) {
+            return Optional.empty(); // still loading or failed: the browser keeps it as a download
+        }
         try {
-            if (download == null || !response.url().equals(download.url())) {
-                p.waitForCondition(() -> download != null && response.url().equals(download.url()),
-                        new Page.WaitForConditionOptions().setTimeout(5_000));
-            }
-            Download file = download;
-            download = null;
+            Path path = file.path(); // the transfer has ended, so this returns promptly
             try {
-                Path path = file.path();
                 if (path == null || Files.size(path) > MAX_SOURCE_BYTES) return Optional.empty();
-                String text = new String(Files.readAllBytes(path), charset(response.contentType()));
-                return Optional.of(new SavedDocument(response.url(), response.status(), response.contentType(), text));
+                String text = decode(Files.readAllBytes(path), response.contentType(), type);
+                return Optional.of(new SavedDocument(url, response.status(), response.contentType(), text));
             } finally {
                 file.delete();
             }
@@ -374,6 +397,47 @@ public final class CamoufoxBrowser implements AutoCloseable {
         }
     }
 
+    /** Waits by pumping Playwright events on this thread until {@code done} holds or {@code deadline} passed. */
+    private static boolean pumpUntil(Page p, java.util.function.BooleanSupplier done, long deadline) {
+        while (!done.getAsBoolean()) {
+            if (System.nanoTime() >= deadline || p.isClosed()) return done.getAsBoolean();
+            p.waitForTimeout(50);
+        }
+        return true;
+    }
+
+    /**
+     * Text of a saved source document: the charset of the Content-Type header, else a byte order mark, else for
+     * XML the encoding of the XML declaration, else UTF-8.
+     */
+    static String decode(byte[] bytes, String contentType, DocumentType type) {
+        java.nio.charset.Charset declared = charset(contentType);
+        if (declared != null) return new String(bytes, declared);
+        if (bytes.length >= 3 && (bytes[0] & 0xff) == 0xef && (bytes[1] & 0xff) == 0xbb && (bytes[2] & 0xff) == 0xbf) {
+            return new String(bytes, 3, bytes.length - 3, java.nio.charset.StandardCharsets.UTF_8);
+        }
+        if (bytes.length >= 2 && (bytes[0] & 0xff) == 0xfe && (bytes[1] & 0xff) == 0xff) {
+            return new String(bytes, 2, bytes.length - 2, java.nio.charset.StandardCharsets.UTF_16BE);
+        }
+        if (bytes.length >= 2 && (bytes[0] & 0xff) == 0xff && (bytes[1] & 0xff) == 0xfe) {
+            return new String(bytes, 2, bytes.length - 2, java.nio.charset.StandardCharsets.UTF_16LE);
+        }
+        if (type == DocumentType.XML || type == DocumentType.FEED) {
+            String head = new String(bytes, 0, Math.min(bytes.length, 200), java.nio.charset.StandardCharsets.ISO_8859_1);
+            java.util.regex.Matcher xml = java.util.regex.Pattern.compile(
+                    "^\\s*<\\?xml[^>]*\\bencoding\\s*=\\s*[\"']([\\w.:-]+)[\"']").matcher(head);
+            if (xml.find()) {
+                try {
+                    return new String(bytes, java.nio.charset.Charset.forName(xml.group(1)));
+                } catch (RuntimeException unknown) {
+                    // fall through to UTF-8
+                }
+            }
+        }
+        return new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
+    }
+
+    /** The charset parameter of a Content-Type header, or null when absent or unknown. */
     private static java.nio.charset.Charset charset(String contentType) {
         if (contentType != null) {
             java.util.regex.Matcher m = java.util.regex.Pattern.compile("charset=\"?([\\w.:-]+)",
@@ -386,7 +450,30 @@ public final class CamoufoxBrowser implements AutoCloseable {
                 }
             }
         }
-        return java.nio.charset.StandardCharsets.UTF_8;
+        return null;
+    }
+
+    /**
+     * A saved feed is complete and has no page: nothing to wait for. Text is looked up in what the snapshot shows
+     * of it (case and spacing ignored, like a text query on a page); an element selector cannot match it.
+     */
+    private Map<String, Object> savedWaitResult(SavedDocument document, String selector, String text) {
+        Map<String, Object> result = savedResult(document);
+        boolean bySelector = selector != null && !selector.isBlank();
+        if (bySelector || (text != null && !text.isBlank())) {
+            boolean found = !bySelector && looseText(snapshots.read(new SavedPageSource(document),
+                    SnapshotReader.MAX_CHARACTERS).text()).contains(looseText(text));
+            result.put("readiness", found
+                    ? new ReadinessReport(ReadinessReport.READY, 0,
+                            List.of("document-loaded", ReadinessWaiter.TARGET_VISIBLE), List.of())
+                    : new ReadinessReport(ReadinessReport.TIMEOUT, 0, List.of("document-loaded"),
+                            List.of(ReadinessWaiter.TARGET_VISIBLE)));
+        }
+        return result;
+    }
+
+    private static String looseText(String text) {
+        return text.replaceAll("\\s+", " ").trim().toLowerCase(java.util.Locale.ROOT);
     }
 
     private static Map<String, Object> savedResult(SavedDocument saved) {
@@ -420,6 +507,7 @@ public final class CamoufoxBrowser implements AutoCloseable {
         private final int status;
         private final String contentType;
         private final boolean attachment;
+        private final Long contentLength;
         /** Set from the protocol's requestfinished event (driver thread). */
         boolean finished;
         private Optional<String> body;
@@ -429,6 +517,8 @@ public final class CamoufoxBrowser implements AutoCloseable {
             this.url = response.url();
             this.status = response.status();
             this.contentType = response.headerValue("content-type");
+            String length = response.headerValue("content-length");
+            this.contentLength = length != null && length.trim().matches("\\d{1,18}") ? Long.valueOf(length.trim()) : null;
             String disposition = response.headerValue("content-disposition");
             this.attachment = disposition != null && disposition.toLowerCase(java.util.Locale.ROOT).startsWith("attachment");
         }
@@ -437,6 +527,9 @@ public final class CamoufoxBrowser implements AutoCloseable {
         int status() { return status; }
         String contentType() { return contentType; }
         boolean attachment() { return attachment; }
+        /** The declared Content-Length, or null. */
+        Long contentLength() { return contentLength; }
+        Request request() { return response.request(); }
 
         boolean isFor(Request request) {
             return response.request() == request;
@@ -545,6 +638,7 @@ public final class CamoufoxBrowser implements AutoCloseable {
         return onBrowser(() -> {
             Page p = activePage();
             p.locator(selector).first().click();
+            saved = null; // the click acted on the rendered page, which is the current document again
             return Map.of("clicked", selector, "url", p.url());
         });
     }
@@ -553,6 +647,7 @@ public final class CamoufoxBrowser implements AutoCloseable {
         return onBrowser(() -> {
             Page p = activePage();
             p.locator(selector).first().fill(text);
+            saved = null;
             return Map.of("filled", selector, "url", p.url());
         });
     }
@@ -572,7 +667,7 @@ public final class CamoufoxBrowser implements AutoCloseable {
 
     public Map<String, Object> status() {
         return onBrowser(() -> Map.of("started", context != null, "profile", config.profile().toString(),
-                "url", page == null || page.isClosed() ? "" : page.url()));
+                "url", saved != null ? saved.url() : page == null || page.isClosed() ? "" : page.url()));
     }
 
     @Override

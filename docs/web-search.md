@@ -64,6 +64,11 @@ Format wie in AskAI, nur Treffer zuerst. `BrowserWebSearch` implementiert den Po
   `isTrusted=false`). Argos liest nur `page.content()`/`title()` und Locator-Abfragen (isolierte
   Playwright-Welt) und klickt mit `page.mouse()` auf die Bounding-Box-Mitte (WebDriver-BiDi-Eingabe).
   Keine Init-/Preload-Skripte, keine Bindings, keine Markierungsattribute.
+- **Klick nur über Rohmaus.** Das Element wird per `Locator.count()`/`boundingBox()` nur vermessen; kein
+  `Locator.click()` oder `scrollIntoViewIfNeeded()` (deren Actionability-Logik löst seitenseitig sichtbare
+  Marker-Events aus, playwright4j #38). Gescrollt wird mit dem Mausrad. Kein `route()`.
+- **Sparsame Lesezugriffe.** `page.content()` sendet in Playwright4J `userActivation:true` (#37); pro
+  Ergebnisseite wird genau einmal gelesen, nach einem Consent-Klick ein zweites Mal.
 - **Ohne Geometrie- und Farbsignale.** Deshalb ist die Mindestkonfidenz 0,3 statt 0,5; die Fixtures
   liegen bei 0,34–0,8. Sichtbarkeit wird aus dem Markup geschätzt (`hidden`, `aria-hidden`, Inline-Style).
 - **Adapter-Selektoren zuerst.** Je Endpunkt ein bekannter Ergebnisblock-Selektor (`div.result`,

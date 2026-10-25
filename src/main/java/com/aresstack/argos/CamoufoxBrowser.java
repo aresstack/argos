@@ -254,10 +254,16 @@ public final class CamoufoxBrowser implements AutoCloseable {
     public boolean clickWithTrustedInput(String selector) {
         return onBrowser(() -> {
             Page p = activePage();
+            // Measure only (count/boundingBox); no Locator.click or scrollIntoView, whose actionability
+            // machinery dispatches page-observable marker events (playwright4j #38).
             Locator target = p.locator(selector).first();
             if (target.count() == 0) return false;
-            target.scrollIntoViewIfNeeded(new Locator.ScrollIntoViewIfNeededOptions().setTimeout(5_000));
-            BoundingBox box = target.boundingBox();
+            BoundingBox box = target.boundingBox(new Locator.BoundingBoxOptions().setTimeout(2_000));
+            if (box != null && (box.y < 0 || box.y + box.height > 700)) {
+                p.mouse().wheel(0, box.y - 300); // scroll like a user, then measure again
+                p.waitForTimeout(400);
+                box = target.boundingBox(new Locator.BoundingBoxOptions().setTimeout(2_000));
+            }
             if (box == null || box.width < 1 || box.height < 1) return false;
             double x = box.x + box.width / 2;
             double y = box.y + box.height / 2;

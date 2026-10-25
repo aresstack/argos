@@ -104,11 +104,12 @@ public final class ArgosTools {
                         + "Example: {\"url\": \"https://en.wikipedia.org/wiki/Firefox\"}",
                 Map.of("url", field("string", "Full http(s) URL")), List.of("url"),
                 args -> web.open(string(args, "url"))));
-        tools.add(text("web_read", "Read the text of the current page again. Long pages come in parts: "
-                        + "the answer says PART 1 of 3, then ask for the next part. Example: {\"part\": 2}",
+        tools.add(text("web_read", "Read the text of the page the browser shows, whichever tool opened it. "
+                        + "Long pages come in parts: the answer says PART 1 of 3, then ask for the next part. "
+                        + "Example: {\"part\": 2}",
                 Map.of("part", field("integer", "Part number, default 1")), List.of(),
                 args -> web.read(number(args, "part", 1))));
-        tools.add(text("web_links", "List the links of the current page as link-1, link-2, ... "
+        tools.add(text("web_links", "List the links of the page the browser shows as link-1, link-2, ... "
                         + "Use the id with web_follow. Call web_read first if the page loaded more content. Example: {}",
                 Map.of(), List.of(), args -> web.links()));
         tools.add(text("web_follow", "Open a link by its id: link-3 from web_links or result-2 from web_search. "

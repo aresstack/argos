@@ -16,12 +16,19 @@ import java.util.regex.Pattern;
  * <p>Search results (result-N) and page links (link-N) are separate snapshots. A bare
  * number such as "2" refers to the list the agent saw last: web_search shows results,
  * web_links shows links. Anything that cannot be resolved fails with a clear message.
+ *
+ * <p>The session follows the browser: in the expert profile a page that browser_navigate, a
+ * click or a tab switch opened is read by web_read and web_links as well. Only the search
+ * provider's own page after web_search is not a page to read; a result has to be opened first.
  */
 public final class WebSession {
     public static final int DEFAULT_PART_CHARACTERS = 12_000;
     public static final int DEFAULT_MAX_LINKS = 150;
     private static final Pattern TARGET = Pattern.compile(
             "^\\[?\\s*(link|result)?\\s*[-_ #]?\\s*(\\d{1,4})\\s*]?$");
+    private static final String NO_PAGE = "No page is open yet. Call web_open or web_search first.";
+    private static final String AFTER_SEARCH = "No page is open since the last web_search. "
+            + "Open a result first, e.g. web_follow link_id=\"result-1\".";
 
     private enum Listing { RESULTS, LINKS }
 
@@ -35,6 +42,8 @@ public final class WebSession {
     private List<SearchHit> results = List.of();
     private Listing lastListing = Listing.LINKS;
     private PageCapture page;
+    /** Where the browser stood after the last web_search: the provider's page, which is not adopted. */
+    private String searchPage = "";
 
     public WebSession(BrowserPagePort browser, UrlPolicy policy, WebSearchPort search) {
         this(browser, policy, search, DEFAULT_PART_CHARACTERS, DEFAULT_MAX_LINKS);
@@ -67,6 +76,7 @@ public final class WebSession {
         // The search provider navigated the browser; the previous page and its link ids are gone.
         page = null;
         links.clear();
+        searchPage = browser.currentUrl();
         StringBuilder out = new StringBuilder();
         for (int i = 0; i < results.size(); i++) {
             SearchHit hit = results.get(i);
@@ -89,13 +99,17 @@ public final class WebSession {
     }
 
     public synchronized String read(int part) {
-        requirePage();
+        requireShownPage();
         return show(accept(browser.current()), part);
     }
 
-    /** Links of the last capture; no extra browser read (web_read refreshes late-loaded links). */
+    /**
+     * Links of the last capture; no extra browser read (web_read refreshes late-loaded links) unless
+     * another tool moved the browser since, because the ids belong to the page it shows.
+     */
     public synchronized String links() {
-        requirePage();
+        String shown = requireShownPage();
+        if (page == null || !page.url().equals(shown)) accept(browser.current());
         lastListing = Listing.LINKS;
         List<PageLink> current = links.links();
         if (current.isEmpty()) return "No links on " + page.url();
@@ -134,7 +148,7 @@ public final class WebSession {
     }
 
     public synchronized String back() {
-        requirePage();
+        requireShownPage();
         PageCapture previous = browser.back();
         if (previous == null) throw new IllegalStateException("No previous page in history.");
         return show(accept(previous), 1);
@@ -175,12 +189,19 @@ public final class WebSession {
         return out.append('\n').append(slice).toString();
     }
 
-    private void requirePage() {
-        if (page != null) return;
-        if (!results.isEmpty()) {
-            throw new IllegalStateException("No page is open since the last web_search. "
-                    + "Open a result first, e.g. web_follow link_id=\"result-1\".");
+    /**
+     * The address the browser shows, which web_* read even when another tool opened it (expert profile:
+     * browser_navigate, clicks, tab switches). A blank tab is nothing to read, and the search provider's
+     * page after web_search is left to web_follow.
+     */
+    private String requireShownPage() {
+        String shown = browser.currentUrl();
+        if (shown.isBlank() || "about:blank".equals(shown)) {
+            page = null;
+            links.clear();
+            throw new IllegalStateException(results.isEmpty() ? NO_PAGE : AFTER_SEARCH);
         }
-        throw new IllegalStateException("No page is open yet. Call web_open or web_search first.");
+        if (page == null && !results.isEmpty() && shown.equals(searchPage)) throw new IllegalStateException(AFTER_SEARCH);
+        return shown;
     }
 }

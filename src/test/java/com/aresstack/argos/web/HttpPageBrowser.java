@@ -28,6 +28,16 @@ final class HttpPageBrowser implements BrowserPagePort {
     }
 
     @Override
+    public String currentUrl() {
+        return history.isEmpty() ? "" : history.peek();
+    }
+
+    /** Another tool (browser_navigate, a click, a tab switch) moves the browser; the web session is not told. */
+    void moveTo(String url) {
+        history.push(fetch(url, null).url());
+    }
+
+    @Override
     public PageCapture back() {
         if (history.size() < 2) return null;
         history.pop();

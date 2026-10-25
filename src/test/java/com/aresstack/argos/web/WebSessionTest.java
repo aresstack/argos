@@ -117,7 +117,40 @@ class WebSessionTest {
     }
 
     @Test void requiresAPageBeforeReading() {
-        assertThrows(IllegalStateException.class, () -> web.read(1));
+        var error = assertThrows(IllegalStateException.class, () -> web.read(1));
+        assertTrue(error.getMessage().startsWith("No page is open yet"), error.getMessage());
+    }
+
+    @Test void readsThePageAnotherToolOpened() {
+        browser.moveTo(base + "/article");                 // browser_navigate in the expert profile
+        String answer = web.read(1);
+        assertTrue(answer.startsWith("URL: " + base + "/article\nTITLE: Article\nLINKS: 1"), answer);
+        assertEquals("link-1: Home — " + base + "/", web.links());
+        assertTrue(web.follow("link-1").contains("TITLE: Start"));
+        assertEquals(base + "/article", browser.lastReferer, "the adopted page is the referer");
+    }
+
+    @Test void linkIdsFollowTheBrowserWhenAnotherToolMovedIt() {
+        web.open(base + "/");
+        browser.moveTo(base + "/article");
+        assertEquals("link-1: Home — " + base + "/", web.links(), "ids belong to the page the browser shows");
+        browser.clear();                                   // a blank tab is nothing to read
+        var error = assertThrows(IllegalStateException.class, web::links);
+        assertTrue(error.getMessage().startsWith("No page is open yet"), error.getMessage());
+    }
+
+    @Test void theSearchProvidersPageIsNotAdoptedButALaterNavigationIs() throws Exception {
+        WebSearchPort engine = query -> {
+            browser.moveTo(base + "/about");               // the provider leaves the browser on its results page
+            return new SearchResults(List.of(new SearchHit("Article", base + "/article", "")), List.of());
+        };
+        WebSession searching = new WebSession(browser, UrlPolicy.off(), engine);
+        searching.search("camoufox");
+        var error = assertThrows(IllegalStateException.class, () -> searching.read(1));
+        assertTrue(error.getMessage().contains("web_follow link_id=\"result-1\""), error.getMessage());
+        browser.moveTo(base + "/article");                 // browser_navigate after the search
+        assertTrue(searching.read(1).contains("TITLE: Article"));
+        assertTrue(searching.follow("result-1").contains("TITLE: Article"), "results stay valid");
     }
 
     @Test void strictPolicyBlocksLoopbackAndNonWebUrls() {
@@ -140,6 +173,7 @@ class WebSessionTest {
                 return new PageCapture("http://127.0.0.1/admin", "Router", "secret", "");
             }
             @Override public PageCapture current() { return open(null, null); }
+            @Override public String currentUrl() { return cleared[0] ? "about:blank" : "http://127.0.0.1/admin"; }
             @Override public PageCapture back() { return null; }
             @Override public void clear() { cleared[0] = true; }
         };

@@ -13,6 +13,9 @@ public interface BrowserPagePort {
     /** Read the current document again without navigating. */
     PageCapture current();
 
+    /** The address the browser shows ({@code about:blank} for a blank tab), or "" before it started. */
+    String currentUrl();
+
     /** Go back one history entry. @return the previous page, or null without history. */
     PageCapture back();
 

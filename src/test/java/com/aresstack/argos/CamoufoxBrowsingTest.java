@@ -1,5 +1,7 @@
 package com.aresstack.argos;
 
+import com.aresstack.argos.web.UrlPolicy;
+import com.aresstack.argos.web.WebSession;
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
@@ -161,6 +163,9 @@ class CamoufoxBrowsingTest {
             Map<String, Object> newTab = browser.newTab(base + "/");
             assertEquals("t3", newTab.get("tab"));
             assertEquals("Formular", newTab.get("title"));
+            // web_* share the tab with browser_*: web_read adopts the page another tool opened (expert profile).
+            String adopted = new WebSession(browser, UrlPolicy.from(TestNetworks.LOOPBACK), null).read(1);
+            assertTrue(adopted.startsWith("URL: " + base + "/\nTITLE: Formular\nLINKS: "), adopted);
         } finally {
             site.stop(0);
         }

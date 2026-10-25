@@ -28,13 +28,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 @Timeout(value = 180, unit = TimeUnit.SECONDS)
 class ResearchDocumentsBrowserTest {
-    @TempDir Path temporary;
     private TestBrowserSession browser;
     private FixtureSite site;
     private ResearchDocuments documents;
 
+    // A @TempDir field is not yet injected when a PER_CLASS @BeforeAll runs; the parameter is.
     @BeforeAll
-    void startBrowser() throws Exception {
+    void startBrowser(@TempDir Path temporary) throws Exception {
         browser = TestBrowserSession.start(temporary).orElse(null);
         Assumptions.assumeTrue(browser != null, "Opt-in real browser test");
         site = new FixtureSite();

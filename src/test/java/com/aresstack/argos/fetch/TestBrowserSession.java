@@ -47,7 +47,8 @@ public interface TestBrowserSession extends BrowserContextAccess, AutoCloseable 
             });
         }
         String chromium = System.getProperty("argos.testChromium", "");
-        return chromium.isBlank() ? Optional.empty() : Optional.of(new ChromiumSession(Path.of(chromium)));
+        return chromium.isBlank() ? Optional.empty()
+                : Optional.of(new ChromiumSession(Path.of(chromium), temporary.resolve("chromium-profile")));
     }
 
     final class ChromiumSession implements TestBrowserSession {
@@ -56,11 +57,10 @@ public interface TestBrowserSession extends BrowserContextAccess, AutoCloseable 
         private BrowserContext context;
         private Page current;
 
-        ChromiumSession(Path executable) throws Exception {
+        ChromiumSession(Path executable, Path profile) throws Exception {
             run(() -> {
                 playwright = Playwright.create();
                 // Like Firefox with a document: deliver PDFs as files instead of the built-in viewer.
-                Path profile = java.nio.file.Files.createTempDirectory("argos-chromium-");
                 java.nio.file.Files.createDirectories(profile.resolve("Default"));
                 java.nio.file.Files.writeString(profile.resolve("Default").resolve("Preferences"),
                         "{\"plugins\":{\"always_open_pdf_externally\":true}}");

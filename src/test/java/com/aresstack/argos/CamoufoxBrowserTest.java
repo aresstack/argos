@@ -1,5 +1,6 @@
 package com.aresstack.argos;
 
+import com.aresstack.argos.network.NetworkSettings;
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
@@ -36,7 +37,9 @@ class CamoufoxBrowserTest {
         site.start();
         try (CamoufoxBrowser browser = new CamoufoxBrowser(new ArgosConfig(
                 "127.0.0.1", 0, local.executable(), local.launchOptions(),
-                temporary.resolve("profile"), true))) {
+                temporary.resolve("profile"), true)
+                // The smoke site is on loopback, which the strict network policy only admits by rule.
+                .withNetwork(NetworkSettings.parse("strict", "127.0.0.1,::1", null, null)))) {
             String url = "http://localhost:" + site.getAddress().getPort() + "/";
             Map<String,Object> navigated = browser.navigate(url);
             assertEquals("Argos smoke", navigated.get("title"));

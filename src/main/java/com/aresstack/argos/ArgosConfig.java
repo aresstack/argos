@@ -1,6 +1,7 @@
 package com.aresstack.argos;
 
 import com.aresstack.argos.page.ReadinessPolicy;
+import com.aresstack.argos.network.NetworkSettings;
 
 import java.io.IOException;
 import java.io.Reader;
@@ -15,25 +16,43 @@ import java.util.Properties;
 public record ArgosConfig(
         String host, int port, Path executable, Path launchOptions, Path profile, boolean headless,
         String publicOrigin, String securityMode, String centralOauthIssuer, String requiredScope,
-        ToolProfile toolProfile, boolean allowPrivateNetworks, ReadinessPolicy readiness) {
+        ToolProfile toolProfile, boolean allowPrivateNetworks, ReadinessPolicy readiness, NetworkSettings network) {
 
     public ArgosConfig {
         toolProfile = toolProfile == null ? ToolProfile.LEGACY : toolProfile;
         if (readiness == null) readiness = ReadinessPolicy.balanced();
+        network = network == null ? NetworkSettings.strict() : network;
     }
 
     // Direct browser-test construction remains independent of server configuration.
     public ArgosConfig(String host, int port, Path executable, Path launchOptions,
                        Path profile, boolean headless) {
         this(host, port, executable, launchOptions, profile, headless,
-                null, "central-oauth", null, "argos", ToolProfile.LEGACY, false, ReadinessPolicy.balanced());
+                null, "central-oauth", null, "argos", ToolProfile.LEGACY, false, ReadinessPolicy.balanced(),
+                NetworkSettings.strict());
     }
 
     public ArgosConfig(String host, int port, Path executable, Path launchOptions, Path profile,
                        boolean headless, String publicOrigin, String securityMode,
                        String centralOauthIssuer, String requiredScope) {
         this(host, port, executable, launchOptions, profile, headless, publicOrigin, securityMode,
-                centralOauthIssuer, requiredScope, ToolProfile.LEGACY, false, ReadinessPolicy.balanced());
+                centralOauthIssuer, requiredScope, ToolProfile.LEGACY, false, ReadinessPolicy.balanced(),
+                NetworkSettings.strict());
+    }
+
+    public ArgosConfig(String host, int port, Path executable, Path launchOptions, Path profile,
+                       boolean headless, String publicOrigin, String securityMode, String centralOauthIssuer,
+                       String requiredScope, ToolProfile toolProfile, boolean allowPrivateNetworks,
+                       ReadinessPolicy readiness) {
+        this(host, port, executable, launchOptions, profile, headless, publicOrigin, securityMode,
+                centralOauthIssuer, requiredScope, toolProfile, allowPrivateNetworks, readiness,
+                NetworkSettings.strict());
+    }
+
+    public ArgosConfig withNetwork(NetworkSettings settings) {
+        return new ArgosConfig(host, port, executable, launchOptions, profile, headless, publicOrigin,
+                securityMode, centralOauthIssuer, requiredScope, toolProfile, allowPrivateNetworks, readiness,
+                settings);
     }
 
     public static ArgosConfig fromEnvironment() throws IOException {
@@ -95,7 +114,13 @@ public record ArgosConfig(
                 // web_* tools refuse loopback/private targets unless explicitly allowed (local tests).
                 Boolean.parseBoolean(setting("ARGOS_ALLOW_PRIVATE_NETWORKS", application,
                         "browser.allow-private-networks", "false")),
-                ReadinessPolicy.from(name -> setting(name, application, propertyKey(name), null)));
+                ReadinessPolicy.from(name -> setting(name, application, propertyKey(name), null)),
+                // Every browser connection passes Argos' local proxy and its policy (analysis 5.4).
+                NetworkSettings.parse(
+                        setting("ARGOS_NETWORK_POLICY", application, "network.policy", null),
+                        setting("ARGOS_INTRANET_ALLOW", application, "network.intranet-allow", null),
+                        setting("ARGOS_UPSTREAM_PROXY", application, "network.upstream-proxy", null),
+                        setting("ARGOS_UPSTREAM_DNS", application, "network.upstream-dns", null)));
     }
 
     private static Properties readProperties(Path path) throws IOException {

@@ -1,7 +1,12 @@
-# Argos-HUD als unsichtbares Camoufox-Add-on – Entwurf
+# Argos-HUD als Camoufox-Add-on statt In-Page-Overlay – Entwurf
 
-Stand: 2026-10-25 · Status: Entwurf, nicht implementiert · Bezug: `docs/argos-optimization-analysis.md`
+Stand: 2026-10-25 · Status: Entwurf, nicht implementiert, **nicht getestet** · Bezug: `docs/argos-optimization-analysis.md`
 (Stealth-Stufe 2, Risiko R5, Paket 7)
+
+> **Machbarkeits-Gate.** Dieses Dokument beschreibt kein getestetes Add-on. Alle Aussagen zur
+> Unsichtbarkeit sind **Ziele**, keine Befunde. Sie gelten erst, wenn der Vergleich mit und ohne Add-on
+> (Abschnitt 6) keine Unterschiede zeigt. Vor dem Abschluss von H1 (Abschnitt 7) wird nichts
+> implementiert und nichts gemergt, was über diesen Entwurf hinausgeht.
 
 ## 1. Ziel und Kurzfassung
 
@@ -15,8 +20,8 @@ ein Shadow-DOM-Host an `document.documentElement` gehängt, `window.__askaiResea
 
 Vorschlag: Argos bekommt ein eigenes WebExtension-Add-on **„Argos HUD“**, das
 
-- **keine Content-Scripts, keine `web_accessible_resources`, keine Netzwerk-Eingriffe** hat und damit für
-  Webseiten nicht existiert,
+- **keine Content-Scripts, keine `web_accessible_resources`, keine Netzwerk-Eingriffe** hat und damit
+  Webseiten keine bekannte Angriffsfläche bietet (Ziel; Nachweis erst durch Abschnitt 6),
 - die Bedienelemente in einem **eigenen kleinen Browserfenster** (Add-on-Seite) sowie im Browser-Chrome
   (Toolbar-Badge, Fenstertitel-Präfix) zeigt, **nicht in einer Sidebar** (siehe 4.4),
 - über seinen Hintergrund-Script per **Loopback-WebSocket mit Token** mit Argos spricht,
@@ -109,8 +114,35 @@ ob der Build die Pref respektiert.
 
 Der Add-on-Ordner liegt in Argos als Ressource (`src/main/resources/argos-hud/`) und wird beim Start nach
 `~/.argos/addon/argos-hud/` entpackt. In diesen Ordner schreibt Argos vor dem Browserstart eine
-`connection.json` mit Port und Einmal-Token. Das Add-on liest sie per `fetch(browser.runtime.getURL(...))`
+`connection.json` mit Port und Token. Das Add-on liest sie per `fetch(browser.runtime.getURL(...))`
 (Add-on-interne URL; ohne `web_accessible_resources` für Seiten nicht erreichbar).
+
+**Bedingungen für das Laden (Teil des H1-Gates):**
+
+- Die geprüfte Camoufox-`launch.json` wird **nicht verändert**. Argos ergänzt den Add-on-Pfad nur im
+  Speicher beim Start; die Fingerprint-Werte in `CAMOU_CONFIG_*` bleiben bytegleich. Nachweis: Hash der
+  dekodierten Konfiguration ohne den Add-on-Eintrag vor und nach dem Start identisch, Fingerprint-Probe
+  (User-Agent, Bildschirm, Fenster, WebGL, Fonts) mit und ohne Add-on identisch.
+- Das Profil `~/.argos/profiles/default` erhält keine dauerhafte Installation. Nachweis: Nach einem Lauf mit
+  Add-on und einem Neustart ohne Add-on taucht es in `extensions.json` nicht als installiert auf, und
+  Prefs außer den von Firefox selbst gepflegten (z. B. `extensions.webextensions.uuids`) sind unverändert.
+  Der Test läuft zuerst auf einer Kopie des Profils.
+- Lässt sich eines davon nicht einhalten, wird H2 nicht begonnen.
+
+#### `connection.json` und Token
+
+- **Rechte:** Datei nur für den Argos-Benutzer lesbar (POSIX `600`, Ordner `700`; unter Windows ACL nur
+  für den aktuellen Benutzer, Vererbung aus). Argos verweigert den HUD-Start, wenn es die Rechte nicht
+  setzen kann.
+- **Inhalt:** Port und ein Token mit 256 Bit aus `SecureRandom`, Base64url. Kein Token in URLs (Logs,
+  Proxys): Es wird als erste WebSocket-Nachricht gesendet und in Argos zeitkonstant verglichen.
+- **Lebensdauer:** ein Token pro Browserstart. Argos erzeugt es direkt vor dem Start und löscht
+  `connection.json`, sobald die erste gültige Verbindung steht. Das Token bleibt nur im Speicher von Argos
+  und im Hintergrund-Script. Beim Beenden von Argos oder des Browsers verfällt es.
+- **Rotation:** Ein neuer Browserstart erzeugt immer ein neues Token. Nach drei fehlgeschlagenen
+  Anmeldungen innerhalb einer Minute sperrt Argos `/hud` bis zum nächsten Browserstart.
+- **Nur eine Sitzung:** Höchstens eine angemeldete HUD-Verbindung. Eine zweite wird abgewiesen, solange
+  die erste lebt.
 
 ### 3.3 Kommunikation Add-on ↔ Argos
 
@@ -120,11 +152,21 @@ Argos-Port unter einem eigenen Pfad (`/hud`).
 - Argos lauscht bereits auf Loopback (`SERVER_PORT`, `SERVER_HOST` nur Loopback). Ein zusätzlicher Pfad
   öffnet **keinen neuen Port**. Seiten können lokale Ports scannen (bekannte Fingerprinting-Technik);
   ein eigener HUD-Port wäre eine neue, scanbare Auffälligkeit, ein Pfad auf dem bestehenden nicht.
-- Handshake nur mit `Origin: moz-extension://…` **und** gültigem Token aus `connection.json`. Alles andere
-  wird genauso beantwortet wie jeder unbekannte Pfad (gleicher Statuscode, gleiche Länge), damit `/hud`
-  von außen nicht unterscheidbar ist.
-- Die Verbindung geht vom Add-on-Hintergrund aus, nicht von einer Seite. Weder Seiten noch Seiten-Skripte
-  sehen sie; Firefox ordnet sie keinem Tab zu.
+- **Authentifizierung ist allein das Token.** `Origin` ist keine Authentifizierung, sondern nur ein Filter
+  gegen Anfragen aus Webseiten (die einen `http(s)`-Origin senden). Die Add-on-UUID und damit der
+  `moz-extension://<uuid>`-Origin ist pro Profil zufällig. Argos lernt sie nach der ersten erfolgreichen
+  Token-Anmeldung und akzeptiert danach nur noch diesen Origin. Vorher wird jeder Origin abgewiesen, der
+  nicht mit `moz-extension://` beginnt.
+- Alles, was nicht angemeldet ist, wird genauso beantwortet wie jeder unbekannte Pfad (gleicher
+  Statuscode, gleiche Länge), damit `/hud` von außen nicht unterscheidbar ist. Die Anmeldung muss
+  innerhalb von 2 s nach dem Upgrade kommen, sonst wird die Verbindung geschlossen.
+- **Wiederanlauf:** Bricht die Verbindung ab (Argos-Neustart, Ruhezustand), versucht das Add-on es erneut
+  mit wachsendem Abstand (1, 2, 4 … höchstens 30 s) und dem Token aus seinem Speicher. Startet Argos neu,
+  ist das alte Token ungültig; das HUD zeigt „getrennt“, bis der Browser mit neuem Token neu startet.
+  Argos sendet nach jeder Anmeldung den letzten Zustand erneut. Befehle, die während einer Trennung
+  geklickt werden, verwirft das Add-on (kein verspätetes `SKIP`).
+- Die Verbindung geht vom Add-on-Hintergrund aus, nicht von einer Seite, und wird von Firefox keinem Tab
+  zugeordnet. Dass Seiten sie nicht sehen, ist zu messen (Abschnitt 6, Punkt 3).
 - Nachrichten (JSON, eine Zeile):
   - Argos → Add-on: `{"type":"state","state":{…ResearchHudState…}}`, `{"type":"focusTab","url":…}` (nur
     Hervorhebung im HUD, keine Tab-Umschaltung)
@@ -139,7 +181,7 @@ Verworfene Alternativen:
 | Variante | Warum nicht |
 |---|---|
 | Native Messaging | kein Port, aber Host-Manifest muss im System registriert werden (Windows-Registry bzw. `~/.mozilla/native-messaging-hosts`), Firefox startet pro Verbindung einen Prozess, der wiederum mit Argos sprechen muss. Mehr Installationsaufwand bei gleichem Nutzen. Bleibt Plan B, falls Loopback-Zugriff aus dem Add-on in Camoufox gesperrt ist. |
-| HUD-Seite nur per BiDi steuern (Argos ruft `page.evaluate` auf der `moz-extension://…/hud.html`-Seite auf, kein Netzwerk) | elegant und ohne Port, aber unklar, ob Firefox-BiDi Add-on-Seiten als Browsing-Kontext an Playwright meldet und ob Playwright sie bedienen darf. Als kurzer Spike in Paket H1 messen; wenn es geht, entfällt der WebSocket. |
+| HUD-Seite nur per BiDi steuern (Argos ruft `page.evaluate` auf der `moz-extension://…/hud.html`-Seite auf, kein Netzwerk) | elegant und ohne Port, ohne Token-Verwaltung, aber unklar, ob Firefox-BiDi Add-on-Seiten als Browsing-Kontext an Playwright meldet und ob Playwright sie bedienen darf. Pflichtfrage in H1; wenn es geht, wird diese Variante bevorzugt und der WebSocket entfällt. |
 | Sidebar (`sidebar_action`) | verkleinert den Inhaltsbereich (siehe 4.4) |
 | DevTools-Panel | geöffnete DevTools sind für Seiten über Fenstergröße und Debugger-Timing erkennbar |
 | Content-Script mit Shadow-DOM-Overlay | DOM-Änderung in der Seite; genau das, was ersetzt werden soll |
@@ -163,8 +205,8 @@ zweiten Code-Pfad in jeder Seite. Geometrie bleibt Stufe 1 bzw. Stufe 3.
 
 ### 4.3 Netzwerk
 Keine Rechte für `webRequest`, `declarativeNetRequest` oder `proxy`; das Add-on ändert weder Header noch
-Antworten. Die einzige Verbindung ist der WebSocket zu Argos (3.3). Er läuft nicht über einen Tab und ist
-daher in keiner `performance`-Liste einer Seite sichtbar.
+Antworten. Die einzige Verbindung ist der WebSocket zu Argos (3.3). Er läuft nicht über einen Tab und
+sollte daher in keiner `performance`-Liste einer Seite auftauchen (Messpunkt 3).
 
 ### 4.4 Fenster- und Viewport-Geometrie
 Eine geöffnete Sidebar verkleinert `innerWidth` bei gleichem `outerWidth`. Camoufox fälscht
@@ -180,6 +222,22 @@ normales menschliches Verhalten, solange **nur der Mensch** es auslöst. Regeln:
 `focused: false` erzeugen, Zustandsupdates fokussieren nie, kein `windows.update({focused:true})` aus dem
 Hintergrund. Vor echten Eingaben über BiDi holt Argos die Zielseite mit `bringToFront()` zurück
 (Stufe 0), falls nötig.
+
+Ein separates Fenster kann aber auch **ohne Klick** Fokus und Timing der Zielseite verändern. Das ist
+ungeprüft und wird in H1 gemessen (Abschnitt 6, Punkte 8–10):
+
+- Öffnen des HUD-Fensters könnte trotz `focused: false` je nach Fenstermanager den Fokus wegnehmen
+  (`blur`, `visibilitychange`).
+- Verdeckt das HUD-Fenster das Browserfenster teilweise oder ganz, kann Firefox Timer und
+  `requestAnimationFrame` drosseln (Occlusion). Das HUD-Fenster wird deshalb neben, nicht über dem
+  Zielfenster platziert.
+- Wiederholtes Rendern im HUD-Fenster läuft im selben Browserprozess wie die Zielseite und könnte deren
+  Event-Loop- bzw. Frame-Timing messbar beeinflussen. Updates werden deshalb gedrosselt (höchstens 2 pro
+  Sekunde, Countdown nur sekundenweise).
+
+Zeigt die Messung Effekte, gibt es einen **fensterlosen Modus**: nur Toolbar-Badge, Fenstertitel-Präfix
+und Toolbar-Popup (öffnet sich nur auf Klick des Menschen). Er ist der Rückfall und kann auch Standard
+werden.
 
 ### 4.6 Sichtbarkeit in Playwright
 Add-on-Seiten in eigenen Fenstern können in `context.pages()` erscheinen. `CamoufoxBrowser.activePage()`
@@ -227,20 +285,29 @@ Ablauf wie im Signal-Regressionstest der Analyse (opt-in, lokal mit echter Camou
    unterscheiden.
 7. Praxisprobe auf Seiten, die bisher funktionieren (u. a. ResearchGate, Suchmaschinen aus `web_search`):
    kein neuer Block.
+8. Fokus: `document.hasFocus()`, `document.visibilityState` und die Zahl der `blur`/`focus`/
+   `visibilitychange`-Ereignisse auf der Zielseite beim Öffnen des HUD-Fensters und bei
+   Zustandsupdates, ohne Klick ins HUD. Erwartung: keine Ereignisse.
+9. Timing: Intervalle von `requestAnimationFrame` und `setTimeout(0)` sowie `performance.now()`-Jitter auf
+   einer Messseite mit und ohne HUD-Fenster (offen, neben dem Zielfenster, laufender Countdown). Erwartung:
+   keine Abweichung über das Rauschen hinaus.
+10. Fingerprint-Konfiguration und Profil wie in 3.2 (bytegleich, keine dauerhafte Installation).
 
-Erst wenn alle Punkte gleich ausfallen, wird `ARGOS_HUD=addon` für den Recherche-Agenten empfohlen.
+Die Messseiten setzen ihre Listener selbst, als wäre es eine fremde Seite; Argos injiziert dafür nichts.
+Erst wenn alle Punkte gleich ausfallen, darf das Add-on als „für Seiten unsichtbar“ bezeichnet und
+`ARGOS_HUD=addon` für den Recherche-Agenten empfohlen werden.
 
 ## 7. Arbeitspakete
 
 | Paket | Inhalt | Ergebnis |
 |---|---|---|
-| H1 – Spike | Add-on-Gerüst (Manifest, Hintergrund, HUD-Fenster mit festem Text); Laden über Camoufox-`addons` ausprobieren, sonst BiDi `webExtension.install`; prüfen, ob `moz-extension`-Seiten in `context.pages()` auftauchen und per BiDi bedienbar sind; Messpunkte 1–5 | Entscheidung Ladeweg und Transport (WebSocket oder reines BiDi) |
+| H1 – Machbarkeits-Gate (lokal, mit echter Camoufox-Installation) | Add-on-Gerüst (Manifest, Hintergrund, HUD-Fenster mit festem Text); Laden über die vorhandene `launch.json` ohne Änderung der Fingerprint-Daten und ohne dauerhafte Profiländerung (3.2), sonst BiDi `webExtension.install`; prüfen, ob `moz-extension`-Seiten in `context.pages()` auftauchen und per Playwright/BiDi steuerbar sind; Messpunkte 1–5 und 8–10 | Bericht mit Messwerten. **Go/No-Go durch Angelo.** Bei No-Go bleibt es bei „kein HUD“ bzw. HUD außerhalb des Browsers. |
 | H2 – Brücke | `HudBridge`, `HudAddon`, `connection.json`, `web_hud_render/poll`, Filter in `CamoufoxBrowser`, Unit-Tests | Pause/Skip/Weiter/Delay/⭐ funktionieren Ende-zu-Ende |
 | H3 – Komfort | Badge, Titelpräfix, Kontextmenü „relevant“, Systembenachrichtigung bei „Warten auf Benutzer“ | |
 | H4 – Freigabe | Messpunkte 1–7, Ergebnis in die Analyse eintragen, Stufe 2 von „geplant“ auf „gemessen“ setzen | |
 
-H2 hängt vom Recherche-Agenten (Paket H der Gesamtplanung) ab, der die HUD-Werkzeuge nutzt; H1 kann sofort
-beginnen.
+H2 bis H4 beginnen erst nach einem Go für H1. H2 hängt außerdem vom Recherche-Agenten (Paket H der
+Gesamtplanung) ab, der die HUD-Werkzeuge nutzt.
 
 ## 8. Offene Fragen
 

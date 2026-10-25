@@ -3,6 +3,7 @@ package com.aresstack.argos;
 import com.aresstack.argos.web.BrowserPagePort;
 import com.aresstack.argos.web.PageCapture;
 import com.aresstack.argos.web.PageText;
+import com.aresstack.argos.web.UrlPolicy;
 import com.aresstack.argos.page.DocumentText;
 import com.aresstack.argos.page.DocumentType;
 import com.aresstack.argos.page.NetworkActivity;
@@ -80,6 +81,7 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
     private final BrowserTabs tabs = new BrowserTabs();
     private final Map<Page, PageControls> controlSnapshots = new IdentityHashMap<>();
     private final RealInput input;
+    private final UrlPolicy urlPolicy;
     private final SnapshotReader snapshots = new SnapshotReader();
     /** Per-tab protocol observations: in-flight requests and the top-level document of each tab. */
     private final Map<Page, TabDocument> documents = new IdentityHashMap<>();
@@ -96,6 +98,7 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
     CamoufoxBrowser(ArgosConfig config, HumanInputSettings humanInput) {
         this.config = config;
         this.input = new RealInput(humanInput);
+        this.urlPolicy = UrlPolicy.from(config.network());
     }
 
     public <T> T onBrowser(Callable<T> action) {
@@ -376,8 +379,8 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
     }
 
     public Map<String, Object> navigate(String target) {
+        requireWebUrl(target);
         return onBrowser(() -> {
-            requireWebUrl(target);
             Page p = activePage();
             ReadinessPolicy policy = config.readiness();
             TabDocument tab = document(p);
@@ -428,15 +431,13 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
         return onBrowser(() -> tabs.current().map(Page::url).orElse(""));
     }
 
-
-    static void requireWebUrl(String target) {
-        java.net.URI destination = java.net.URI.create(target);
-        if (destination.getScheme() == null
-                || !(destination.getScheme().equalsIgnoreCase("http")
-                || destination.getScheme().equalsIgnoreCase("https"))
-                || destination.getHost() == null) {
-            throw new IllegalArgumentException("Navigation requires an absolute http(s) URL");
-        }
+    /**
+     * Early, informative check with the central network policy (the same {@code NetworkPolicy} the proxy
+     * enforces), so a refused target fails with a clear message before the browser loads anything. It is
+     * not the boundary: redirects and subresources are refused by the proxy, in every tool profile.
+     */
+    void requireWebUrl(String target) {
+        urlPolicy.check(target);
     }
 
     /**
@@ -763,8 +764,8 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
 
     /** Opens a new tab, makes it current and loads {@code url} unless it is blank. */
     public Map<String, Object> newTab(String url) {
+        if (url != null && !url.isBlank()) requireWebUrl(url);
         return onBrowser(() -> {
-            if (url != null && !url.isBlank()) requireWebUrl(url);
             activePage();
             Page created = context.newPage();
             String id = adopt(created);
@@ -1088,13 +1089,8 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
     }
 
     public HtmlPage loadHtml(String target) {
+        requireWebUrl(target);
         return onBrowser(() -> {
-            java.net.URI destination = java.net.URI.create(target);
-            if (destination.getScheme() == null || destination.getHost() == null
-                    || !(destination.getScheme().equalsIgnoreCase("http")
-                    || destination.getScheme().equalsIgnoreCase("https"))) {
-                throw new IllegalArgumentException("Navigation requires an absolute http(s) URL");
-            }
             Page p = activePage();
             Response response = p.navigate(target, new Page.NavigateOptions()
                     .setWaitUntil(WaitUntilState.DOMCONTENTLOADED).setTimeout(45_000));

@@ -123,6 +123,12 @@ class WebSessionTest {
         assertThrows(IllegalArgumentException.class, () -> strict.open(base + "/"));
         assertThrows(IllegalArgumentException.class, () -> strict.open("file:///etc/passwd"));
         assertThrows(IllegalArgumentException.class, () -> strict.open("javascript:alert(1)"));
+        for (String internal : List.of("http://[fd00::1]/admin", "http://[fc00::2]/", "http://[::1]/",
+                "http://[fe80::1]/", "http://10.0.0.1/", "http://192.168.1.1/", "http://100.64.0.1/",
+                "http://[::ffff:127.0.0.1]/")) {
+            assertThrows(IllegalArgumentException.class, () -> strict.open(internal), internal);
+        }
+        assertDoesNotThrow(() -> new UrlPolicy(false).check("http://[2606:4700::1111]/"));
     }
 
     @Test void strictPolicyAbandonsPagesThatRedirectIntoPrivateNetworks() {

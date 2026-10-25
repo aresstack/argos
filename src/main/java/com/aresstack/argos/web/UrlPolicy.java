@@ -37,15 +37,27 @@ public final class UrlPolicy {
     }
 
     private static void requirePublicHost(String host) {
-        InetAddress address;
+        InetAddress[] addresses;
         try {
-            address = InetAddress.getByName(host);
+            addresses = InetAddress.getAllByName(host);
         } catch (UnknownHostException unknown) {
             throw new IllegalArgumentException("Cannot resolve host: " + host);
         }
+        // Every resolved address counts: one private record is enough to reach an internal service.
+        for (InetAddress address : addresses) {
+            if (isPrivate(address)) {
+                throw new IllegalArgumentException("Blocked private or loopback address: " + host);
+            }
+        }
+    }
+
+    private static boolean isPrivate(InetAddress address) {
         if (address.isLoopbackAddress() || address.isAnyLocalAddress()
                 || address.isSiteLocalAddress() || address.isLinkLocalAddress()) {
-            throw new IllegalArgumentException("Blocked private or loopback address: " + host);
+            return true;
         }
+        byte[] raw = address.getAddress();
+        if (raw.length == 16) return (raw[0] & 0xfe) == 0xfc; // IPv6 unique-local fc00::/7
+        return (raw[0] & 0xff) == 100 && (raw[1] & 0xc0) == 64; // carrier-grade NAT 100.64.0.0/10
     }
 }

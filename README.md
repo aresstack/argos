@@ -167,7 +167,7 @@ web_back                               → vorherige Seite
 web_search query="…"                   → 1: Titel — URL (Treffer sind mit web_follow link_id="1" aufrufbar)
 ```
 
-Gelesen wird über Playwrights isolierte Utility-Welt (`content()`, `innerText()`); die Links werden in Java aus dem serialisierten DOM gewonnen. Es wird kein für die Seite sichtbares Skript eingeschleust. `web_*` blockiert Loopback- und private Adressen, auch nach Weiterleitungen; für lokale Tests lässt `ARGOS_ALLOW_PRIVATE_NETWORKS=true` (Property `browser.allow-private-networks`) sie zu. `web_search` meldet bis zur Integration des Suchanbieters ehrlich, dass keine Suche konfiguriert ist.
+Gelesen wird über Playwrights isolierte Utility-Welt (`content()`, `innerText()`); die Links werden in Java aus dem serialisierten DOM gewonnen. Es wird kein für die Seite sichtbares Skript eingeschleust. `web_*` öffnet keine Loopback-, privaten, Link-Local-, IPv6-ULA- oder CGNAT-Adressen und verwirft Seiten, die per Weiterleitung auf solchen Adressen landen; für lokale Tests lässt `ARGOS_ALLOW_PRIVATE_NETWORKS=true` (Property `browser.allow-private-networks`) sie zu. `web_search` meldet bis zur Integration des Suchanbieters ehrlich, dass keine Suche konfiguriert ist.
 
 ## GitHub Actions und Releases
 

@@ -9,6 +9,11 @@ import java.util.function.UnaryOperator;
  * page (protocol events or Playwright's isolated utility world); none injects a
  * script into the page's own JavaScript world.
  *
+ * <p>Network quiet comes from protocol events alone. The DOM conditions (stability,
+ * text, loading indicators) need utility-world reads, and on Firefox BiDi every such
+ * read currently grants the page transient user activation (aresstack/playwright4j#37).
+ * Polling them would keep the page activated, so only {@code thorough} enables them.
+ *
  * @param waitUntil          navigation load event: {@code commit}, {@code domcontentloaded} or {@code load}
  * @param timeoutMillis      settle budget after the load event; 0 disables settling (legacy behaviour)
  * @param pollMillis         sampling interval
@@ -40,9 +45,9 @@ public record ReadinessPolicy(String waitUntil, int timeoutMillis, int pollMilli
         loadingSelectors = loadingSelectors == null ? List.of() : List.copyOf(loadingSelectors);
     }
 
-    /** DOMContentLoaded, then wait for stable DOM, quiet network and no visible spinner (≤ 8 s). */
+    /** DOMContentLoaded, then wait for a quiet network (≤ 8 s). Protocol events only, no page reads. */
     public static ReadinessPolicy balanced() {
-        return new ReadinessPolicy("domcontentloaded", 8_000, 250, 750, 500, 2, 1, DEFAULT_LOADING_SELECTORS);
+        return new ReadinessPolicy("domcontentloaded", 8_000, 250, 0, 750, 2, 0, List.of());
     }
 
     /** Previous Argos behaviour: return right after DOMContentLoaded. */
@@ -50,13 +55,21 @@ public record ReadinessPolicy(String waitUntil, int timeoutMillis, int pollMilli
         return new ReadinessPolicy("domcontentloaded", 0, 250, 0, 0, 2, 0, List.of());
     }
 
-    /** Full load event and stricter settling for heavy single-page applications. */
+    /**
+     * Full load event, quiet network, stable DOM, visible text and no spinner. Polls the DOM,
+     * which grants user activation on Firefox BiDi until aresstack/playwright4j#37 is fixed.
+     */
     public static ReadinessPolicy thorough() {
         return new ReadinessPolicy("load", 15_000, 250, 1_500, 1_000, 0, 1, DEFAULT_LOADING_SELECTORS);
     }
 
     public boolean settles() {
         return timeoutMillis > 0;
+    }
+
+    /** Whether waiting needs DOM reads; without them readiness uses protocol events only. */
+    public boolean needsDomReads() {
+        return domStableMillis > 0 || minTextCharacters > 0 || !loadingSelectors.isEmpty();
     }
 
     /** Same conditions with another settle budget (used by browser_wait). */

@@ -68,11 +68,18 @@ class CamoufoxBrowserTest {
             Map<String,Object> spa = browser.navigate(site.url("/spa.html"));
             ReadinessReport readiness = (ReadinessReport) spa.get("readiness");
             assertEquals(ReadinessReport.READY, readiness.state(), readiness.toString());
-            assertTrue(browser.snapshot(8000).text().contains("Search results"), readiness.toString());
-
-            browser.navigate(site.url("/spa.html"));
+            assertEquals(java.util.List.of("network-quiet"), readiness.met());
             Map<String,Object> waited = browser.waitFor(null, "second", 10_000);
             assertEquals(ReadinessReport.READY, ((ReadinessReport) waited.get("readiness")).state());
+            assertTrue(browser.snapshot(8000).text().contains("Search results"));
+
+            try (CamoufoxBrowser thorough = new CamoufoxBrowser(new ArgosConfig(
+                    "127.0.0.1", 0, local.executable(), local.launchOptions(), temporary.resolve("thorough"),
+                    true, null, "none", null, "argos", com.aresstack.argos.page.ReadinessPolicy.thorough()))) {
+                ReadinessReport settled = (ReadinessReport) thorough.navigate(site.url("/spa.html")).get("readiness");
+                assertEquals(ReadinessReport.READY, settled.state(), settled.toString());
+                assertTrue(thorough.snapshot(8000).text().contains("Search results"), settled.toString());
+            }
 
             // A1: the Springer case — an RSS document has no HTML body.
             Map<String,Object> feed = browser.navigate(site.url("/springer-feed.rss"));

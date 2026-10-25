@@ -17,7 +17,8 @@ class ReadinessPolicyTest {
         assertEquals(ReadinessPolicy.balanced(), policy);
         assertEquals("domcontentloaded", policy.waitUntil());
         assertTrue(policy.settles());
-        assertFalse(policy.loadingSelectors().isEmpty());
+        assertFalse(policy.needsDomReads(), "balanced must not poll the DOM (user activation)");
+        assertTrue(ReadinessPolicy.thorough().needsDomReads());
     }
 
     @Test

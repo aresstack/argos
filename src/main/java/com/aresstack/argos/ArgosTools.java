@@ -34,8 +34,8 @@ public final class ArgosTools {
                         + "PDF are reported with documentType 'binary' and a hint instead of text.",
                 Map.of("maxCharacters", field("integer", "Maximum characters (1000–60000, default 16000)")),
                 List.of(), args -> browser.snapshot(number(args, "maxCharacters", 16_000))));
-        tools.add(tool("browser_wait", "Wait until the page has finished loading: DOM stable, network quiet and "
-                        + "no visible loading spinner. Optionally also wait for a visible element or text. "
+        tools.add(tool("browser_wait", "Wait until the page has finished loading (network quiet; stricter checks "
+                        + "if configured). Optionally also wait for a visible element or text. "
                         + "Never fails on timeout; check readiness.state ('ready' or 'timeout') and readiness.pending. "
                         + "Example: {\"text\": \"Search results\", \"timeoutMs\": 10000}",
                 Map.of("selector", field("string", "Optional CSS selector that must become visible, e.g. '#results'"),

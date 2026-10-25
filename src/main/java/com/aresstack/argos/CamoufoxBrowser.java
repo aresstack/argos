@@ -273,11 +273,15 @@ public final class CamoufoxBrowser implements AutoCloseable {
      */
     private PageSample sample(Page p, ReadinessPolicy policy, Locator target) {
         Locator.FilterOptions visible = new Locator.FilterOptions().setVisible(true);
+        boolean targetVisible = target == null || target.filter(visible).count() > 0;
+        if (!policy.needsDomReads()) {
+            // Each utility-world read grants user activation on BiDi (playwright4j#37): read nothing else.
+            return new PageSample(0, 0, false, targetVisible, activity.inflight(), activity.quietMillis());
+        }
         int elements = p.locator("*").count();
         int textLength = visibleText(p).length();
         boolean loading = !policy.loadingSelectors().isEmpty()
                 && p.locator(String.join(", ", policy.loadingSelectors())).filter(visible).count() > 0;
-        boolean targetVisible = target == null || target.filter(visible).count() > 0;
         return new PageSample(elements, textLength, loading, targetVisible, activity.inflight(), activity.quietMillis());
     }
 

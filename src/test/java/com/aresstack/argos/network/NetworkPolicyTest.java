@@ -91,6 +91,34 @@ class NetworkPolicyTest {
     }
 
     @Test
+    void earlyUrlCheckUsesTheSameRulesAsTheProxy() throws Exception {
+        NetworkPolicy policy = NetworkPolicy.parse("wiki.firma.local");
+        List<String> lookups = new java.util.ArrayList<>();
+        HostResolver dns = host -> {
+            lookups.add(host);
+            return switch (host) {
+                case "wiki.firma.local" -> List.of(InetAddress.getByName("10.1.2.3"));
+                case "example.org", "my_host.example" -> List.of(InetAddress.getByName("93.184.215.14"));
+                case "rebind.example" -> List.of(InetAddress.getByName("93.184.215.14"), InetAddress.getByName("192.168.0.1"));
+                default -> throw new java.net.UnknownHostException(host);
+            };
+        };
+        assertTrue(policy.checkUrl("https://example.org/path?q=1", dns).allowed());
+        assertTrue(policy.checkUrl("http://WIKI.firma.local:8080/", dns).allowed());
+        assertTrue(policy.checkUrl("https://my_host.example/", dns).allowed());
+        assertFalse(policy.checkUrl("https://rebind.example/", dns).allowed());
+        assertFalse(policy.checkUrl("http://127.0.0.1:8085/", dns).allowed());
+        assertFalse(policy.checkUrl("http://[::ffff:169.254.169.254]/latest", dns).allowed());
+        assertEquals("DNS resolution failed", policy.checkUrl("https://missing.example/", dns).reason());
+        assertFalse(policy.checkHost("probe.invalid", dns).allowed());
+        assertEquals(List.of("example.org", "wiki.firma.local", "my_host.example", "rebind.example", "missing.example"),
+                lookups, "IP literals and .invalid never reach DNS");
+        assertThrows(IllegalArgumentException.class, () -> policy.checkUrl("file:///etc/passwd", dns));
+        assertThrows(IllegalArgumentException.class, () -> policy.checkUrl("https:///nohost", dns));
+        assertThrows(IllegalArgumentException.class, () -> policy.checkUrl(" ", dns));
+    }
+
+    @Test
     void rejectsMalformedRules() {
         assertThrows(IllegalArgumentException.class, () -> NetworkPolicy.parse("10.0.0.0/40"));
         assertThrows(IllegalArgumentException.class, () -> NetworkPolicy.parse("http://wiki/"));

@@ -1,6 +1,8 @@
 package com.aresstack.argos.network;
 
 import java.net.InetAddress;
+import java.net.URI;
+import java.net.UnknownHostException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -15,6 +17,13 @@ import java.util.Locale;
  * link-local and cloud metadata need a range rule that covers them.
  */
 public final class NetworkPolicy {
+    /** A decision together with the addresses it was made on; empty when the host did not resolve. */
+    public record Resolution(Decision decision, List<InetAddress> addresses) {
+        public Resolution {
+            addresses = List.copyOf(addresses);
+        }
+    }
+
     /** Outcome of one check; {@code reason} is null when allowed. */
     public record Decision(boolean allowed, String reason) {
         static final Decision ALLOWED = new Decision(true, null);
@@ -87,6 +96,60 @@ public final class NetworkPolicy {
                     + (kind.neverAllowed() ? "" : " (allow it explicitly with ARGOS_INTRANET_ALLOW)"));
         }
         return Decision.ALLOWED;
+    }
+
+    /**
+     * Resolves {@code requestedHost} once (IP literals without DNS, {@code .invalid} never) and checks
+     * the answer. The proxy enforces with this; callers then connect only to {@code addresses()}.
+     */
+    public Resolution resolve(String requestedHost, HostResolver resolver) {
+        String host = normalizeHost(requestedHost);
+        if (host.equals("invalid") || host.endsWith(".invalid")) {
+            return new Resolution(Decision.blocked("reserved name, not resolved"), List.of()); // RFC 6761
+        }
+        List<InetAddress> addresses;
+        try {
+            addresses = IpRange.isAddressLiteral(host) ? List.of(InetAddress.getByName(host)) : resolver.resolve(host);
+        } catch (UnknownHostException unknown) {
+            return new Resolution(Decision.blocked("DNS resolution failed"), List.of());
+        }
+        return new Resolution(check(host, addresses), addresses);
+    }
+
+    /**
+     * Early, informative check of a host before navigating, e.g. for tool error messages. It resolves
+     * independently of the browser and therefore protects nothing on its own; enforcement is the proxy.
+     */
+    public Decision checkHost(String host, HostResolver resolver) {
+        return resolve(host, resolver).decision();
+    }
+
+    /**
+     * {@link #checkHost} for an absolute http(s) URL.
+     *
+     * @throws IllegalArgumentException if the URL is malformed, not http(s) or has no host
+     */
+    public Decision checkUrl(String url, HostResolver resolver) {
+        if (url == null || url.isBlank()) throw new IllegalArgumentException("Empty URL.");
+        URI uri;
+        try {
+            uri = new URI(url.trim());
+        } catch (Exception invalid) {
+            throw new IllegalArgumentException("Invalid URL: " + url);
+        }
+        String scheme = uri.getScheme() == null ? "" : uri.getScheme().toLowerCase(Locale.ROOT);
+        if (!scheme.equals("http") && !scheme.equals("https")) {
+            throw new IllegalArgumentException("Only http(s) URLs can be opened, e.g. https://example.org/");
+        }
+        String host = uri.getHost();
+        if (host == null && uri.getRawAuthority() != null) {
+            // java.net.URI leaves the host empty for names such as my_host.example; browsers accept them.
+            String authority = uri.getRawAuthority().substring(uri.getRawAuthority().lastIndexOf('@') + 1);
+            host = authority.startsWith("[") ? authority.substring(0, authority.indexOf(']') + 1)
+                    : authority.contains(":") ? authority.substring(0, authority.indexOf(':')) : authority;
+        }
+        if (host == null || host.isBlank()) throw new IllegalArgumentException("URL has no host: " + url);
+        return checkHost(host, resolver);
     }
 
     private boolean admitted(String host, InetAddress address, AddressClass kind) {

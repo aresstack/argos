@@ -14,6 +14,7 @@ import com.aresstack.argos.page.ReadinessReport;
 import com.aresstack.argos.page.ReadinessWaiter;
 import com.aresstack.argos.page.SnapshotReader;
 import com.aresstack.argos.network.FirefoxNetworkPrefs;
+import com.aresstack.argos.network.HostResolver;
 import com.aresstack.argos.network.NetworkSettings;
 import com.aresstack.argos.network.Socks5Proxy;
 import com.aresstack.argos.network.UpstreamProxy;
@@ -170,7 +171,7 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
                     }
                 }
                 // Fail closed: no proxy, no browser.
-                proxy = Socks5Proxy.start(network, Socks5Proxy.SYSTEM_DNS);
+                proxy = Socks5Proxy.start(network, HostResolver.SYSTEM);
                 proxy.protectLoopbackPort(config.port());
                 prefs.putAll(FirefoxNetworkPrefs.forLocalSocks(proxy.port()));
             } else {

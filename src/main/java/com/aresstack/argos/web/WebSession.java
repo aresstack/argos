@@ -1,5 +1,7 @@
 package com.aresstack.argos.web;
 
+import com.aresstack.argos.fetch.WebAddress;
+
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -29,6 +31,7 @@ public final class WebSession {
     private static final String NO_PAGE = "No page is open yet. Call web_open or web_search first.";
     private static final String AFTER_SEARCH = "No page is open since the last web_search. "
             + "Open a result first, e.g. web_follow link_id=\"result-1\".";
+    private static final String NO_WEB_PAGE = "The browser shows no http(s) page (%s). Call web_open or web_search first.";
 
     private enum Listing { RESULTS, LINKS }
 
@@ -66,7 +69,13 @@ public final class WebSession {
 
     public synchronized String search(String query) throws Exception {
         if (query == null || query.isBlank()) throw new IllegalArgumentException("Empty search query.");
-        SearchResults found = search.search(query.trim());
+        SearchResults found;
+        try {
+            found = search.search(query.trim());
+        } catch (Exception failed) {
+            leaveProviderPage();
+            throw failed;
+        }
         Map<String, SearchHit> byUrl = new LinkedHashMap<>();
         for (SearchHit hit : found.hits()) {
             if (byUrl.size() < maxLinks) byUrl.putIfAbsent(hit.url(), hit);
@@ -109,7 +118,9 @@ public final class WebSession {
      */
     public synchronized String links() {
         String shown = requireShownPage();
-        if (page == null || !page.url().equals(shown)) accept(browser.current());
+        if (page == null || !WebAddress.withoutFragment(page.url()).equals(WebAddress.withoutFragment(shown))) {
+            accept(browser.current());
+        }
         lastListing = Listing.LINKS;
         List<PageLink> current = links.links();
         if (current.isEmpty()) return "No links on " + page.url();
@@ -190,18 +201,47 @@ public final class WebSession {
     }
 
     /**
+     * A failed search (consent wall, challenge, no engine) may have left the browser on the provider's page;
+     * then the previous page is gone like after a successful search. If the browser did not move, the page
+     * the agent had stays readable.
+     */
+    private void leaveProviderPage() {
+        String shown = browser.currentUrl();
+        if (page != null && page.url().equals(shown)) return;
+        page = null;
+        links.clear();
+        searchPage = shown;
+    }
+
+    /**
      * The address the browser shows, which web_* read even when another tool opened it (expert profile:
-     * browser_navigate, clicks, tab switches). A blank tab is nothing to read, and the search provider's
-     * page after web_search is left to web_follow.
+     * browser_navigate, clicks, tab switches). A blank tab or a non-http(s) document (blob:, srcdoc) is
+     * nothing to read and is left untouched; the search provider's page after web_search is left to
+     * web_follow, also when the search found nothing.
      */
     private String requireShownPage() {
         String shown = browser.currentUrl();
         if (shown.isBlank() || "about:blank".equals(shown)) {
-            page = null;
-            links.clear();
+            forgetPage();
             throw new IllegalStateException(results.isEmpty() ? NO_PAGE : AFTER_SEARCH);
         }
-        if (page == null && !results.isEmpty() && shown.equals(searchPage)) throw new IllegalStateException(AFTER_SEARCH);
+        if (!isWeb(shown)) {
+            forgetPage();
+            throw new IllegalStateException(String.format(NO_WEB_PAGE, shown));
+        }
+        if (page == null && shown.equals(searchPage)) {
+            throw new IllegalStateException(results.isEmpty() ? NO_PAGE : AFTER_SEARCH);
+        }
         return shown;
+    }
+
+    private void forgetPage() {
+        page = null;
+        links.clear();
+    }
+
+    private static boolean isWeb(String url) {
+        String lower = url.toLowerCase(Locale.ROOT);
+        return lower.startsWith("http://") || lower.startsWith("https://");
     }
 }

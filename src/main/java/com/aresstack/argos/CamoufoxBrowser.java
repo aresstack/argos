@@ -705,6 +705,13 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
     public PageCapture back() {
         return onBrowser(() -> {
             Page p = activePage();
+            if (document(p).saved != null) {
+                // As in traverse("back"): the saved feed is no history entry of its own, back returns to the
+                // page the tab shows behind it.
+                leaveSavedDocument(p);
+                controlSnapshots.remove(p);
+                return capture(p);
+            }
             Response previous = p.goBack(new Page.GoBackOptions()
                     .setWaitUntil(WaitUntilState.DOMCONTENTLOADED).setTimeout(45_000));
             return previous == null ? null : capture(p);

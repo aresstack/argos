@@ -139,6 +139,63 @@ class WebSessionTest {
         assertTrue(error.getMessage().startsWith("No page is open yet"), error.getMessage());
     }
 
+    @Test void aSearchWithoutResultsStillLeavesTheProvidersPageAlone() throws Exception {
+        WebSearchPort engine = query -> {
+            browser.moveTo(base + "/about");
+            return new SearchResults(List.of(), List.of("ATTEMPT: local NO_ORGANIC_RESULTS"));
+        };
+        WebSession searching = new WebSession(browser, UrlPolicy.off(), engine);
+        assertTrue(searching.search("nothing").startsWith("No results."));
+        int reads = browser.reads;
+        var error = assertThrows(IllegalStateException.class, () -> searching.read(1));
+        assertTrue(error.getMessage().startsWith("No page is open yet"), error.getMessage());
+        assertEquals(reads, browser.reads, "the provider's page is not read");
+        browser.moveTo(base + "/article");
+        assertTrue(searching.read(1).contains("TITLE: Article"));
+    }
+
+    @Test void aFailedSearchOnTheProvidersPageIsNotAdoptedEither() {
+        web.open(base + "/");
+        WebSession stuck = new WebSession(browser, UrlPolicy.off(), query -> {
+            throw new IllegalStateException("No search engine answered.");
+        });
+        assertThrows(IllegalStateException.class, () -> stuck.search("x"));
+        WebSession walled = new WebSession(browser, UrlPolicy.off(), query -> {
+            browser.moveTo(base + "/about");                   // consent wall on the provider's page
+            throw new IllegalStateException("Consent wall.");
+        });
+        walled.open(base + "/");
+        assertThrows(IllegalStateException.class, () -> walled.search("x"));
+        var error = assertThrows(IllegalStateException.class, () -> walled.read(1));
+        assertTrue(error.getMessage().startsWith("No page is open yet"), error.getMessage());
+    }
+
+    @Test void aFailedSearchThatDidNotMoveTheBrowserKeepsThePage() {
+        WebSession stuck = new WebSession(browser, UrlPolicy.off(), query -> {
+            throw new IllegalStateException("No search engine answered.");
+        });
+        stuck.open(base + "/");
+        assertThrows(IllegalStateException.class, () -> stuck.search("x"));
+        assertTrue(stuck.read(1).contains("TITLE: Start"), "the browser never left the page");
+    }
+
+    @Test void nonWebDocumentsAreReportedWithoutTouchingTheTab() {
+        web.open(base + "/");
+        browser.show("blob:" + base + "/3f2a");                 // a preview the page opened in the same tab
+        var error = assertThrows(IllegalStateException.class, () -> web.read(1));
+        assertTrue(error.getMessage().startsWith("The browser shows no http(s) page (blob:"), error.getMessage());
+        assertEquals("blob:" + base + "/3f2a", browser.currentUrl(), "web_* must not clear a tab another tool built");
+        assertThrows(IllegalStateException.class, web::links);
+    }
+
+    @Test void aFragmentMoveDoesNotMakeLinksReadThePageAgain() {
+        web.open(base + "/");
+        browser.show(base + "/#part-2");
+        int reads = browser.reads;
+        assertTrue(web.links().startsWith("link-1: Read the article"));
+        assertEquals(reads, browser.reads, "same document, same links");
+    }
+
     @Test void theSearchProvidersPageIsNotAdoptedButALaterNavigationIs() throws Exception {
         WebSearchPort engine = query -> {
             browser.moveTo(base + "/about");               // the provider leaves the browser on its results page

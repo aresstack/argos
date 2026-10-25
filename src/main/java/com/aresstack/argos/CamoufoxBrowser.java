@@ -46,6 +46,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -55,13 +56,17 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.WeakHashMap;
 import java.util.concurrent.Callable;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
 
 /**
@@ -71,6 +76,10 @@ import java.util.function.Function;
 public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAccess, AutoCloseable {
     /** Source documents above this size are not pulled through the protocol for a snapshot. */
     private static final long MAX_SOURCE_BYTES = 8_000_000;
+    private static final long SAVED_DOCUMENT_WAIT_NANOS = 5_000_000_000L;
+    /** Requests whose transfer ended, from context-level protocol events (driver thread); by identity, weak. */
+    private final Set<Request> finishedRequests = Collections.newSetFromMap(new WeakHashMap<>());
+    private final Set<Request> failedRequests = Collections.newSetFromMap(new WeakHashMap<>());
     private static final int PROBE_TIMEOUT_MS = 2_000;
     private final ArgosConfig config;
     private final ExecutorService driver = Executors.newSingleThreadExecutor(
@@ -85,7 +94,14 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
     private final SnapshotReader snapshots = new SnapshotReader();
     /** Per-tab protocol observations: in-flight requests and the top-level document of each tab. */
     private final Map<Page, TabDocument> documents = new IdentityHashMap<>();
-    private Playwright playwright;
+    private volatile Playwright playwright;
+    /** Child processes Playwright started (its driver; Camoufox runs below it), for stopping a stalled browser. */
+    private final List<ProcessHandle> driverProcesses = new java.util.concurrent.CopyOnWriteArrayList<>();
+    /** While {@code Playwright.create()} runs: the child processes that existed before it. */
+    private volatile Set<Long> launchingSince;
+    private volatile boolean restartRequested;
+    /** Counted down once the stopped browser has exited (or was killed). */
+    private volatile CountDownLatch browserStopped;
     private Socks5Proxy proxy;
     private BrowserContext context;
     /** True while a download or batch runs its own background tabs on the driver thread. */
@@ -108,26 +124,48 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
 
     /** Like {@link #onBrowser(Callable)} with a longer budget for multi-tab work such as batches. */
     public <T> T onBrowser(Callable<T> action, int timeoutSeconds) {
-        try {
-            Future<T> result = driver.submit(() -> {
-                try {
-                    return action.call();
-                } finally {
-                    // Outside Playwright event handlers, so protocol calls are safe here.
-                    if (context != null) network.captureQueuedBodies();
-                }
-            });
+        AtomicLong startedAt = new AtomicLong(); // 0 while the task waits in the queue
+        // Whoever claims first decides: the driver thread runs the action, or the caller gives up ("busy").
+        AtomicBoolean claimed = new AtomicBoolean();
+        Future<T> result = driver.submit(() -> {
+            if (restartRequested) resetAfterStall();
+            startedAt.set(System.nanoTime());
+            if (!claimed.compareAndSet(false, true)) return null; // the caller was already told nothing was done
             try {
-                return result.get(timeoutSeconds, TimeUnit.SECONDS);
-            } catch (TimeoutException stalled) {
-                recoverFromStall(result);
-                throw new IllegalStateException("Camoufox did not answer within " + timeoutSeconds + " s. The task"
-                        + " was stopped and the browser is started again with the next call.", stalled);
+                return action.call();
+            } finally {
+                // Outside Playwright event handlers, so protocol calls are safe here.
+                if (context != null) network.captureQueuedBodies();
             }
-        } catch (IllegalStateException e) {
-            throw e;
+        });
+        long budget = TimeUnit.SECONDS.toNanos(timeoutSeconds);
+        long queuedUntil = System.nanoTime() + budget;
+        try {
+            while (true) {
+                long started = startedAt.get();
+                long wait = (started == 0 ? queuedUntil : started + budget) - System.nanoTime();
+                try {
+                    return result.get(Math.max(1, wait), TimeUnit.NANOSECONDS);
+                } catch (TimeoutException late) {
+                    started = startedAt.get();
+                    if (started == 0 && claimed.compareAndSet(false, true)) {
+                        // Only waited behind another task (a batch, say): no reason to touch the browser.
+                        result.cancel(false);
+                        throw busy(timeoutSeconds);
+                    }
+                    started = startedAt.get(); // set before the driver thread claims the task
+                    if (result.isDone() || System.nanoTime() - started < budget) continue;
+                    recoverFromStall(result);
+                    throw new BrowserStalled("Camoufox did not answer within " + timeoutSeconds + " s. The task"
+                            + " was stopped and the browser is started again with the next call.", late);
+                }
+            }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+            // The caller gave up (the MCP client cancelled, say): a queued action never runs, a started one keeps
+            // its deadline.
+            if (claimed.compareAndSet(false, true)) result.cancel(false);
+            else watchWithoutCaller(result, startedAt.get() + budget);
             throw new IllegalStateException("Browser task interrupted", e);
         } catch (java.util.concurrent.ExecutionException e) {
             // Report the browser task's own message, not the executor's wrapper text.
@@ -135,37 +173,106 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
             // Playwright errors can quote URLs with tokens or credentials; never pass them through raw.
             String detail = cause.getMessage() == null ? cause.getClass().getSimpleName() : masker.text(cause.getMessage());
             throw new IllegalStateException("Camoufox operation failed: " + detail, cause);
-        } catch (Exception e) {
-            // Playwright errors can quote URLs with tokens or credentials; never pass them through raw.
-            String detail = e.getMessage() == null ? e.getClass().getSimpleName() : masker.text(e.getMessage());
-            throw new IllegalStateException("Camoufox operation failed: " + detail, e);
+        } catch (java.util.concurrent.CancellationException e) {
+            throw busy(timeoutSeconds);
         }
+    }
+
+    /** Recovers a started task whose caller stopped waiting, should it miss its deadline. */
+    private void watchWithoutCaller(Future<?> running, long deadline) {
+        Thread.ofVirtual().name("argos-browser-watch").start(() -> {
+            try {
+                running.get(Math.max(1, deadline - System.nanoTime()), TimeUnit.NANOSECONDS);
+            } catch (TimeoutException late) {
+                if (!running.isDone()) recoverFromStall(running);
+            } catch (Exception finishedOrInterrupted) {
+                // Done one way or another.
+            }
+        });
+    }
+
+    /** A browser call that missed its deadline after it started; the browser is restarted. */
+    static final class BrowserStalled extends IllegalStateException {
+        BrowserStalled(String message, Throwable cause) {
+            super(message, cause);
+        }
+    }
+
+    private static IllegalStateException busy(int timeoutSeconds) {
+        return new IllegalStateException("The browser was busy with another task for " + timeoutSeconds
+                + " s; nothing was done. Try again.");
     }
 
     /**
      * A protocol call that never answers would block the single driver thread, and every later call behind it.
-     * Interrupting the thread ends Playwright's wait for the answer ("Failed to read message"); the session is
-     * then in an unknown state, so the next queued task ends the browser (the persistent profile keeps cookies
-     * and logins) and forgets its tabs. The next call starts it again.
+     * The stalled task is interrupted, and a watchdog thread closes Playwright's connection: every later protocol
+     * call of that task then fails at once ("Playwright connection closed") instead of waiting again, and the
+     * driver process ends, taking Camoufox with it. The next task on the driver thread forgets the session (the
+     * persistent profile keeps cookies and logins); the next call starts the browser again.
      */
     private void recoverFromStall(Future<?> stuck) {
-        stuck.cancel(true);
-        driver.submit(() -> {
-            System.err.println("Argos: a browser call stalled; restarting Camoufox.");
+        Playwright stalled = playwright;
+        List<ProcessHandle> driverProcesses = List.copyOf(this.driverProcesses);
+        Set<Long> launching = launchingSince;
+        // Latch, then flag, then stopper: the stopper can end the stalled task, and the next task must already
+        // see the flag then, and wait for this latch.
+        CountDownLatch stopped = new CountDownLatch(1);
+        browserStopped = stopped;
+        restartRequested = true;
+        Thread.ofPlatform().name("argos-browser-stop").daemon(true).start(() -> {
             try {
-                if (playwright != null) playwright.close(); // ends the driver and the browser process
+                if (stalled != null) stalled.close(); // waits up to 30 s for the driver to exit
             } catch (RuntimeException alreadyBroken) {
-                // Nothing more to close.
+                // The connection is gone either way.
             } finally {
-                context = null;
-                playwright = null;
-                if (proxy != null) proxy.close();
-                proxy = null;
-                tabs.clear();
-                documents.clear();
-                controlSnapshots.clear();
+                destroyTree(driverProcesses);
+                // Stalled inside Playwright.create(): its driver is not recorded yet.
+                if (launching != null) destroyTree(childrenSince(launching));
+                stopped.countDown();
             }
         });
+        stuck.cancel(true);
+        driver.submit(() -> {
+            if (restartRequested) resetAfterStall();
+        });
+    }
+
+    /** On the driver thread, before anything else runs: waits for the stopped browser and forgets its session. */
+    private void resetAfterStall() {
+        restartRequested = false;
+        System.err.println("Argos: a browser call stalled; restarting Camoufox.");
+        CountDownLatch stopping = browserStopped;
+        if (stopping != null) {
+            try {
+                stopping.await(40, TimeUnit.SECONDS); // the profile stays locked until the old browser has exited
+            } catch (InterruptedException interrupted) {
+                // Interrupted by a later stall: go on with the reset.
+            }
+        }
+        context = null;
+        playwright = null;
+        driverProcesses.clear();
+        launchingSince = null;
+        if (proxy != null) proxy.close();
+        proxy = null;
+        tabs.clear();
+        documents.clear();
+        controlSnapshots.clear();
+        finishedRequests.clear();
+        failedRequests.clear();
+    }
+
+    /** Child processes of Argos that were not running at {@code before}. */
+    private static List<ProcessHandle> childrenSince(Set<Long> before) {
+        return ProcessHandle.current().children().filter(child -> !before.contains(child.pid())).toList();
+    }
+
+    private static void destroyTree(List<ProcessHandle> processes) {
+        for (ProcessHandle process : processes) {
+            if (!process.isAlive()) continue;
+            process.descendants().forEach(ProcessHandle::destroyForcibly);
+            process.destroyForcibly();
+        }
     }
 
     private Page activePage() throws Exception {
@@ -242,17 +349,29 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
                             .setContrast(null)
                             .setFirefoxUserPrefs(prefs);
             if (!args.isEmpty()) options.setArgs(args);
+            Set<Long> before = new HashSet<>();
+            ProcessHandle.current().children().forEach(child -> before.add(child.pid()));
+            launchingSince = before;
             try {
                 playwright = Playwright.create();
+                driverProcesses.addAll(childrenSince(before));
+                launchingSince = null;
                 context = playwright.firefox().launchPersistentContext(config.profile(), options);
                 if (proxy != null) verifyNetworkBoundary();
             } catch (Exception error) {
+                Set<Long> launching = launchingSince;
+                launchingSince = null;
                 shutDown();
+                // Playwright.create() failed half-way (interrupted, say): nobody else stops the driver it started.
+                if (launching != null) destroyTree(childrenSince(launching));
                 throw error;
             }
             probeUnicode();
             // Tabs opened by websites (target=_blank, window.open) are adopted like our own.
             context.onPage(this::adopt);
+            // Protocol events: when a download's transfer ended (its request may not belong to the tab any more).
+            context.onRequestFinished(finishedRequests::add);
+            context.onRequestFailed(failedRequests::add);
         }
     }
 
@@ -310,6 +429,9 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
             tab.activity.started();
         });
         page.onDownload(download -> tab.download = download);
+        page.onFrameNavigated(frame -> {
+            if (frame == page.mainFrame()) tab.saved = null; // also same-document navigations
+        });
         page.onResponse(response -> {
             if (isMainDocument(page, response.request())) {
                 MainDocument document = new MainDocument(response);
@@ -429,8 +551,12 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
 
     public Map<String, Object> navigate(String target) {
         requireWebUrl(target);
-        return onBrowser(() -> {
-            Page p = activePage();
+        return onBrowser(() -> navigateHere(activePage(), target));
+    }
+
+    /** {@link #navigate} on the driver thread. */
+    private Map<String, Object> navigateHere(Page p, String target) throws Exception {
+        {
             ReadinessPolicy policy = config.readiness();
             TabDocument tab = document(p);
             MainDocument previousDocument = tab.mainDocument;
@@ -466,7 +592,7 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
             result.put("contentType", contentType(p));
             result.put("readiness", readiness);
             return result;
-        });
+        }
     }
 
     @Override
@@ -486,7 +612,13 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
 
     @Override
     public String currentUrl() {
-        return onBrowser(() -> tabs.current().map(Page::url).orElse(""));
+        return onBrowser(() -> tabs.current().map(this::shownUrl).orElse(""));
+    }
+
+    /** The address of the document a tab shows: a saved feed, else the rendered page. */
+    private String shownUrl(Page p) {
+        SavedDocument saved = document(p).saved;
+        return saved != null ? saved.url() : p.url();
     }
 
     /**
@@ -505,6 +637,8 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
     public Map<String, Object> waitFor(String selector, String text, int timeoutMillis) {
         return onBrowser(() -> {
             Page p = activePage();
+            SavedDocument saved = document(p).saved;
+            if (saved != null) return savedWaitResult(saved, selector, text);
             ReadinessPolicy configured = config.readiness().settles() ? config.readiness() : ReadinessPolicy.balanced();
             ReadinessPolicy policy = configured.withTimeout(Math.max(500, Math.min(60_000, timeoutMillis)));
             Locator target = null;
@@ -675,19 +809,31 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
      */
     private Optional<SavedDocument> savedSourceDocument(Page p, TabDocument tab, MainDocument response) {
         if (response == null || response.attachment()) return Optional.empty();
-        if (!DocumentType.classify(response.contentType(), response.url()).isSourceDocument()) return Optional.empty();
+        DocumentType type = DocumentType.classify(response.contentType(), response.url());
+        if (!type.isSourceDocument()) return Optional.empty();
+        Long length = response.contentLength();
+        if (length != null && length > MAX_SOURCE_BYTES) return Optional.empty();
+        // Never wait for an unfinished download on the driver thread (Download.path() has no deadline): only a
+        // download the browser reports finished within a few seconds is read, anything else stays a download.
+        long deadline = System.nanoTime() + SAVED_DOCUMENT_WAIT_NANOS;
+        String url = response.url();
+        if (!pumpUntil(p, () -> tab.download != null && url.equals(tab.download.url()), deadline)) {
+            return Optional.empty();
+        }
+        Download download = tab.download;
+        tab.download = null;
+        // This response's own request: an earlier transfer of the same URL may end in the meantime.
+        Request request = response.request();
+        if (!pumpUntil(p, () -> finishedRequests.contains(request) || failedRequests.contains(request), deadline)
+                || failedRequests.contains(request)) {
+            return Optional.empty(); // still loading or failed: the browser keeps it as a download
+        }
         try {
-            if (tab.download == null || !response.url().equals(tab.download.url())) {
-                p.waitForCondition(() -> tab.download != null && response.url().equals(tab.download.url()),
-                        new Page.WaitForConditionOptions().setTimeout(5_000));
-            }
-            Download download = tab.download;
-            tab.download = null;
+            java.nio.file.Path file = download.path(); // the transfer has ended, so this returns promptly
             try {
-                java.nio.file.Path file = download.path();
                 if (file == null || Files.size(file) > MAX_SOURCE_BYTES) return Optional.empty();
-                String text = new String(Files.readAllBytes(file), charset(response.contentType()));
-                return Optional.of(new SavedDocument(response.url(), response.status(), response.contentType(), text));
+                String text = decode(Files.readAllBytes(file), response.contentType(), type);
+                return Optional.of(new SavedDocument(url, response.status(), response.contentType(), text));
             } finally {
                 download.delete();
             }
@@ -696,6 +842,47 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
         }
     }
 
+    /** Waits by pumping Playwright events on this thread until {@code done} holds or {@code deadline} passed. */
+    private static boolean pumpUntil(Page p, java.util.function.BooleanSupplier done, long deadline) {
+        while (!done.getAsBoolean()) {
+            if (System.nanoTime() >= deadline || p.isClosed()) return done.getAsBoolean();
+            p.waitForTimeout(50);
+        }
+        return true;
+    }
+
+    /**
+     * Text of a saved source document: the charset of the Content-Type header, else for XML a byte order mark or
+     * the encoding of the XML declaration, else UTF-8.
+     */
+    static String decode(byte[] bytes, String contentType, DocumentType type) {
+        java.nio.charset.Charset declared = charset(contentType);
+        if (declared != null) return new String(bytes, declared);
+        if (bytes.length >= 3 && (bytes[0] & 0xff) == 0xef && (bytes[1] & 0xff) == 0xbb && (bytes[2] & 0xff) == 0xbf) {
+            return new String(bytes, 3, bytes.length - 3, java.nio.charset.StandardCharsets.UTF_8);
+        }
+        if (bytes.length >= 2 && (bytes[0] & 0xff) == 0xfe && (bytes[1] & 0xff) == 0xff) {
+            return new String(bytes, 2, bytes.length - 2, java.nio.charset.StandardCharsets.UTF_16BE);
+        }
+        if (bytes.length >= 2 && (bytes[0] & 0xff) == 0xff && (bytes[1] & 0xff) == 0xfe) {
+            return new String(bytes, 2, bytes.length - 2, java.nio.charset.StandardCharsets.UTF_16LE);
+        }
+        if (type == DocumentType.XML || type == DocumentType.FEED) {
+            String head = new String(bytes, 0, Math.min(bytes.length, 200), java.nio.charset.StandardCharsets.ISO_8859_1);
+            java.util.regex.Matcher xml = java.util.regex.Pattern.compile(
+                    "^\\s*<\\?xml[^>]*\\bencoding\\s*=\\s*[\"']([\\w.:-]+)[\"']").matcher(head);
+            if (xml.find()) {
+                try {
+                    return new String(bytes, java.nio.charset.Charset.forName(xml.group(1)));
+                } catch (RuntimeException unknown) {
+                    // fall through to UTF-8
+                }
+            }
+        }
+        return new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
+    }
+
+    /** The charset parameter of a Content-Type header, or null when absent or unknown. */
     private static java.nio.charset.Charset charset(String contentType) {
         if (contentType != null) {
             java.util.regex.Matcher m = java.util.regex.Pattern.compile("charset=\"?([\\w.:-]+)",
@@ -708,7 +895,30 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
                 }
             }
         }
-        return java.nio.charset.StandardCharsets.UTF_8;
+        return null;
+    }
+
+    /**
+     * A saved feed is complete and has no page: nothing to wait for. Text is looked up in what the snapshot shows
+     * of it (case and spacing ignored, like a text query on a page); an element selector cannot match it.
+     */
+    private static Map<String, Object> savedWaitResult(SavedDocument saved, String selector, String text) {
+        Map<String, Object> result = savedResult(saved);
+        boolean bySelector = selector != null && !selector.isBlank();
+        if (bySelector || (text != null && !text.isBlank())) {
+            boolean found = !bySelector && looseText(sourceText(saved.contentType(), saved.url(), saved.text()))
+                    .contains(looseText(text));
+            result.put("readiness", found
+                    ? new ReadinessReport(ReadinessReport.READY, 0,
+                            List.of("document-loaded", ReadinessWaiter.TARGET_VISIBLE), List.of())
+                    : new ReadinessReport(ReadinessReport.TIMEOUT, 0, List.of("document-loaded"),
+                            List.of(ReadinessWaiter.TARGET_VISIBLE)));
+        }
+        return result;
+    }
+
+    private static String looseText(String text) {
+        return text.replaceAll("\\s+", " ").trim().toLowerCase(java.util.Locale.ROOT);
     }
 
     private static Map<String, Object> savedResult(SavedDocument saved) {
@@ -742,6 +952,7 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
         private final int status;
         private final String contentType;
         private final boolean attachment;
+        private final Long contentLength;
         /** Set from the protocol's requestfinished event (driver thread). */
         boolean finished;
         private Optional<String> body;
@@ -751,6 +962,8 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
             this.url = response.url();
             this.status = response.status();
             this.contentType = response.headerValue("content-type");
+            String length = response.headerValue("content-length");
+            this.contentLength = length != null && length.trim().matches("\\d{1,18}") ? Long.valueOf(length.trim()) : null;
             String disposition = response.headerValue("content-disposition");
             this.attachment = disposition != null && disposition.toLowerCase(java.util.Locale.ROOT).startsWith("attachment");
         }
@@ -759,6 +972,10 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
         int status() { return status; }
         String contentType() { return contentType; }
         boolean attachment() { return attachment; }
+        /** The declared Content-Length, or null. */
+        Long contentLength() { return contentLength; }
+
+        Request request() { return response.request(); }
 
         boolean isFor(Request request) {
             return response.request() == request;
@@ -867,6 +1084,7 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
         return onBrowser(() -> {
             Page p = activePage();
             input.click(p, p.locator(selector).first());
+            leaveSavedDocument(p);
             settle(p);
             return Map.of("clicked", selector, "url", p.url());
         });
@@ -876,6 +1094,7 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
         return onBrowser(() -> {
             Page p = activePage();
             input.replaceText(p, p.locator(selector).first(), text);
+            leaveSavedDocument(p);
             return Map.of("filled", selector, "url", p.url());
         });
     }
@@ -896,8 +1115,9 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
         return list;
     }
 
-    private static Map<String, Object> tabInfo(String id, Page tab, boolean current) {
-        return Map.of("tab", id, "current", current, "url", tab.url(), "title", safeTitle(tab));
+    private Map<String, Object> tabInfo(String id, Page tab, boolean current) {
+        boolean saved = document(tab).saved != null; // a saved feed has no title, as in savedResult
+        return Map.of("tab", id, "current", current, "url", shownUrl(tab), "title", saved ? "" : safeTitle(tab));
     }
 
     private static String safeTitle(Page tab) {
@@ -964,10 +1184,31 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
         return traverse("reload");
     }
 
+    /**
+     * Controls, clicks, typing and history moves act on the rendered page: once one of them succeeded, a saved feed
+     * shown instead of it (see {@link #savedSourceDocument}) is left, so every tool reports the same document. A
+     * failed call leaves it in place.
+     */
+    private void leaveSavedDocument(Page p) {
+        document(p).saved = null;
+    }
+
     /** History traversal via BiDi {@code browsingContext.traverseHistory} / {@code reload}; no page script. */
     private Map<String, Object> traverse(String direction) {
         return onBrowser(() -> {
             Page p = activePage();
+            SavedDocument saved = document(p).saved;
+            if (saved != null && !direction.equals("forward")) {
+                // The saved feed is no history entry of its own: back returns to the page shown before it,
+                // reload loads the feed again. Forward leaves it only once the tab has moved.
+                leaveSavedDocument(p);
+                if (direction.equals("reload")) return navigateHere(p, saved.url());
+                if (direction.equals("back")) {
+                    MainDocument main = document(p).mainDocument;
+                    controlSnapshots.remove(p);
+                    return Map.of("url", p.url(), "title", safeTitle(p), "status", main == null ? 0 : main.status());
+                }
+            }
             String before = p.url();
             Response response = null;
             boolean timedOut = false;
@@ -990,6 +1231,7 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
                 throw new IllegalStateException(timedOut ? "The tab did not move in its history."
                         : "No " + (direction.equals("back") ? "previous" : "next") + " page in this tab's history.");
             }
+            leaveSavedDocument(p);
             controlSnapshots.remove(p);
             return Map.of("url", p.url(), "title", safeTitle(p),
                     "status", response == null ? 0 : response.status());
@@ -1000,7 +1242,12 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
 
     /** A fresh numbered control snapshot of the current tab, replacing the previous one. */
     public PageControls controls() {
-        return onBrowser(() -> takeControlSnapshot(activePage()));
+        return onBrowser(() -> {
+            Page p = activePage();
+            PageControls snapshot = takeControlSnapshot(p);
+            leaveSavedDocument(p);
+            return snapshot;
+        });
     }
 
     private PageControls takeControlSnapshot(Page p) {
@@ -1035,6 +1282,7 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
             Set<String> before = tabs.all().keySet();
             Resolved resolved = resolve(p, target);
             input.click(p, resolved.locator());
+            leaveSavedDocument(p);
             settle(p);
             String opened = adoptOpenedTab(before);
             Page now = activePage();
@@ -1047,7 +1295,8 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
             Page p = activePage();
             Resolved resolved = resolve(p, target);
             input.replaceText(p, resolved.locator(), text);
-            if (text.endsWith("\n")) settle(p);
+            leaveSavedDocument(p);
+            if (RealInput.lineEnds(text).endsWith("\n")) settle(p);
             return new Interaction(resolved.description(), p.url(), safeTitle(p), null);
         });
     }
@@ -1148,7 +1397,7 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
         }
         return onBrowser(() -> {
             Page p = activePage();
-            if (p.locator("body").count() == 0) {
+            if (document(p).saved != null || p.locator("body").count() == 0) {
                 throw new IllegalStateException("browser_extract needs an HTML page; use browser_snapshot for "
                         + "XML, JSON or text documents.");
             }
@@ -1256,7 +1505,7 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
 
     public Map<String, Object> status() {
         return onBrowser(() -> Map.of("started", context != null, "profile", config.profile().toString(),
-                "url", tabs.current().map(Page::url).orElse(""),
+                "url", tabs.current().map(this::shownUrl).orElse(""),
                 "tab", Optional.ofNullable(tabs.currentId()).orElse(""), "tabs", tabs.size(),
                 "network", networkStatus()));
     }
@@ -1304,6 +1553,7 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
             } catch (RuntimeException unreachable) {
                 return false;
             }
+            leaveSavedDocument(p);
             awaitNavigationAfterInput(p, tab, navigations, before);
             settleLoad(p);
             return true;
@@ -1362,6 +1612,7 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
         } finally {
             context = null;
             playwright = null;
+            driverProcesses.clear();
             // The proxy goes last: until then the browser still has its only route through it.
             if (proxy != null) proxy.close();
             proxy = null;

@@ -149,9 +149,31 @@ class RealInputTest {
         assertFalse(RealInput.lineBreakInside("x"));
         assertFalse(RealInput.lineBreakInside("x\n"));
         assertFalse(RealInput.lineBreakInside("x\r\n"));
+        assertFalse(RealInput.lineBreakInside("x\r"));
         assertTrue(RealInput.lineBreakInside("x\ny"));
         assertTrue(RealInput.lineBreakInside("x\n\n"));
         assertTrue(RealInput.lineBreakInside("x\ry"));
+    }
+
+    @Test void aTrailingCrlfIsOneEnter() {
+        RecordingDevice device = new RecordingDevice(false);
+        input(HumanInputSettings.UnicodePolicy.STRICT).type(device, "x\r\n");
+        assertEquals(1, device.count("keyDown Enter"), device.calls.toString());
+        RecordingDevice lines = new RecordingDevice(false);
+        input(HumanInputSettings.UnicodePolicy.STRICT).type(lines, "a\r\nb\rc");
+        assertEquals(2, lines.count("keyDown Enter"), lines.calls.toString());
+    }
+
+    @Test void capitalUmlautsAreTypedWithShiftHeld() {
+        RecordingDevice device = new RecordingDevice(false);
+        RealInput input = input(HumanInputSettings.UnicodePolicy.STRICT);
+        input.unicodeKeys(RealInput.UnicodeKeys.TEXT_AS_KEYS);
+        input.type(device, "Äa");
+        List<String> keys = device.calls;
+        int shiftDown = keys.indexOf("keyDown Shift");
+        assertTrue(shiftDown >= 0 && shiftDown < keys.indexOf("insertText Ä"), keys.toString());
+        assertTrue(keys.indexOf("keyUp Shift") > keys.indexOf("insertText Ä"), keys.toString());
+        assertTrue(keys.indexOf("keyUp Shift") < keys.indexOf("keyDown a"), keys.toString());
     }
 
     @Test void capitalsAreTypedWithShiftHeld() {

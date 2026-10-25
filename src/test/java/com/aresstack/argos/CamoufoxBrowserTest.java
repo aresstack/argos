@@ -72,6 +72,8 @@ class CamoufoxBrowserTest {
             Map<String,Object> waited = browser.waitFor(null, "second", 10_000);
             assertEquals(ReadinessReport.READY, ((ReadinessReport) waited.get("readiness")).state());
             assertTrue(browser.snapshot(8000).text().contains("Search results"));
+            // A permanent error is reported as such, not as a readiness timeout.
+            assertThrows(IllegalStateException.class, () -> browser.waitFor("div[", null, 5_000));
 
             try (CamoufoxBrowser thorough = new CamoufoxBrowser(new ArgosConfig(
                     "127.0.0.1", 0, local.executable(), local.launchOptions(), temporary.resolve("thorough"),
@@ -79,6 +81,11 @@ class CamoufoxBrowserTest {
                 ReadinessReport settled = (ReadinessReport) thorough.navigate(site.url("/spa.html")).get("readiness");
                 assertEquals(ReadinessReport.READY, settled.state(), settled.toString());
                 assertTrue(thorough.snapshot(8000).text().contains("Search results"), settled.toString());
+                // Heavy DOM: 20 000 articles built in ten chunks; settles once the last chunk is in.
+                ReadinessReport heavy = (ReadinessReport) thorough.navigate(site.url("/heavy.html")).get("readiness");
+                assertEquals(ReadinessReport.READY, heavy.state(), heavy.toString());
+                PageSnapshot big = thorough.snapshot(60_000);
+                assertTrue(big.truncated() && big.text().contains("Result 0"), String.valueOf(big.characters()));
             }
 
             // A1: the Springer case — an RSS document has no HTML body.

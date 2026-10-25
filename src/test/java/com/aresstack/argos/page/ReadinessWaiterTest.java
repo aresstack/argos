@@ -8,6 +8,9 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ReadinessWaiterTest {
@@ -81,6 +84,32 @@ class ReadinessWaiterTest {
                 new PageSample(1, 1, false, false, 0, 0), new PageSample(1, 1, false, true, 0, 0)));
         assertEquals(ReadinessReport.READY, report.state());
         assertEquals(List.of(ReadinessWaiter.TARGET_VISIBLE), report.met());
+    }
+
+    @Test
+    void reportsInvalidSelectorInsteadOfTimingOut() {
+        RuntimeException invalid = new RuntimeException(
+                "Error: Unexpected token \"[\" while parsing css selector \"div[\". Did you mean to CSS.escape it?");
+        RuntimeException thrown = assertThrows(RuntimeException.class,
+                () -> waiter.await(policy(5_000, 0, 0, 0, List.of()), true, () -> { throw invalid; }));
+        assertSame(invalid, thrown);
+        assertEquals(1_000, clock.get(), "must fail on the first sample, not after the budget");
+    }
+
+    @Test
+    void reportsClosedPageAndProtocolErrors() {
+        assertThrows(IllegalStateException.class, () -> waiter.await(policy(5_000, 200, 0, 0, List.of()), false,
+                () -> { throw new IllegalStateException("Target page, context or browser has been closed"); }));
+        assertThrows(IllegalStateException.class, () -> waiter.await(policy(5_000, 200, 0, 0, List.of()), false,
+                () -> { throw new IllegalStateException("Protocol error (script.callFunction): unknown error"); }));
+    }
+
+    @Test
+    void recognisesNavigationFailuresAlsoAsCause() {
+        assertTrue(ReadinessWaiter.isNavigationFailure(new IllegalStateException("wrapped",
+                new RuntimeException("Execution context was destroyed, most likely because of a navigation"))));
+        assertFalse(ReadinessWaiter.isNavigationFailure(new RuntimeException("Timeout 2000ms exceeded")));
+        assertFalse(ReadinessWaiter.isNavigationFailure(new RuntimeException((String) null)));
     }
 
     @Test

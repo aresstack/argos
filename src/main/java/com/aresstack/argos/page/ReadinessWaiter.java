@@ -2,6 +2,7 @@ package com.aresstack.argos.page;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.function.LongSupplier;
 
 /**
@@ -14,6 +15,15 @@ public final class ReadinessWaiter {
     public static final String NO_LOADING_INDICATOR = "no-loading-indicator";
     public static final String CONTENT_PRESENT = "content-present";
     public static final String TARGET_VISIBLE = "target-visible";
+
+    /**
+     * Messages of failures caused by a navigation replacing the document or its frames.
+     * Anything else (invalid selector, closed page, protocol error) is permanent.
+     */
+    private static final List<String> NAVIGATION_FAILURES = List.of(
+            "execution context was destroyed", "most likely because of a navigation",
+            "cannot find context with specified id", "frame was detached", "frame has been detached",
+            "navigation interrupted", "interrupted by another navigation");
 
     /** Takes one sample; may throw while the page navigates. */
     @FunctionalInterface
@@ -47,7 +57,8 @@ public final class ReadinessWaiter {
             PageSample sample;
             try {
                 sample = probe.sample();
-            } catch (Exception navigating) {
+            } catch (Exception failure) {
+                if (!isNavigationFailure(failure)) throw failure;
                 sample = null; // execution context replaced; treat as unstable
             }
             if (sample == null || !sample.sameDomAs(previous)) domStableSince = now;
@@ -79,6 +90,18 @@ public final class ReadinessWaiter {
             }
             pause.pause((int) Math.min(policy.pollMillis(), remaining));
         }
+    }
+
+    /** True only for failures a document replacement explains; the wait then simply continues. */
+    static boolean isNavigationFailure(Throwable failure) {
+        for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
+            String message = cause.getMessage();
+            if (message == null) continue;
+            String lower = message.toLowerCase(Locale.ROOT);
+            if (NAVIGATION_FAILURES.stream().anyMatch(lower::contains)) return true;
+            if (cause.getCause() == cause) break;
+        }
+        return false;
     }
 
     private static void check(boolean enabled, boolean satisfied, String name,

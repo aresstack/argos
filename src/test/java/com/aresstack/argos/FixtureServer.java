@@ -14,6 +14,7 @@ public final class FixtureServer implements AutoCloseable {
     public static final Map<String, String> CONTENT_TYPES = Map.of(
             "/page.html", "text/html; charset=utf-8",
             "/spa.html", "text/html; charset=utf-8",
+            "/heavy.html", "text/html; charset=utf-8",
             "/springer-feed.rss", "application/rss+xml; charset=utf-8",
             "/atom.xml", "application/atom+xml",
             "/sitemap.xml", "application/xml",

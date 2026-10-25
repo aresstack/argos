@@ -147,6 +147,30 @@ Der Login allein ist **keine** Discovery-Abnahme. Nach erfolgreicher OAuth-Verbi
 
 `browser_network` entfernt Query-Parameter und Benutzerinformationen aus den protokollierten URLs. Bis zu 200 Ereignisse bleiben im Speicher. `browser_evaluate` kann Webseiten verändern und ist deshalb nur für ausdrücklich autorisierte Nutzer über das gesicherte MCP-Plugin bestimmt.
 
+### Werkzeugprofile
+
+Welche Werkzeuge Argos veröffentlicht, bestimmt `ARGOS_TOOL_PROFILE` (Property `tools.profile`):
+
+| Profil | Werkzeuge | Gedacht für |
+| --- | --- | --- |
+| `legacy` (Standard) | die neun `browser_*`-Werkzeuge oben | bestehende Clients, unverändert |
+| `compact` | nur `web_search`, `web_open`, `web_read`, `web_links`, `web_follow`, `web_back` | kleine lokale Modelle (wie in AskAI erprobt) |
+| `expert` | `web_*` und `browser_*` (wird um Tabs, Extraktion, Netzwerk usw. erweitert) | leistungsfähige Modelle |
+
+Die `web_*`-Werkzeuge haben höchstens einen Parameter, Beispiele in der Beschreibung und antworten mit kurzem Klartext statt JSON:
+
+```text
+web_open url="https://example.org/"   → URL, TITLE, LINKS: 12, Seitentext (lange Seiten in Teilen: web_read part=2)
+web_links                              → link-1: Text — https://…   (IDs bleiben auf derselben Seite stabil)
+                                         Suchtreffer (result-N) und Seitenlinks (link-N) sind getrennt; eine
+                                         bloße Zahl bezieht sich auf die zuletzt gezeigte Liste
+web_follow link_id="link-3"            → öffnet den Link als echte Navigation mit Referer, ohne Seitenskript
+web_back                               → vorherige Seite
+web_search query="…"                   → result-1: Titel — URL (öffnen mit web_follow link_id="result-1")
+```
+
+Pro `web_open`/`web_read`/`web_back` liest Argos genau einmal `page.content()` in Playwrights isolierter Utility-Welt; Titel, Text und Links werden in Java (jsoup) daraus gewonnen. `web_links` und `web_follow` lesen die Seite nicht erneut. So bleibt die Zahl der Protokoll-Evaluierungen minimal (jede trägt `userActivation`, siehe playwright4j #37); Locator-Aktionen, Screenshots und Viewport-Emulation werden nicht verwendet. Es wird kein für die Seite sichtbares Skript eingeschleust. `web_*` prüft jede Ziel-URL vor der Navigation und die finale URL danach: Loopback-, private, Link-Local-, IPv6-ULA- und CGNAT-Adressen werden abgelehnt, eine auf solchen Adressen gelandete Seite wird verworfen und der Tab auf `about:blank` gesetzt. **Das ist eine Navigationsschranke, kein vollständiger SSRF-Schutz:** Weiterleitungsziele und Unterressourcen fordert der Browser selbst an, bevor Argos sie sehen kann, und DNS-Rebinding zwischen Prüfung und Browser-Auflösung ist nicht ausgeschlossen. Ein echter Schutz braucht eine Netzsperre auf Browserebene (siehe Analyse in PR #1). Für lokale Tests lässt `ARGOS_ALLOW_PRIVATE_NETWORKS=true` (Property `browser.allow-private-networks`) private Ziele zu. `web_search` meldet bis zur Integration des Suchanbieters ehrlich, dass keine Suche konfiguriert ist.
+
 ## GitHub Actions und Releases
 
 Der Workflow [Build and Release Argos](.github/workflows/build-release.yml) läuft bei jedem Push auf `main`, bei Pull Requests und manuell über **Actions → Build and Release Argos → Run workflow**. Er baut Playwright4J aus einem **festgepinnten Commit** selbst in Maven Local, führt die Java-Tests aus und erstellt das plattformübergreifende `argos-package.zip`. Anschließend prüft ein separater Windows-Job sowohl den **echten Playwright4J-Treiberstart aus der einzelnen JAR** (`--verify-runtime`) als auch den MCP-Handshake und die Browserwerkzeugliste, ohne dass ein externes `lib/`-Verzeichnis existiert. Die Browser-Funktionstests mit echter Camoufox-Binärdatei bleiben lokal, da der Runner diese nicht mitbringt.

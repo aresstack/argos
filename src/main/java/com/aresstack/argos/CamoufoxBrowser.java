@@ -1,5 +1,8 @@
 package com.aresstack.argos;
 
+import com.aresstack.argos.web.BrowserPagePort;
+import com.aresstack.argos.web.PageCapture;
+import com.aresstack.argos.web.PageText;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.microsoft.playwright.BrowserContext;
@@ -29,7 +32,7 @@ import java.util.concurrent.TimeUnit;
  * Owns one persistent Camoufox browser and serializes every Playwright API call
  * onto a single driver thread. Never attaches to an existing user's browser.
  */
-public final class CamoufoxBrowser implements AutoCloseable {
+public final class CamoufoxBrowser implements BrowserPagePort, AutoCloseable {
     private static final int MAX_NETWORK_EVENTS = 200;
     private final ArgosConfig config;
     private final ExecutorService driver = Executors.newSingleThreadExecutor(
@@ -158,6 +161,49 @@ public final class CamoufoxBrowser implements AutoCloseable {
             if (text.length() > limit) text = text.substring(0, limit) + "\n[TRUNCATED]";
             return Map.of("url", p.url(), "title", p.title(), "text", text);
         });
+    }
+
+    // BrowserPagePort: a plain browser navigation plus exactly one read of the serialized
+    // DOM in Playwright's isolated utility world; title, text and links are derived in Java.
+    @Override
+    public PageCapture open(String url, String referer) {
+        return onBrowser(() -> {
+            Page p = activePage();
+            Page.NavigateOptions options = new Page.NavigateOptions()
+                    .setWaitUntil(WaitUntilState.DOMCONTENTLOADED).setTimeout(45_000);
+            if (referer != null && !referer.isBlank()) options.setReferer(referer);
+            p.navigate(url, options);
+            return capture(p);
+        });
+    }
+
+    @Override
+    public PageCapture current() {
+        return onBrowser(() -> capture(activePage()));
+    }
+
+    @Override
+    public PageCapture back() {
+        return onBrowser(() -> {
+            Page p = activePage();
+            Response previous = p.goBack(new Page.GoBackOptions()
+                    .setWaitUntil(WaitUntilState.DOMCONTENTLOADED).setTimeout(45_000));
+            return previous == null ? null : capture(p);
+        });
+    }
+
+    @Override
+    public void clear() {
+        onBrowser(() -> {
+            activePage().navigate("about:blank");
+            return null;
+        });
+    }
+
+    private static PageCapture capture(Page p) {
+        // Every in-page read is a protocol evaluation (with user activation, see
+        // playwright4j #37), so take one content() call and avoid title()/innerText()/count().
+        return PageText.capture(p.url(), p.content());
     }
 
     public Map<String, Object> inspect(String selector, int limit) {

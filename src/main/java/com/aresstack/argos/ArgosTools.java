@@ -7,22 +7,83 @@ import io.modelcontextprotocol.spec.McpSchema.ImageContent;
 import io.modelcontextprotocol.spec.McpSchema.JsonSchema;
 import io.modelcontextprotocol.spec.McpSchema.Tool;
 
+import com.aresstack.argos.web.UrlPolicy;
+import com.aresstack.argos.web.WebSession;
+
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
 
-/** MCP definitions and small adapters; browser operations live in CamoufoxBrowser. */
+/**
+ * MCP definitions and small adapters; browser operations live in CamoufoxBrowser and
+ * WebSession. Which tools are published depends on the configured {@link ToolProfile}.
+ */
 public final class ArgosTools {
     private final CamoufoxBrowser browser;
+    private final WebSession web;
     private final ObjectMapper json = new ObjectMapper();
 
     public ArgosTools(CamoufoxBrowser browser) {
-        this.browser = browser;
+        this(browser, new WebSession(browser, new UrlPolicy(false), null));
     }
 
+    public ArgosTools(CamoufoxBrowser browser, WebSession web) {
+        this.browser = browser;
+        this.web = web;
+    }
+
+    /** The original nine browser_* tools (the {@link ToolProfile#LEGACY} profile). */
     public List<SyncToolSpecification> all() {
+        return browserTools();
+    }
+
+    public List<SyncToolSpecification> forProfile(ToolProfile profile) {
+        return switch (profile) {
+            case LEGACY -> browserTools();
+            // Small models: only the six short AskAI tools, nothing else to choose from.
+            case COMPACT -> webTools();
+            case EXPERT -> {
+                List<SyncToolSpecification> tools = new ArrayList<>(webTools());
+                tools.addAll(browserTools());
+                yield List.copyOf(tools);
+            }
+        };
+    }
+
+    /**
+     * The compact AskAI tool set: one task per tool, at most one parameter, plain
+     * numbered text answers. Names and parameters match AskAI's browser MCP server.
+     */
+    public List<SyncToolSpecification> webTools() {
+        List<SyncToolSpecification> tools = new ArrayList<>();
+        tools.add(text("web_search", "Search the web. Returns results result-1, result-2, ... with title, url and snippet. "
+                        + "Example: {\"query\": \"camoufox webdriver bidi\"}",
+                Map.of("query", field("string", "What to search for")), List.of("query"),
+                args -> web.search(string(args, "query"))));
+        tools.add(text("web_open", "Open a web page and return its title and text. "
+                        + "Example: {\"url\": \"https://en.wikipedia.org/wiki/Firefox\"}",
+                Map.of("url", field("string", "Full http(s) URL")), List.of("url"),
+                args -> web.open(string(args, "url"))));
+        tools.add(text("web_read", "Read the text of the current page again. Long pages come in parts: "
+                        + "the answer says PART 1 of 3, then ask for the next part. Example: {\"part\": 2}",
+                Map.of("part", field("integer", "Part number, default 1")), List.of(),
+                args -> web.read(number(args, "part", 1))));
+        tools.add(text("web_links", "List the links of the current page as link-1, link-2, ... "
+                        + "Use the id with web_follow. Call web_read first if the page loaded more content. Example: {}",
+                Map.of(), List.of(), args -> web.links()));
+        tools.add(text("web_follow", "Open a link by its id: link-3 from web_links or result-2 from web_search. "
+                        + "A bare number uses the list you saw last. Example: {\"link_id\": \"link-3\"}",
+                Map.of("link_id", field("string", "Id such as link-3 or result-2")), List.of("link_id"),
+                args -> web.follow(string(args, "link_id"))));
+        tools.add(text("web_back", "Go back to the previous page and return its text. Example: {}",
+                Map.of(), List.of(), args -> web.back()));
+        return List.copyOf(tools);
+    }
+
+    /** The original browser_* tools. */
+    public List<SyncToolSpecification> browserTools() {
         List<SyncToolSpecification> tools = new ArrayList<>();
         tools.add(tool("browser_status", "Report whether Argos' dedicated Camoufox session is running.",
                 Map.of(), List.of(), args -> browser.status()));
@@ -64,6 +125,28 @@ public final class ArgosTools {
         return List.copyOf(tools);
     }
 
+    /** A tool answering in plain text, which small models read more reliably than JSON. */
+    private SyncToolSpecification text(String name, String description,
+                                      Map<String, Object> properties, List<String> required,
+                                      TextHandler handler) {
+        return SyncToolSpecification.builder()
+                .tool(Tool.builder().name(name).description(description)
+                        .inputSchema(schema(properties, required)).build())
+                .callHandler((exchange, request) -> {
+                    try {
+                        String answer = handler.apply(request.arguments() == null ? Map.of() : request.arguments());
+                        return CallToolResult.builder().addTextContent(answer).build();
+                    } catch (Exception error) {
+                        return failure(error);
+                    }
+                }).build();
+    }
+
+    @FunctionalInterface
+    private interface TextHandler {
+        String apply(Map<String, Object> arguments) throws Exception;
+    }
+
     private SyncToolSpecification tool(String name, String description,
                                       Map<String, Object> properties, List<String> required,
                                       Function<Map<String, Object>, Object> handler) {
@@ -99,7 +182,10 @@ public final class ArgosTools {
 
     private static int number(Map<String, Object> args, String field, int fallback) {
         Object value = args.get(field);
-        return value instanceof Number n ? n.intValue() : fallback;
+        if (value instanceof Number n) return n.intValue();
+        // Small models often send numbers as strings ("2").
+        if (value instanceof String text && text.strip().matches("\\d{1,6}")) return Integer.parseInt(text.strip());
+        return fallback;
     }
 
     private static CallToolResult failure(Exception error) {

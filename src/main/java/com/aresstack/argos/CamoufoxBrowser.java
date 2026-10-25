@@ -2,6 +2,7 @@ package com.aresstack.argos;
 
 import com.aresstack.argos.web.BrowserPagePort;
 import com.aresstack.argos.web.PageCapture;
+import com.aresstack.argos.web.PageText;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.microsoft.playwright.BrowserContext;
@@ -162,8 +163,8 @@ public final class CamoufoxBrowser implements BrowserPagePort, AutoCloseable {
         });
     }
 
-    // BrowserPagePort: a plain browser navigation plus reads in Playwright's isolated
-    // utility world (content(), innerText()), so the page never sees an added script.
+    // BrowserPagePort: a plain browser navigation plus exactly one read of the serialized
+    // DOM in Playwright's isolated utility world; title, text and links are derived in Java.
     @Override
     public PageCapture open(String url, String referer) {
         return onBrowser(() -> {
@@ -192,10 +193,9 @@ public final class CamoufoxBrowser implements BrowserPagePort, AutoCloseable {
     }
 
     private static PageCapture capture(Page p) {
-        String html = p.content();
-        // XML, JSON and plain-text documents have no HTML body; fall back to the serialized document.
-        String text = p.locator("body").count() > 0 ? p.locator("body").innerText() : html;
-        return new PageCapture(p.url(), p.title(), text, html);
+        // Every in-page read is a protocol evaluation (with user activation, see
+        // playwright4j #37), so take one content() call and avoid title()/innerText()/count().
+        return PageText.capture(p.url(), p.content());
     }
 
     public Map<String, Object> inspect(String selector, int limit) {

@@ -1,7 +1,5 @@
 package com.aresstack.argos.web;
 
-import org.jsoup.Jsoup;
-
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -41,9 +39,7 @@ final class HttpPageBrowser implements BrowserPagePort {
             HttpRequest.Builder request = HttpRequest.newBuilder(URI.create(url));
             if (referer != null) request.header("Referer", referer);
             HttpResponse<String> response = http.send(request.build(), HttpResponse.BodyHandlers.ofString());
-            var document = Jsoup.parse(response.body(), response.uri().toString());
-            return new PageCapture(response.uri().toString(), document.title(),
-                    document.body().text(), response.body());
+            return PageText.capture(response.uri().toString(), response.body());
         } catch (Exception error) {
             throw new IllegalStateException(error);
         }

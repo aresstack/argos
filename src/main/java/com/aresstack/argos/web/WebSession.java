@@ -68,9 +68,9 @@ public final class WebSession {
         return show(accept(browser.current()), part);
     }
 
+    /** Links of the last capture; no extra browser read (web_read refreshes late-loaded links). */
     public synchronized String links() {
         requirePage();
-        accept(browser.current());
         List<PageLink> current = links.links();
         if (current.isEmpty()) return "No links on " + page.url();
         StringBuilder out = new StringBuilder();

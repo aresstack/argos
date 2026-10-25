@@ -71,7 +71,7 @@ public final class ArgosTools {
                 Map.of("part", field("integer", "Part number, default 1")), List.of(),
                 args -> web.read(number(args, "part", 1))));
         tools.add(text("web_links", "List the links of the current page as link-1, link-2, ... "
-                        + "Use the id with web_follow. Example: {}",
+                        + "Use the id with web_follow. Call web_read first if the page loaded more content. Example: {}",
                 Map.of(), List.of(), args -> web.links()));
         tools.add(text("web_follow", "Open a link of the current page by its id from web_links, "
                         + "or a result number from web_search. Example: {\"link_id\": \"link-3\"}",

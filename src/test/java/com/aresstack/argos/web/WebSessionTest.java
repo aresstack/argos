@@ -80,6 +80,8 @@ class WebSessionTest {
         web.open(base + "/");
         pages.put("/", "<title>Start</title><a href='/new'>New item</a>"
                 + "<a href='/about'>About us</a><a href='/article'>Read the article</a>");
+        assertFalse(web.links().contains("New item"), "web_links itself does not read the page again");
+        web.read(1);
         String links = web.links();
         assertTrue(links.contains("link-1: Read the article"), links);
         assertTrue(links.contains("link-2: About us"), links);

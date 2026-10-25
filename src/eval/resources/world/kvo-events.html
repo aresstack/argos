@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>Events – Kestrel Valley Observatory</title></head>
+<body>
+<nav><a href="/kvo/">Home</a> | <a href="/kvo/instruments">Instruments</a></nav>
+<h1>Upcoming events</h1>
+<div id="events"><p class="loading">Loading events…</p></div>
+<script>
+  // The event calendar is a small single-page widget: it renders only after its (slow) data request completes.
+  document.addEventListener('DOMContentLoaded', function () {
+    fetch('/kvo/api/events.json').then(function (r) { return r.json(); }).then(function (data) {
+      var html = '';
+      data.events.forEach(function (e) {
+        html += '<article><h2>' + e.title + '</h2><p>' + e.kind + ' on ' + e.date + ' with ' + e.speaker + '</p></article>';
+      });
+      document.getElementById('events').innerHTML = html;
+    });
+  });
+</script>
+</body></html>

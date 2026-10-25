@@ -105,3 +105,35 @@ tasks.register('argosZip', Zip) {
     destinationDirectory = layout.buildDirectory.dir('distributions')
     from(layout.buildDirectory.dir('package'))
 }
+
+// Model evaluation (docs/model-evaluation.md): drives Argos over MCP with a real language model from an
+// OpenAI-compatible or Ollama endpoint against a local fixture world. Never part of argos.jar.
+sourceSets {
+    eval {
+        compileClasspath += sourceSets.main.output + configurations.runtimeClasspath
+        runtimeClasspath += output + compileClasspath
+    }
+    test {
+        compileClasspath += sourceSets.eval.output
+        runtimeClasspath += sourceSets.eval.output
+    }
+}
+
+tasks.register('evalModels', JavaExec) {
+    group = 'verification'
+    description = 'Run the Argos task set with a language model (see docs/model-evaluation.md)'
+    classpath = sourceSets.eval.runtimeClasspath
+    mainClass = 'com.aresstack.argos.eval.EvalMain'
+    // -Peval.model=qwen3:8b -Peval.profile=compact ... become -Dargos.eval.model=... (environment ARGOS_EVAL_* also works).
+    providers.gradlePropertiesPrefixedBy('eval.').get().each { key, value ->
+        systemProperty "argos.${key}", value
+    }
+    workingDir = projectDir
+    // Quiet console: per-task lines only. The MCP client warns about Argos' intentional 405 on GET (no SSE stream).
+    systemProperty 'org.slf4j.simpleLogger.log.io.modelcontextprotocol', 'error'
+    systemProperty 'org.slf4j.simpleLogger.log.org.eclipse.jetty', 'warn'
+    // The harness starts Argos in-process with its own port, profile and security mode; these only satisfy
+    // ArgosConfig.fromEnvironment(), which supplies the Camoufox paths and readiness settings.
+    environment 'SERVER_PORT', '18099'
+    environment 'SECURITY_MODE', 'none'
+}

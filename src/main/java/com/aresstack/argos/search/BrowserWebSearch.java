@@ -16,6 +16,11 @@ public final class BrowserWebSearch implements WebSearchPort {
         this(new WebSearchService(new CamoufoxSearchPageBrowser(browser), SearchSettings.fromEnvironment()));
     }
 
+    /** Explicit engines and limits, e.g. a local search world for tests and the model evaluation. */
+    public BrowserWebSearch(CamoufoxBrowser browser, SearchSettings settings) {
+        this(new WebSearchService(new CamoufoxSearchPageBrowser(browser), settings));
+    }
+
     public BrowserWebSearch(WebSearchService service) {
         this.service = service;
     }

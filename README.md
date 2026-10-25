@@ -273,6 +273,8 @@ Pro `web_open`/`web_read`/`web_back` liest Argos genau einmal `page.content()` i
 
 Optional (`ARGOS_RESEARCH=true`, Standard aus) kommen `web_research(question)` und `web_research_stop()` hinzu: eine begrenzte, deterministische Recherche nach dem Vorbild des AskAI-`ResearchLoop` (Suche → relevante Seiten lesen → relevanten Links folgen → nummerierte Quellen mit Zitat), ohne KI-Modell und ohne Seiten-Skripte. Details: [docs/research.md](docs/research.md).
 
+Modellvergleich (Phase 7): `gradlew evalModels` lässt lokale Ollama-Modelle (Standard: `gemma4:e2b` und `gpt-oss:20b`) Argos über MCP gegen eine lokale Fixture-Welt bedienen und schreibt einen JSON- und Markdown-Bericht. Details: [docs/model-evaluation.md](docs/model-evaluation.md).
+
 ## Netzwerkgrenze (SSRF-Schutz)
 
 Camoufox erreicht das Netz **nur über einen in Argos eingebauten SOCKS5-Proxy** auf `127.0.0.1` (zufälliger Port). Der Browser löst DNS nicht selbst auf, sondern übergibt den Hostnamen an den Proxy. Der Proxy löst **einmal** auf, prüft **jede** Adresse und verbindet sich mit genau der geprüften Adresse. Das gilt für Navigation, Redirects, Bilder, Skripte, Formulare, WebSockets, Service-Worker und browserinterne Verbindungen. DNS-Rebinding hat dadurch keinen zweiten Auflösungszeitpunkt, den es ausnutzen könnte.

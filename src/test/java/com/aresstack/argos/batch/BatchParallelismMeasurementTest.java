@@ -37,6 +37,7 @@ class BatchParallelismMeasurementTest {
             run(browser, opener, site, "/other.html", 1, 1);
 
             long overhead = run(browser, opener, site, "/other.html", 1, TABS);
+            long[] tabCost = rawTabCost(browser);
             long bodySequential = run(browser, opener, site, "/slow-body", 1, TABS);
             long bodyParallel = run(browser, opener, site, "/slow-body", TABS, TABS);
             long headSequential = run(browser, opener, site, "/slow-head", 1, TABS);
@@ -47,9 +48,10 @@ class BatchParallelismMeasurementTest {
                     engine: %s
                     tabs per run: %d, server delay per address: %d ms
                     no delay (per-tab cost of open/read/close): %5d ms for %d tabs one after the other
+                    of that, bare context.newPage(): %5d ms, page.close(): %5d ms (sum over %d tabs)
                     delay after commit (slow body):     sequential %5d ms | %d parallel tabs %5d ms | saved %d ms
                     delay before commit (slow headers): sequential %5d ms | %d parallel tabs %5d ms
-                    """.formatted(browser.engine(), TABS, DELAY_MILLIS, overhead, TABS, bodySequential, TABS,
+                    """.formatted(browser.engine(), TABS, DELAY_MILLIS, overhead, TABS, tabCost[0], tabCost[1], TABS, bodySequential, TABS,
                     bodyParallel, overlapped, headSequential, TABS, headParallel);
             Path out = Path.of("build", "reports", "argos");
             Files.createDirectories(out);
@@ -62,6 +64,23 @@ class BatchParallelismMeasurementTest {
             // that can overlap, at least 60 % must actually have been saved.
             assertTrue(overlapped >= (TABS - 1) * DELAY_MILLIS * 0.6, report);
         }
+    }
+
+    /** Only opening and closing blank tabs, to tell browser tab costs apart from loading and reading. */
+    private static long[] rawTabCost(TestBrowserSession browser) {
+        return browser.inBrowserContext(context -> {
+            long opening = 0;
+            long closing = 0;
+            for (int i = 0; i < TABS; i++) {
+                long started = System.nanoTime();
+                com.microsoft.playwright.Page page = context.newPage();
+                long opened = System.nanoTime();
+                page.close();
+                opening += opened - started;
+                closing += System.nanoTime() - opened;
+            }
+            return new long[]{opening / 1_000_000, closing / 1_000_000};
+        }, 120);
     }
 
     private static long run(TestBrowserSession browser, BatchOpener opener, FixtureSite site, String path,

@@ -50,7 +50,10 @@ final class RealInput {
     /** Where the pointer of each tab was left: BiDi keeps one input state per browsing context. */
     private final Map<Page, HumanMotion.Point> pointers = new WeakHashMap<>();
     private HumanMotion.Box viewport;
-    /** Whether Playwright sends characters outside the US layout as real keys; null until first tried. */
+    /**
+     * Whether Playwright sends characters outside the US layout as real keys: probed once at browser start on a
+     * blank page. Until then (null) such text is refused before the first key, fail closed.
+     */
     private Boolean unicodeKeys;
 
     RealInput(HumanInputSettings settings) {
@@ -58,6 +61,30 @@ final class RealInput {
         RandomGenerator random = settings.random();
         this.motion = new HumanMotion(random, settings);
         this.typing = new HumanTyping(random, settings);
+        if (settings.unicode() == HumanInputSettings.UnicodePolicy.INSERT) {
+            System.err.println("ARGOS_INPUT_UNICODE=insert is a debug/compatibility mode, not stealth input: characters"
+                    + " outside the US layout reach the page as untrusted, script-made input events.");
+        }
+    }
+
+    /**
+     * Finds out once, before any website is loaded, whether this Playwright sends {@code ä} as a real key. Playwright
+     * Core 1.62 refuses it before anything reaches the browser (playwright4j#36); a version that accepts it sends a
+     * genuine keyDown/keyUp to the blank page, where it has no effect.
+     */
+    void probeUnicode(Page blank) {
+        try {
+            blank.keyboard().down("ä");
+            blank.keyboard().up("ä");
+            unicodeKeys = true;
+        } catch (PlaywrightException refused) {
+            unicodeKeys = false;
+        }
+    }
+
+    /** For tests: the outcome of {@link #probeUnicode}. */
+    void unicodeKeys(boolean supported) {
+        unicodeKeys = supported;
     }
 
     /** The window's inner size from the Camoufox fingerprint, used for wheel scrolling and to keep paths on screen. */
@@ -267,11 +294,14 @@ final class RealInput {
         playKeys(device, typing.type(text), true);
     }
 
-    /** Known before the first key: this Playwright refuses non-US characters and the policy forbids the fallback. */
+    /**
+     * Validates the whole text before the field is focused, cleared or typed into: characters this Playwright cannot
+     * send as real keys are refused unless the policy explicitly allows the page-visible fallback.
+     */
     private void rejectUntypeable(String text) {
         if (settings.unicode() == HumanInputSettings.UnicodePolicy.INSERT) return;
         if (text.indexOf('\t') >= 0) throw untypeable('\t', false);
-        if (!Boolean.FALSE.equals(unicodeKeys)) return;
+        if (Boolean.TRUE.equals(unicodeKeys)) return;
         String checked = settings.unicode() == HumanInputSettings.UnicodePolicy.TRANSLITERATE
                 ? HumanTyping.transliterate(text) : text;
         checked.codePoints().filter(c -> !HumanTyping.inLayout(c)).findFirst()
@@ -337,7 +367,9 @@ final class RealInput {
         }
         return new IllegalStateException("Cannot type '" + new String(Character.toChars(codePoint))
                 + "' as a real key: Playwright Core sends characters outside the US layout only through a page"
-                + " script (playwright4j#36)." + (erased ? " The text typed so far was erased." : "")
-                + " Set ARGOS_INPUT_UNICODE=transliterate (ä -> ae) or insert (visible to the page).");
+                + " script (playwright4j#36)."
+                + (erased ? " The text typed so far was erased." : " Nothing was typed into the field.")
+                + " Remove the character, or opt in to ARGOS_INPUT_UNICODE="
+                + "transliterate (changes the text: ä -> ae) or insert (debug only, visible to the page).");
     }
 }

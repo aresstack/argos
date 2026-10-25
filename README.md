@@ -174,9 +174,9 @@ Jede Maus- und Tastatureingabe geht als vertrauenswürdiges Ereignis über WebDr
 | `ARGOS_HUMAN_SPEED` | `input.speed` | Tempo-Faktor 0.25–4 | `1` |
 | `ARGOS_HUMAN_TYPO_RATE` | `input.typoRate` | Tippfehler je Buchstabe 0–0.2 | `0` |
 | `ARGOS_HUMAN_SEED` | `input.seed` | feste Zufallszahl für reproduzierbare Eingaben | zufällig |
-| `ARGOS_INPUT_UNICODE` | `input.unicode` | `strict`: Zeichen, die Playwright nicht als echte Taste sendet, werden abgelehnt und schon Getipptes wieder gelöscht; `transliterate`: ä → ae, ß → ss, „“ → " usw., Rest wie `strict`; `insert`: Playwright-Fallback über ein Seitenskript (für die Seite sichtbar) | `strict` |
+| `ARGOS_INPUT_UNICODE` | `input.unicode` | `strict`: Text mit Zeichen, die Playwright nicht als echte Taste sendet, wird vor dem Fokussieren abgelehnt (fail closed); `transliterate`: bewusste Ausnahme, ändert den Text (ä → ae, ß → ss, „“ → "); `insert`: nur Debug-/Kompatibilitätsmodus, Playwright-Fallback über ein Seitenskript (für die Seite sichtbar) | `strict` |
 
-Sobald Playwright4J Unicode-Tasten über `performActions` unterstützt, nutzt Argos sie automatisch als echte Tasten.
+Ob Playwright Unicode-Tasten als echte Tasten sendet, prüft Argos einmal beim Browserstart auf einem leeren Tab. Sobald Playwright4J sie über `performActions` unterstützt ([playwright4j#36](https://github.com/aresstack/playwright4j/issues/36)), nutzt Argos sie automatisch.
 
 `browser_network` entfernt Query-Parameter und Benutzerinformationen aus den protokollierten URLs. Bis zu 200 Ereignisse bleiben im Speicher. `browser_evaluate` kann Webseiten verändern und ist deshalb nur für ausdrücklich autorisierte Nutzer über das gesicherte MCP-Plugin bestimmt.
 

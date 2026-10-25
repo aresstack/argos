@@ -48,25 +48,32 @@ class RealInputTest {
         return new RealInput(new HumanInputSettings(HumanInputSettings.Mode.NATURAL, 1, 0, 7L, policy));
     }
 
-    @Test void strictPolicyErasesTheTypedTextAndNeverInsertsByScript() {
+    @Test void strictPolicyRefusesBeforeTheFirstKeyUntilRealUnicodeKeysAreProven() {
         RealInput input = input(HumanInputSettings.UnicodePolicy.STRICT);
         RecordingDevice device = new RecordingDevice(false);
         IllegalStateException refused = assertThrows(IllegalStateException.class, () -> input.type(device, "Mä"));
-        assertTrue(refused.getMessage().contains("ARGOS_INPUT_UNICODE"), refused.getMessage());
+        assertTrue(refused.getMessage().contains("Nothing was typed"), refused.getMessage());
+        assertTrue(device.calls.isEmpty(), "fail closed before any key: " + device.calls);
+        input.unicodeKeys(false);
+        assertThrows(IllegalStateException.class, () -> input.type(device, "Grüße"));
+        assertTrue(device.calls.isEmpty());
+    }
+
+    @Test void unexpectedRefusalAfterAPositiveProbeErasesTheTypedText() {
+        RealInput input = input(HumanInputSettings.UnicodePolicy.STRICT);
+        input.unicodeKeys(true);
+        RecordingDevice device = new RecordingDevice(false);
+        assertThrows(IllegalStateException.class, () -> input.type(device, "Mä"));
         assertEquals(1, device.count("keyDown Backspace"), device.calls.toString());
         assertTrue(device.calls.stream().noneMatch(call -> call.startsWith("insertText")));
-        // Every key that went down came up again, Shift included.
         assertEquals(device.count("keyDown Shift"), device.count("keyUp Shift"));
-
-        RecordingDevice second = new RecordingDevice(false);
-        assertThrows(IllegalStateException.class, () -> input.type(second, "Grüße"));
-        assertTrue(second.calls.isEmpty(), "known refusal is reported before the first key");
     }
 
     @Test void strictRollbackAlsoErasesLineBreaks() {
+        RealInput input = input(HumanInputSettings.UnicodePolicy.STRICT);
+        input.unicodeKeys(true);
         RecordingDevice device = new RecordingDevice(false);
-        assertThrows(IllegalStateException.class,
-                () -> input(HumanInputSettings.UnicodePolicy.STRICT).type(device, "a\nbä"));
+        assertThrows(IllegalStateException.class, () -> input.type(device, "a\nbä"));
         assertEquals(3, device.count("keyDown Backspace"), device.calls.toString());
     }
 
@@ -98,7 +105,9 @@ class RealInputTest {
 
     @Test void unicodeGoesAsRealKeyWhenPlaywrightAcceptsIt() {
         RecordingDevice device = new RecordingDevice(true);
-        input(HumanInputSettings.UnicodePolicy.STRICT).type(device, "ä€");
+        RealInput input = input(HumanInputSettings.UnicodePolicy.STRICT);
+        input.unicodeKeys(true);
+        input.type(device, "ä€");
         assertEquals(1, device.count("keyDown ä"));
         assertEquals(1, device.count("keyDown €"));
         assertFalse(device.calls.stream().anyMatch(call -> call.startsWith("insertText")));

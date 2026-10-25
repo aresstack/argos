@@ -38,15 +38,19 @@ Die Planer sind getrennt von der Ausführung, damit sie mit festem Seed determin
 
 ## Umlaute und andere Zeichen außerhalb des US-Layouts
 
-Playwright Core 1.62 lehnt `keyboard.down("ä")` ab (`Unknown key`) und tippt solche Zeichen in `keyboard.type` über `window.__pw_bidiInsertText`, das ein **nicht vertrauenswürdiges** `InputEvent` auslöst ([playwright4j#36](https://github.com/aresstack/playwright4j/issues/36)). BiDi selbst würde jeden Unicode-Wert als echte Taste annehmen. Argos versucht deshalb immer zuerst die echte Taste und merkt sich das Ergebnis. Wird sie abgelehnt, gilt `ARGOS_INPUT_UNICODE`:
+Playwright Core 1.62 lehnt `keyboard.down("ä")` ab (`Unknown key`) und tippt solche Zeichen in `keyboard.type` über `window.__pw_bidiInsertText`, das ein **nicht vertrauenswürdiges** `InputEvent` auslöst ([playwright4j#36](https://github.com/aresstack/playwright4j/issues/36)). BiDi selbst würde jeden Unicode-Wert als echte Taste annehmen; die eigentliche Lösung ist der Fix in Playwright4J (`keyDown`/`keyUp` mit dem Unicode-Wert über `input.performActions`).
+
+**Entscheidung (Angelo, 2026-10-25): fail closed.** Beim Browserstart prüft Argos auf einem leeren Tab, bevor eine Website geladen ist, einmal, ob Playwright `ä` als echte Taste sendet (Core 1.62 lehnt vor dem Senden ab; eine reparierte Version schickt ein harmloses `keyDown`/`keyUp` an `about:blank`). Jeder Text wird **vollständig vor dem Fokussieren, Leeren und Tippen** geprüft. Ist der echte Unicode-Pfad nicht nachgewiesen, gilt `ARGOS_INPUT_UNICODE`:
 
 | Wert | Verhalten |
 | --- | --- |
-| `strict` (Standard) | Fehler mit Hinweis; bereits Getipptes wird mit Backspace wieder gelöscht. Nichts ist für die Seite sichtbar. Nach der ersten Ablehnung wird schon vor dem ersten Anschlag abgelehnt |
-| `transliterate` | ä → ae, ö → oe, ü → ue, ß → ss, „“”»« → ", ‚‘’ → ', – — → -, … → ..., geschütztes Leerzeichen → Leerzeichen; übrige Zeichen wie `strict`. Für Suchanfragen meist gleichwertig, für Namen in Formularen nicht |
-| `insert` | Playwrights Fallback: Text kommt an, aber als skriptgemachtes Ereignis |
+| `strict` (Standard) | Ablehnung mit Hinweis, bevor das Feld berührt wird; die Seite sieht nichts. Nur falls Playwright trotz positiver Prüfung mitten im Text ablehnt, wird das schon Getippte mit Backspace zurückgenommen |
+| `transliterate` | **nur bewusst aktivierte Ausnahme**, weil sie den Text ändert (`Grüße` ≠ `Gruesse`, falsch bei Namen in Formularen): ä → ae, ö → oe, ü → ue, ß → ss, „“”»« → ", ‚‘’ → ', – — → -, … → ..., geschütztes Leerzeichen → Leerzeichen; übrige Zeichen wie `strict` |
+| `insert` | **Debug-/Kompatibilitätsmodus, keine Stealth-Eingabe**: Playwrights Fallback über `__pw_bidiInsertText`; der Text kommt als skriptgemachtes Ereignis an. Argos warnt beim Start |
 
-Sobald Playwright4J Unicode-Tasten durchreicht, tippt Argos sie ohne Konfigurationsänderung als echte Tasten.
+Ein Tabulator wird nie als Tab-Taste gesendet (sie würde den Fokus verschieben); er wird wie ein nicht tippbares Zeichen behandelt.
+
+Bis der echte Unicode-Pfad nachgewiesen ist, bleibt das ein priorisierter Kompatibilitätsblocker. Nach dem Fix in Playwright4J: reale Camoufox-Tests mit `äöüÄÖÜß€`, gemischtem Text, Backspace/Shift, `event.isTrusted`, `event.key` und dem tatsächlichen Feldwert (`HumanInputBrowserTest` prüft das automatisch, sobald die Prüfung beim Start positiv ausfällt).
 
 ## Was die Seite sieht
 
@@ -60,4 +64,4 @@ Nur vertrauenswürdige `pointermove`/`mousemove`, `wheel`, `pointerdown`/`moused
 ## Tests
 
 - `HumanMotionTest`, `HumanTypingTest`, `HumanInputSettingsTest`, `RealInputTest`: Bahn endet exakt auf dem Ziel, ganze Pixel, keine Sprünge, im Fenster, gekrümmt, Fitts-Verhalten, Seed-Reproduzierbarkeit, Klickpunkt im inneren Bereich, Shift genau um Großbuchstaben, alle Tasten wieder losgelassen, Tippfehler korrigiert, Budget, Unicode-Strategien inkl. Löschen bei `strict`.
-- `HumanInputBrowserTest` (opt-in, `-PtestHumanBrowser=<Pfad zu camoufox, firefox oder chromium>`): Die Seite zeichnet mit eigenen Listenern auf und prüft: nur `isTrusted`, Eintritt an der oberen Kante, kein Sprung über 150 px, Scrollen per `wheel`, `H` mit `shiftKey`, keine Playwright-Marker-Events; unter Firefox außerdem, dass „Grüße“ abgelehnt wird und das Feld leer bleibt.
+- `HumanInputBrowserTest` (opt-in, `-PtestHumanBrowser=<Pfad zu camoufox, firefox oder chromium>`): Die Seite zeichnet mit eigenen Listenern auf und prüft: nur `isTrusted`, Eintritt an der oberen Kante, kein Sprung über 150 px, Scrollen per `wheel`, `H` mit `shiftKey`, keine Playwright-Marker-Events. Danach `Grüße äöüÄÖÜß€`: ohne echten Unicode-Pfad muss die Eingabe abgelehnt werden, ohne dass eine einzige Taste gedrückt oder das Feld verändert wird; mit echtem Pfad müssen Feldwert, `event.key` und `isTrusted` stimmen.

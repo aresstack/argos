@@ -33,11 +33,17 @@ record HumanInputSettings(Mode mode, double speed, double typoRate, Long seed, U
      * key event first; this policy decides what happens when Playwright refuses it.
      */
     enum UnicodePolicy {
-        /** Fail without leaving text behind: what was typed is erased with Backspace. Nothing page-visible. */
+        /** Fail closed: the text is refused before the field is focused or changed. Nothing page-visible. */
         STRICT,
-        /** German umlauts, ß and typographic punctuation become ASCII (ä → ae, „ → "), the rest as STRICT. */
+        /**
+         * Deliberate opt-in only, because it changes the text (Grüße becomes Gruesse, wrong for names in forms):
+         * German umlauts, ß and typographic punctuation become ASCII (ä → ae, „ → "), the rest as STRICT.
+         */
         TRANSLITERATE,
-        /** Fall back to Playwright's insertText: the text arrives, but as an untrusted, script-made event. */
+        /**
+         * Debug/compatibility mode, never stealth input: falls back to Playwright's insertText, so the text arrives
+         * as an untrusted, script-made event.
+         */
         INSERT
     }
 

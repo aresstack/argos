@@ -11,7 +11,10 @@ Quelle: `Miguel0888/askai-java8`, Branch `arch`, Module `browser-search-analysis
    sind Ausweichwege desselben Anbieters.
 2. Pro Ergebnisseite: HTML über `page.content()` holen, mit jsoup parsen, extrahieren.
 3. Nur wenn das nicht zu Treffern führt: Consent-Banner suchen, **einmal** mit echter Eingabe klicken,
-   erneut lesen. Ergebnisseiten werden nie angeklickt.
+   erneut lesen. Erlaubt sind nur "Alle ablehnen", "Nur notwendige" und "Schließen". Bietet ein Banner
+   ausschließlich "Alle akzeptieren", wird **nicht** geklickt: die Maschine endet kontrolliert mit
+   `CONSENT_REQUIRED` und die nächste wird versucht. Akzeptieren nur mit ausdrücklichem Opt-in
+   `ARGOS_SEARCH_CONSENT_ACCEPT=true`. Ergebnisseiten werden nie angeklickt.
 4. Danach erst CAPTCHA/Challenge-Prüfung. Eine Seite *mit* Treffern ist nie eine Challenge (eine Suche
    nach "captcha" darf nicht als Sperre gelten). Eine gesperrte Maschinenfamilie wird 10 Minuten
    übersprungen statt erneut angefragt; die Challenge bleibt nur sichtbar, wenn keine Ausweichmaschine
@@ -25,10 +28,13 @@ Quelle: `Miguel0888/askai-java8`, Branch `arch`, Module `browser-search-analysis
 | `NO_ORGANIC_RESULTS` | Seite sagt ausdrücklich "keine Treffer" | weitere Endpunkte derselben Maschine entfallen, nächste Maschine |
 | `EXTRACTION_FAILED` | Layout nicht verstanden | nächster Endpunkt, dann nächste Maschine |
 | `CHALLENGE_PENDING` | CAPTCHA erkannt oder Familie gesperrt | nächste Maschine |
+| `CONSENT_REQUIRED` | Banner bietet nur "Alle akzeptieren", kein Opt-in | nächste Maschine |
 | `NAVIGATION_FAILED` | Seite nicht erreichbar | nächster Endpunkt |
 
-Nur wenn **keine** Maschine erreichbar war, meldet `web_search` einen Fehler; sonst kommt
-"No results." mit den `ATTEMPT:`-Zeilen.
+`web_search` meldet einen **Fehler** (mit allen `ATTEMPT:`-Zeilen), wenn keine Maschine erreichbar war
+oder keine erreichte Seite lesbar war (alle `EXTRACTION_FAILED`, `CHALLENGE_PENDING`,
+`CONSENT_REQUIRED`). "Keine Treffer" gibt es nur, wenn eine Maschine das ausdrücklich gesagt hat
+(`NO_ORGANIC_RESULTS`).
 
 ## Ausgabe für kleine Modelle
 
@@ -41,8 +47,9 @@ ATTEMPT: html.duckduckgo.com NO_ORGANIC_RESULTS
 ATTEMPT: www.bing.com ORGANIC_RESULTS
 ```
 
-Format wie in AskAI, nur Treffer zuerst. `BrowserWebSearch` implementiert den Port
-`com.aresstack.argos.web.WebSearchPort`, den das Kompakt-Profil nutzt.
+`BrowserWebSearch` implementiert `com.aresstack.argos.web.WebSearchPort` aus dem Kompakt-Profil
+(PR #3, hier eingemergt); `WebSession` nummeriert und formatiert. `web_search` gibt es in den Profilen
+`compact` und `expert`; `legacy` bleibt bei den neun `browser_*`-Werkzeugen.
 
 ## Was übernommen wurde
 
@@ -64,6 +71,8 @@ Format wie in AskAI, nur Treffer zuerst. `BrowserWebSearch` implementiert den Po
   `isTrusted=false`). Argos liest nur `page.content()`/`title()` und Locator-Abfragen (isolierte
   Playwright-Welt) und klickt mit `page.mouse()` auf die Bounding-Box-Mitte (WebDriver-BiDi-Eingabe).
   Keine Init-/Preload-Skripte, keine Bindings, keine Markierungsattribute.
+- **Kein automatisches "Alle akzeptieren".** AskAI fiel nach Ablehnen/Notwendig auf Akzeptieren zurück;
+  Argos tut das nur mit `ARGOS_SEARCH_CONSENT_ACCEPT=true`.
 - **Klick nur über Rohmaus.** Das Element wird per `Locator.count()`/`boundingBox()` nur vermessen; kein
   `Locator.click()` oder `scrollIntoViewIfNeeded()` (deren Actionability-Logik löst seitenseitig sichtbare
   Marker-Events aus, playwright4j #38). Gescrollt wird mit dem Mausrad. Kein `route()`.

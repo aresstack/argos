@@ -169,7 +169,7 @@ web_search query="…"                   → 1: Titel — URL (Treffer sind mit 
 
 Gelesen wird über Playwrights isolierte Utility-Welt (`content()`, `innerText()`); die Links werden in Java aus dem serialisierten DOM gewonnen. Es wird kein für die Seite sichtbares Skript eingeschleust. `web_*` öffnet keine Loopback-, privaten, Link-Local-, IPv6-ULA- oder CGNAT-Adressen und verwirft Seiten, die per Weiterleitung auf solchen Adressen landen; für lokale Tests lässt `ARGOS_ALLOW_PRIVATE_NETWORKS=true` (Property `browser.allow-private-networks`) sie zu.
 
-`web_search` liest Suchergebnisseiten ausschließlich über `page.content()` (isolierte Playwright-Welt) und analysiert sie in der JVM; Consent-Banner werden per echter Mausbewegung über WebDriver BiDi angeklickt. Konfiguration: `ARGOS_SEARCH_ENGINES` (Reihenfolge, Standard `duckduckgo,bing,google`) und `ARGOS_SEARCH_MAX_RESULTS` (Standard 10). Details: [docs/web-search.md](docs/web-search.md).
+`web_search` liest Suchergebnisseiten ausschließlich über `page.content()` (isolierte Playwright-Welt) und analysiert sie in der JVM; Consent-Banner werden per echter Mausbewegung über WebDriver BiDi angeklickt. Konfiguration: `ARGOS_SEARCH_ENGINES` (Reihenfolge, Standard `duckduckgo,bing,google`) und `ARGOS_SEARCH_MAX_RESULTS` (Standard 10). Consent-Banner werden nur abgelehnt (oder auf „nur notwendige“ gesetzt); „Alle akzeptieren“ nur mit `ARGOS_SEARCH_CONSENT_ACCEPT=true`. Details: [docs/web-search.md](docs/web-search.md).
 
 ## GitHub Actions und Releases
 

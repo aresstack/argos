@@ -1,5 +1,9 @@
 package com.aresstack.argos;
 
+import com.aresstack.argos.research.CamoufoxResearchPageReader;
+import com.aresstack.argos.research.ResearchService;
+import com.aresstack.argos.research.ResearchSettings;
+import com.aresstack.argos.research.ResearchTools;
 import com.aresstack.argos.search.BrowserWebSearch;
 import com.aresstack.argos.web.WebSearchPort;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -19,15 +23,25 @@ import java.util.function.Function;
 public final class ArgosTools {
     private final CamoufoxBrowser browser;
     private final WebSearchPort webSearch;
+    /** Optional research orchestration; null unless ARGOS_RESEARCH=true. */
+    private final ResearchTools research;
     private final ObjectMapper json = new ObjectMapper();
 
     public ArgosTools(CamoufoxBrowser browser) {
-        this(browser, new BrowserWebSearch(browser));
+        this(browser, new BrowserWebSearch(browser), ResearchSettings.fromEnvironment());
     }
 
     public ArgosTools(CamoufoxBrowser browser, WebSearchPort webSearch) {
+        this(browser, webSearch, ResearchSettings.disabled());
+    }
+
+    public ArgosTools(CamoufoxBrowser browser, WebSearchPort webSearch, ResearchSettings researchSettings) {
         this.browser = browser;
         this.webSearch = webSearch;
+        this.research = researchSettings.enabled()
+                ? new ResearchTools(new ResearchService(webSearch, new CamoufoxResearchPageReader(browser),
+                        researchSettings.budget()))
+                : null;
     }
 
     public List<SyncToolSpecification> all() {
@@ -84,6 +98,7 @@ public final class ArgosTools {
                         return failure(error);
                     }
                 }).build());
+        if (research != null) tools.addAll(research.specifications());
         return List.copyOf(tools);
     }
 

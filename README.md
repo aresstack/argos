@@ -150,6 +150,8 @@ Der Login allein ist **keine** Discovery-Abnahme. Nach erfolgreicher OAuth-Verbi
 
 `web_search` liest Suchergebnisseiten ausschließlich über `page.content()` (isolierte Playwright-Welt) und analysiert sie in der JVM; Consent-Banner werden per echter Mausbewegung über WebDriver BiDi angeklickt. Konfiguration: `ARGOS_SEARCH_ENGINES` (Reihenfolge, Standard `duckduckgo,bing,google`) und `ARGOS_SEARCH_MAX_RESULTS` (Standard 10). Details: [docs/web-search.md](docs/web-search.md).
 
+Optional (`ARGOS_RESEARCH=true`, Standard aus) kommen `web_research(question)` und `web_research_stop()` hinzu: eine begrenzte, deterministische Recherche nach dem Vorbild des AskAI-`ResearchLoop` (Suche → relevante Seiten lesen → relevanten Links folgen → nummerierte Quellen mit Zitat), ohne KI-Modell und ohne Seiten-Skripte. Details: [docs/research.md](docs/research.md).
+
 ## GitHub Actions und Releases
 
 Der Workflow [Build and Release Argos](.github/workflows/build-release.yml) läuft bei jedem Push auf `main`, bei Pull Requests und manuell über **Actions → Build and Release Argos → Run workflow**. Er baut Playwright4J aus einem **festgepinnten Commit** selbst in Maven Local, führt die Java-Tests aus und erstellt das plattformübergreifende `argos-package.zip`. Anschließend prüft ein separater Windows-Job sowohl den **echten Playwright4J-Treiberstart aus der einzelnen JAR** (`--verify-runtime`) als auch den MCP-Handshake und die Browserwerkzeugliste, ohne dass ein externes `lib/`-Verzeichnis existiert. Die Browser-Funktionstests mit echter Camoufox-Binärdatei bleiben lokal, da der Runner diese nicht mitbringt.

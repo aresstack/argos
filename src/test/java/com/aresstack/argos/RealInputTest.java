@@ -54,14 +54,14 @@ class RealInputTest {
         IllegalStateException refused = assertThrows(IllegalStateException.class, () -> input.type(device, "Mä"));
         assertTrue(refused.getMessage().contains("Nothing was typed"), refused.getMessage());
         assertTrue(device.calls.isEmpty(), "fail closed before any key: " + device.calls);
-        input.unicodeKeys(false);
+        input.unicodeKeys(RealInput.UnicodeKeys.NONE);
         assertThrows(IllegalStateException.class, () -> input.type(device, "Grüße"));
         assertTrue(device.calls.isEmpty());
     }
 
     @Test void unexpectedRefusalAfterAPositiveProbeErasesTheTypedText() {
         RealInput input = input(HumanInputSettings.UnicodePolicy.STRICT);
-        input.unicodeKeys(true);
+        input.unicodeKeys(RealInput.UnicodeKeys.KEY_NAMES);
         RecordingDevice device = new RecordingDevice(false);
         assertThrows(IllegalStateException.class, () -> input.type(device, "Mä"));
         assertEquals(1, device.count("keyDown Backspace"), device.calls.toString());
@@ -71,7 +71,7 @@ class RealInputTest {
 
     @Test void strictRollbackAlsoErasesLineBreaks() {
         RealInput input = input(HumanInputSettings.UnicodePolicy.STRICT);
-        input.unicodeKeys(true);
+        input.unicodeKeys(RealInput.UnicodeKeys.KEY_NAMES);
         RecordingDevice device = new RecordingDevice(false);
         assertThrows(IllegalStateException.class, () -> input.type(device, "a\nbä"));
         assertEquals(3, device.count("keyDown Backspace"), device.calls.toString());
@@ -106,11 +106,52 @@ class RealInputTest {
     @Test void unicodeGoesAsRealKeyWhenPlaywrightAcceptsIt() {
         RecordingDevice device = new RecordingDevice(true);
         RealInput input = input(HumanInputSettings.UnicodePolicy.STRICT);
-        input.unicodeKeys(true);
+        input.unicodeKeys(RealInput.UnicodeKeys.KEY_NAMES);
         input.type(device, "ä€");
         assertEquals(1, device.count("keyDown ä"));
         assertEquals(1, device.count("keyDown €"));
         assertFalse(device.calls.stream().anyMatch(call -> call.startsWith("insertText")));
+    }
+
+    @Test void playwright4jTextKeysTypeUnicodeThroughInsertTextOnePerCharacter() {
+        // Playwright4J #59: key names stay refused, insertText becomes a real keyDown/keyUp per character.
+        RecordingDevice device = new RecordingDevice(false);
+        RealInput input = input(HumanInputSettings.UnicodePolicy.STRICT);
+        input.unicodeKeys(RealInput.UnicodeKeys.TEXT_AS_KEYS);
+        input.type(device, "Grüße ßß");
+        assertEquals(1, device.count("insertText ü"));
+        assertEquals(3, device.count("insertText ß"));
+        assertEquals(0, device.count("keyDown ü") + device.count("keyUp ü") + device.count("keyUp ß"));
+        assertEquals(1, device.count("keyDown G"));
+        assertTrue(device.calls.stream().filter(call -> call.startsWith("insertText"))
+                .allMatch(call -> call.codePointCount(0, call.length()) == "insertText ".length() + 1), device.calls.toString());
+    }
+
+    @Test void tabsStayRefusedWithPlaywright4jTextKeys() {
+        RecordingDevice device = new RecordingDevice(false);
+        RealInput input = input(HumanInputSettings.UnicodePolicy.STRICT);
+        input.unicodeKeys(RealInput.UnicodeKeys.TEXT_AS_KEYS);
+        assertThrows(IllegalStateException.class, () -> input.type(device, "ä\tb"));
+        assertTrue(device.calls.isEmpty(), device.calls.toString());
+    }
+
+    @Test void webDriverReservedCodePointsAreRefusedBeforeTheFirstKey() {
+        for (HumanInputSettings.UnicodePolicy policy : HumanInputSettings.UnicodePolicy.values()) {
+            RecordingDevice device = new RecordingDevice(true);
+            RealInput input = input(policy);
+            input.unicodeKeys(RealInput.UnicodeKeys.KEY_NAMES);
+            assertThrows(IllegalArgumentException.class, () -> input.type(device, "ab\uE007"));
+            assertTrue(device.calls.isEmpty(), policy + ": " + device.calls);
+        }
+    }
+
+    @Test void onlyATrailingNewlineCountsAsEnterForSingleLineFields() {
+        assertFalse(RealInput.lineBreakInside("x"));
+        assertFalse(RealInput.lineBreakInside("x\n"));
+        assertFalse(RealInput.lineBreakInside("x\r\n"));
+        assertTrue(RealInput.lineBreakInside("x\ny"));
+        assertTrue(RealInput.lineBreakInside("x\n\n"));
+        assertTrue(RealInput.lineBreakInside("x\ry"));
     }
 
     @Test void capitalsAreTypedWithShiftHeld() {

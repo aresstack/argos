@@ -20,7 +20,10 @@ interface InputDevice {
 
     void keyUp(String key);
 
-    /** Page-visible: Playwright types this through {@code window.__pw_bidiInsertText}. */
+    /**
+     * Page-visible with Playwright Core 1.62 ({@code window.__pw_bidiInsertText}); Playwright4J with
+     * playwright4j#59 sends one real keyDown/keyUp per character instead.
+     */
     void insertText(String text);
 
     void sleep(long millis);

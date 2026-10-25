@@ -48,6 +48,8 @@ Playwright Core 1.62 lehnt `keyboard.down("ä")` ab (`Unknown key`) und tippt so
 | `transliterate` | **nur bewusst aktivierte Ausnahme**, weil sie den Text ändert (`Grüße` ≠ `Gruesse`, falsch bei Namen in Formularen): ä → ae, ö → oe, ü → ue, ß → ss, „“”»« → ", ‚‘’ → ', – — → -, … → ..., geschütztes Leerzeichen → Leerzeichen; übrige Zeichen wie `strict` |
 | `insert` | **Debug-/Kompatibilitätsmodus, keine Stealth-Eingabe**: Playwrights Fallback über `__pw_bidiInsertText`; der Text kommt als skriptgemachtes Ereignis an. Argos warnt beim Start |
 
+Die Startprüfung kennt zwei echte Wege: `KEY_NAMES` (`keyboard.down("ä")` wird angenommen) und `TEXT_AS_KEYS` (Playwright4J mit playwright4j#59 sendet `insertText` als echtes keyDown/keyUp je Zeichen; geprüft auf Argos' eigener Probeseite, nie auf einer Website). Nur bei einem der beiden wird `insertText` für solche Zeichen benutzt. Ein Zeilenumbruch mitten im Text eines einzeiligen Feldes wird vor dem Fokussieren abgelehnt (Enter würde das Formular vorzeitig absenden), ebenso die von WebDriver für benannte Tasten reservierten Codepunkte U+E000–U+E05D. `-Pplaywright4jSource=<checkout>` baut Playwright4J aus einem Quellstand (z. B. #59); `UnicodeInputCamoufoxTest` verlangt dann echte Tasten.
+
 Ein Tabulator wird nie als Tab-Taste gesendet (sie würde den Fokus verschieben); er wird wie ein nicht tippbares Zeichen behandelt.
 
 Bis der echte Unicode-Pfad nachgewiesen ist, bleibt das ein priorisierter Kompatibilitätsblocker. Nach dem Fix in Playwright4J: reale Camoufox-Tests mit `äöüÄÖÜß€`, gemischtem Text, Backspace/Shift, `event.isTrusted`, `event.key` und dem tatsächlichen Feldwert (`HumanInputBrowserTest` prüft das automatisch, sobald die Prüfung beim Start positiv ausfällt).

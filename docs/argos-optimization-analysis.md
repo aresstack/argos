@@ -20,20 +20,23 @@ Code. Klassen- und Methodennamen sind belegt; Pfade sind relativ zum jeweiligen 
    MCP-SDK 0.18.4 über Jetty, OAuth-Filter, `argos.jar`. Kein Code aus `browser-firefox` (Enterprise) und kein
    Playwright4J 0.1.0 (AskAI).
 2. **Tarnung hat Vorrang vor Bequemlichkeit.** Jede neue Funktion wird einer *Stealth-Stufe* zugeordnet
-   (Abschnitt 3). Kompakte Werkzeuge und die automatischen Abläufe (Suche, Lesen, Links, Consent) dürfen nur
-   Stufe 0 und 1 benutzen: **kein `page.evaluate`, kein `addInitScript`, kein `exposeBinding`, keine
-   DOM-Markierungen, keine Globals.** Seiteninhalte werden über `page.content()` (Utility-Welt) und
-   Java-seitiges Parsen gewonnen, Klicks über Bounding-Box + echte BiDi-Eingaben.
+   (Abschnitt 3). **Verboten sind Preload-/Init-Scripts (`addInitScript`), `exposeBinding`, DOM-Markierungen
+   und Globals** – also alles, was vor den Seitenskripten läuft oder in der Seite bleibt. Bevorzugt werden
+   `page.content()` (Utility-Welt) mit Java-seitigem Parsen und Klicks über Bounding-Box + echte
+   BiDi-Eingaben. Flüchtige, nur lesende `page.evaluate`-Aufrufe sind erlaubt, wo das nicht reicht.
 3. **Drei Werkzeugprofile** über `ARGOS_TOOL_PROFILE` / `tools.profile`: `legacy` (Standard, heutige neun
    `browser_*`), `compact` (AskAI-Sechs), `expert` (Obermenge). Abschnitt 5.
 4. **Wiederverwendung:** AskAI `browser-api` (Teile) und `browser-search-analysis` sind framework-freies Java 8
    und werden **als Quellcode nach Argos übernommen** (MIT, gleicher Rechteinhaber AresStack), nicht als
    Gradle-Modul. Die in AskAI per `page.evaluate` laufende Seitenerfassung (`RenderedPageDocumentCapture`)
    wird durch einen **Java-seitigen Builder über `page.content()` + jsoup** ersetzt.
-5. **Größtes Einzelrisiko:** Was Camoufox über BiDi (statt Juggler) noch verbirgt, ist ungemessen.
-   `navigator.webdriver` ist über BiDi laut Playwright4J-Messung in normalem Firefox immer `true`. Das muss
-   vor allen anderen Arbeiten mit dem vorhandenen `BrowserSignalsProbe` gegen Camoufox gemessen werden
-   (Abschnitt 7, R1).
+5. **Erfahrung des Entwicklers (2026-10-25):** Camoufox setzt `navigator.webdriver` gerade **nicht** auf
+   `true`; genau deshalb darf Argos die Tarnung nicht durch eigene Spuren verraten. Ein früheres
+   **Preload-Script war auffällig und führte auf einigen Seiten zur Blockierung.** Skriptauswertung zur
+   Laufzeit (`page.evaluate`) war bisher unproblematisch. Daraus folgt: Preload-/Init-Scripts und alles,
+   was dauerhaft in der Seite bleibt (Globals, Bindings, DOM-Markierungen), sind das Hauptrisiko und
+   verboten; flüchtige Laufzeit-Auswertung ist erlaubt, wird aber sparsam eingesetzt (Abschnitt 3).
+   Eine Regressionsmessung mit `BrowserSignalsProbe` sichert das ab (Abschnitt 7, R1).
 
 ---
 
@@ -78,15 +81,17 @@ Quelle: `playwright4j/docs/browser-signals.md` und `problems.md` (Messung Firefo
 |---|---|---|
 | `page.exposeBinding` / `exposeFunction` | **Ja**: `__playwright__binding__`, `__playwright__binding__controller__` in jeder Seite | Nie verwenden (AskAI-HUD nutzt es → nicht übernehmen). |
 | `addInitScript` | **Ja** (Preload-Script in der Hauptwelt) | Nie verwenden. |
-| `page.evaluate`, `locator.evaluate`, `evaluateAll`, `waitForFunction` | Code läuft in der **Hauptwelt** (Stack-Traces, überschriebene Prototypen, Timing). Zusätzlich setzt Playwright `userActivation: true` → `navigator.userActivation.hasBeenActive` ohne Eingabe | Nur `expert`/`legacy` und nur auf ausdrücklichen Wunsch des Modells. |
+| `page.evaluate`, `locator.evaluate`, `evaluateAll`, `waitForFunction` | Code läuft in der **Hauptwelt** (Stack-Traces, überschriebene Prototypen, Timing). Zusätzlich setzt Playwright `userActivation: true` → `navigator.userActivation.hasBeenActive` ohne Eingabe | Stufe 3: flüchtig und nur lesend erlaubt, wenn Stufe 0/1 nicht reicht; in Argos bisher unauffällig. |
 | `locator.innerText/textContent/getAttribute/boundingBox/ariaSnapshot/isVisible`, `page.content()`, Aktionsprüfungen | Laufen in Playwrights **Utility-Welt** (BiDi-Sandbox-Realm); keine Globals in der Seite | Standardweg zum Lesen. Restrisiko: `userActivation` (R3). |
 | `mouse.move/click`, `keyboard.type/press`, `locator.click/fill` | Echte BiDi-Eingaben (`input.performActions`), `isTrusted=true` | Standardweg zum Bedienen. |
 | `browsingContext.captureScreenshot`, Netzwerk-Events, `response.body()` (Data-Collector bis 20 MB) | Nein | Unbedenklich. |
 | `TestUtils`-Global | In Playwright4J abgeschaltet (Abweichung vom offiziellen Treiber) | Profil-Prefs nie wieder einschalten. |
-| `navigator.webdriver` | **`true` in normalem Firefox über BiDi**, kein Pref schaltet es ab | Ob Camoufox es über BiDi patcht, ist **ungemessen** (R1). |
+| `navigator.webdriver` | In normalem Firefox über BiDi `true`; **Camoufox setzt es laut Entwickler nicht** | Nichts tun, was den Vorteil zunichtemacht; als Regressionstest messen (R1). |
 | `setViewportSize(null)` | Echte Fenstergeometrie | Argos macht das bereits; neue Tabs/Kontexte ebenso. |
 
-Daraus folgt die verbindliche Regel: **Argos-Code darf in der Hauptwelt keine Spuren hinterlassen.**
+Daraus folgt die verbindliche Regel: **Argos-Code darf in der Hauptwelt keine bleibenden Spuren
+hinterlassen und nichts vor den Seitenskripten installieren.** Praxis in Argos: Preload-Scripts haben
+bereits zu Blockierungen geführt, flüchtige Laufzeit-Auswertungen bisher nicht.
 AskAI und Enterprise verletzen das an vielen Stellen (Abschnitt 4, Spalte „Bewusst nicht übernehmen“).
 
 ---
@@ -98,8 +103,8 @@ AskAI und Enterprise verletzen das an vielen Stellen (Abschnitt 4, Spalte „Bew
 | **0 – unsichtbar** | Navigation, Netzwerk-Events, `response.body()`/Header, Screenshots, Tab-Verwaltung (`context.newPage`, `page.close`, `bringToFront`), Java-seitige Verarbeitung | allen Profilen, automatischen Abläufen |
 | **1 – Utility-Welt / echte Eingabe** | `page.content()`, `locator(...).innerText/boundingBox/ariaSnapshot/getAttribute/isVisible`, `mouse`/`keyboard`, `locator.click/fill/press` | allen Profilen, automatischen Abläufen |
 | **2 – eigenes, unsichtbares Firefox-Add-on** (geplant) | Content-Script in isolierter Welt, Kommunikation über Hintergrundseite ↔ Loopback-WebSocket mit Token, Anzeige nur im Browser-Chrome (Sidebar/Popup), keine `web_accessible_resources`, keine DOM-Änderung | nach Messung (R5), für HUD und geometrische Seitenerfassung |
-| **3 – Hauptwelt** | `page.evaluate`, `locator.evaluate*`, `waitForFunction` | nur `expert`/`legacy`, nur explizit vom Modell angefordert (`browser_evaluate`, `browser_inspect`) |
-| **verboten** | `addInitScript`, `exposeBinding`/`exposeFunction`, DOM-Overlays, `data-*`-Markierungen, `window.__*`-Globals, `route()`-basiertes Umschreiben von Antworten, Requests aus einem anderen TLS-Stack (`context.request()`) an Zielseiten | nirgends |
+| **3 – flüchtige Laufzeit-Auswertung in der Hauptwelt** | `page.evaluate`, `locator.evaluate*` mit reinen Lesefunktionen, die nichts in Seite, `window` oder DOM zurücklassen und keine Prototypen ändern; kein `waitForFunction`-Polling | In der Praxis bisher unproblematisch. Erlaubt, wenn Stufe 0/1 das Ergebnis nicht oder nur mit unverhältnismäßigem Aufwand liefert (z. B. Geometrie/Farben für die SERP-Analyse, Sichtbarkeit vieler Elemente in einem Durchgang). Jede Verwendung im Code begründen; `browser_evaluate` bleibt frei für `expert`/`legacy`. |
+| **verboten** | **Preload-/Init-Scripts** (`addInitScript`, `script.addPreloadScript` – hat in Argos bereits zu Blockierungen geführt), `exposeBinding`/`exposeFunction`, DOM-Overlays, `data-*`-Markierungen, `window.__*`-Globals, `route()`-basiertes Umschreiben von Antworten, Requests aus einem anderen TLS-Stack (`context.request()`) an Zielseiten | nirgends |
 
 Konsequenzen für typische Aufgaben:
 
@@ -144,7 +149,7 @@ Legende Spalten: **A** = in Argos vorhanden, **K** = in AskAI (`arch`), **E** = 
 |---|---|---|---|---|---|
 | `web_search(query)` mit nummerierter Textausgabe | ✘ | ✔ `BrowserMcpSidecarMain.registerTools` (`PROVIDER:`, `id: title — url`, Snippet, `CHALLENGE:`, `ATTEMPT:`-Zeilen) | ✘ | **W** (Format) | Format beibehalten, für kleine Modelle getestet. Auftrag wünscht `1. Titel\n   URL\n   Snippet` – kompatibel machen, `ATTEMPT:` nur bei Fehlern ausgeben. |
 | Suchmaschinen-Navigation mit Endpunkt-Alternativen, Seitenzahl, Pausen, Familien-Sperre | ✘ | ✔ `PlaywrightBrowserSession.navigateAndCaptureSearchEngines`, `BrowserSearchEngineCatalog` (DuckDuckGo html/lite, Bing), `EngineAcquisitionMode.FIRST_USABLE`, `paceBeforeRepeatRequest` | ✘ | **AN** | Algorithmus übernehmen, gegen `CamoufoxBrowser`-Port statt `PlaywrightDriver`. **Google fehlt in AskAI → NEU** als eigener Engine-Eintrag (`/search?q=`, Redirect `/url?q=` kennt `SearchRedirectResolver` bereits). |
-| Strukturierte Seitenerfassung | ✘ | ✔ `RenderedPageDocumentCapture` (ein `page.evaluate` misst Container, Geometrie, Farben) | ✘ | **AN (Pflicht)** | Hauptwelt-Skript → Stufe 3, für automatische Suche unzulässig. Ersatz: `RenderedPageDocument` **Java-seitig aus `page.content()` mit jsoup** bauen; Geometrie/Farbe als „keine Aussage“ (die Scorer behandeln fehlende Familien neutral, siehe `SearchPageContainerScorer`-Javadoc). Optional später Geometrie über `boundingBox()` für die Top-N-Kandidaten oder über das Add-on. |
+| Strukturierte Seitenerfassung | ✘ | ✔ `RenderedPageDocumentCapture` (ein `page.evaluate` misst Container, Geometrie, Farben) | ✘ | **AN** | Das Skript ist eine flüchtige Lesefunktion (laut Javadoc „writes nothing into the page“) → Stufe 3, zulässig. Bevorzugt: Struktur **Java-seitig aus `page.content()` mit jsoup**, Geometrie/Farbe nur für die Top-N-Container per `boundingBox()` oder, falls das zu langsam/ungenau ist, mit dem übernommenen AskAI-Messskript in einem einzigen `page.evaluate`. Vor der Übernahme prüfen, dass es keine Globals oder Attribute setzt. |
 | Ergebnisbereich, wiederholte Container, Primärlink, Snippet, Dedup | ✘ | ✔ `SearchPageMechanicalAnalyzer.analyze`, `SearchPageContainerScorer.score`, `DomStructureClusterer.cluster`, `SearchResultBlockDetector.detect/detectExplicit`, `PrimaryResultLinkResolver.resolve`, `SnippetExtractor.extract`, `LegacySearchResultExtractor.extract` | ✘ | **W** | Framework-freies Java 8 (`browser-search-analysis/build.gradle`: nur `:browser-api`). Quelltext + Tests nach `com.aresstack.argos.search.analysis` übernehmen; JUnit4-Tests auf JUnit 5 heben. |
 | Ehrliche Ergebnisarten `ORGANIC_RESULTS` / `NO_ORGANIC_RESULTS` / `EXTRACTION_FAILED` | ✘ | ✔ `SearchResultExtractionResult`, `PlaywrightBrowserSession.CapturedPageVerdict` | ✘ | **W** | Kerninvariante „kein rohes Anker-Dumping“ (`search`: „HARD INVARIANT“). |
 | Redirect-Auflösung Bing/Google/DDG | ✘ | ✔ `SearchRedirectResolver.resolve` | ✘ | **W** | Rein statisch. |
@@ -295,8 +300,8 @@ genug für `argos.jar`.
 
 | # | Risiko | Wirkung | Gegenmaßnahme | Wer |
 |---|---|---|---|---|
-| R1 | **Camoufox über BiDi** verbirgt `navigator.webdriver` und Remote-Agent-Spuren evtl. nicht (Camoufox ist auf Juggler ausgelegt; Firefox setzt `webdriver=true`, solange der Remote Agent lauscht) | Seiten wie ResearchGate blocken trotz aller Sorgfalt in Argos | **Zuerst messen:** `BrowserSignalsProbe`-Verfahren mit Argos-Startoptionen gegen Camoufox (lokal, opt-in Test). Ergebnis im README festhalten. Falls `true`: Camoufox-Patch für BiDi oder Juggler-Weg in Playwright4J prüfen – außerhalb von Argos. | vor AP B |
-| R2 | Bestehende Werkzeuge `browser_inspect`/`browser_evaluate` laufen in der Hauptwelt | detektierbar, setzt `userActivation` | in `legacy` belassen (Kompatibilität), Beschreibung warnt; `browser_inspect` auf Utility-Welt umbauen | AP D |
+| R1 | Argos verrät die Automatisierung durch eigene Spuren, obwohl Camoufox `navigator.webdriver` verbirgt (bekanntes Beispiel: früheres Preload-Script → Blockierungen) | Seiten wie ResearchGate blocken | Preload-/Init-Scripts, Bindings, Globals, DOM-Markierungen verboten (Abschnitt 3); Code-Review-Regel. **Regressionstest** nach `BrowserSignalsProbe`-Verfahren (opt-in, lokal): `navigator.webdriver`, Globals mit Automatisierungsnamen, `TestUtils`, `userActivation`, Fenstergeometrie – vor und nach jedem Arbeitspaket gleich. | laufend |
+| R2 | `browser_evaluate` erlaubt dem Modell beliebigen Code, der auch bleibende Spuren setzen kann | Tarnung hängt vom Modell ab | in `legacy`/`expert` belassen; Beschreibung bittet um reine Lesefunktionen. `browser_inspect` ist flüchtig und darf bleiben. | AP D |
 | R3 | Auch Utility-Welt-Aufrufe von Playwright senden `userActivation: true` (laut Playwright4J nur der `1+1`-Aufruf entschärft) | `navigator.userActivation.hasBeenActive` ohne echte Eingabe nach reinem Lesen | messen; ggf. Playwright4J-Issue „userActivation=false für Utility-Lesezugriffe“. Kein Argos-Workaround. | mit R1 |
 | R4 | Seitenerfassung ohne Geometrie verschlechtert die SERP-Analyse | mehr `EXTRACTION_FAILED` | Fixtures von DDG/Bing/Google mit und ohne Geometrie vergleichen; Geometrie für Top-N-Container über `boundingBox()` nachreichen; ehrliches `EXTRACTION_FAILED` ist akzeptabel | AP B |
 | R5 | Eigenes Add-on könnte über Ressourcen/Timing erkennbar sein; unsignierte Add-ons brauchen Pref | Tarnung | kein `web_accessible_resources`, keine DOM-Änderungen, Content-Script nur auf Anforderung; Camoufox-Add-on-Mechanismus nutzen; vor Einsatz mit R1-Verfahren messen | später |
@@ -315,7 +320,7 @@ genug für `argos.jar`.
 
 | Schritt | Inhalt | Abhängig von | Abnahme |
 |---|---|---|---|
-| 0a | Stealth-Messung Camoufox/BiDi (R1, R3) als opt-in Test | – | Bericht mit `navigator.webdriver`, Globals, `userActivation`, `TestUtils` |
+| 0a | Stealth-Regressionstest (R1, R3) als opt-in Test | – | Bericht mit `navigator.webdriver`, Globals, `userActivation`, `TestUtils`; Basiswert für alle Pakete |
 | 0b | `ToolProfile` + `mcp/`-Gerüst, `legacy` = heutige Liste | – | `ArgosToolsTest` grün, neuer Test je Profil |
 | 1 | **AP A**: `PageSnapshot`, Content-Type-abhängiges Lesen, `PageReadiness`, Redirect-Policy, `ErrorText` | 0b | Fixtures HTML/XML/RSS/JSON/text/SPA ohne Timeout |
 | 2 | **compact**: `web_open/read/links/follow/back` über AP A | 1 | MCP-Test über lokalen Server |
@@ -330,7 +335,8 @@ genug für `argos.jar`.
 
 ## 9. Offene Fragen an den Entwickler
 
-1. Wird Camoufox in Argos bewusst über BiDi statt Juggler betrieben, oder ist Juggler über Playwright4J
-   langfristig das Ziel? Davon hängt ab, ob R1 in Argos oder im Unterbau gelöst wird.
+1. ~~BiDi oder Juggler?~~ Beantwortet (2026-10-25): Camoufox verbirgt `navigator.webdriver` selbst;
+   Laufzeit-Auswertung war unproblematisch, Preload-Scripts führten zu Blockierungen. Eingearbeitet in
+   Abschnitt 0, 2, 3 und 7.
 2. Soll `compact` später der Standard werden, sobald der ChatGPT-Connector umgestellt ist?
 3. Darf Argos ein eigenes (unsigniertes) Firefox-Add-on im Argos-Profil installieren?

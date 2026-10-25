@@ -60,6 +60,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 
@@ -116,7 +117,15 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
                     if (context != null) network.captureQueuedBodies();
                 }
             });
-            return result.get(timeoutSeconds, TimeUnit.SECONDS);
+            try {
+                return result.get(timeoutSeconds, TimeUnit.SECONDS);
+            } catch (TimeoutException stalled) {
+                recoverFromStall(result);
+                throw new IllegalStateException("Camoufox did not answer within " + timeoutSeconds + " s. The task"
+                        + " was stopped and the browser is started again with the next call.", stalled);
+            }
+        } catch (IllegalStateException e) {
+            throw e;
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new IllegalStateException("Browser task interrupted", e);
@@ -131,6 +140,32 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
             String detail = e.getMessage() == null ? e.getClass().getSimpleName() : masker.text(e.getMessage());
             throw new IllegalStateException("Camoufox operation failed: " + detail, e);
         }
+    }
+
+    /**
+     * A protocol call that never answers would block the single driver thread, and every later call behind it.
+     * Interrupting the thread ends Playwright's wait for the answer ("Failed to read message"); the session is
+     * then in an unknown state, so the next queued task ends the browser (the persistent profile keeps cookies
+     * and logins) and forgets its tabs. The next call starts it again.
+     */
+    private void recoverFromStall(Future<?> stuck) {
+        stuck.cancel(true);
+        driver.submit(() -> {
+            System.err.println("Argos: a browser call stalled; restarting Camoufox.");
+            try {
+                if (playwright != null) playwright.close(); // ends the driver and the browser process
+            } catch (RuntimeException alreadyBroken) {
+                // Nothing more to close.
+            } finally {
+                context = null;
+                playwright = null;
+                if (proxy != null) proxy.close();
+                proxy = null;
+                tabs.clear();
+                documents.clear();
+                controlSnapshots.clear();
+            }
+        });
     }
 
     private Page activePage() throws Exception {

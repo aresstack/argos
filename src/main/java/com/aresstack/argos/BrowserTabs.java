@@ -38,6 +38,12 @@ final class BrowserTabs {
         });
     }
 
+    /** Forgets every tab, after the browser was restarted. Ids keep counting up. */
+    void clear() {
+        tabs.clear();
+        current = null;
+    }
+
     Optional<Page> current() {
         prune();
         return current == null ? Optional.empty() : Optional.ofNullable(tabs.get(current));

@@ -1,0 +1,172 @@
+name: Build and Release Argos
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build and test on Linux
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Argos
+        uses: actions/checkout@v4
+
+      - name: Checkout verified Playwright4J 1.62
+        uses: actions/checkout@v4
+        with:
+          repository: aresstack/playwright4j
+          # Known-working revision, not the moving master branch.
+          ref: 1c11fe9c2eb39eca1ca6abbc4ce0ffe3f183aa8c
+          path: playwright4j-source
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Install Playwright4J SNAPSHOT in Maven Local
+        working-directory: playwright4j-source
+        run: |
+          chmod +x gradlew
+          ./gradlew publishToMavenLocal -Pversion=0.2.2-SNAPSHOT --no-daemon --console=plain
+
+      - name: Select artifact version
+        id: version
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+            if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$ ]]; then
+              echo "Invalid semantic release tag: $GITHUB_REF_NAME" >&2
+              exit 1
+            fi
+          else
+            VERSION="0.1.0-SNAPSHOT"
+          fi
+          echo "value=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Test and package Argos
+        run: |
+          chmod +x gradlew
+          ./gradlew clean test argosZip -PreleaseVersion="${{ steps.version.outputs.value }}" --no-daemon --console=plain
+
+      - name: Verify packaged JAR and MCP health on Linux
+        shell: bash
+        run: |
+          test -s build/distributions/argos-package.zip
+          test -s build/package/argos.jar
+          test -d build/package/lib
+          test "$(find build/package/lib -maxdepth 1 -name '*.jar' | wc -l)" -gt 10
+          unzip -l build/distributions/argos-package.zip | grep -q 'argos.jar'
+          ARGOS_PORT=18082 java -jar build/package/argos.jar > "$RUNNER_TEMP/argos.log" 2>&1 &
+          ARGOS_PID=$!
+          trap 'kill "$ARGOS_PID" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:18082/health | grep -q '"UP"'; then
+              echo 'Argos JAR health check passed'
+              exit 0
+            fi
+            sleep 1
+          done
+          cat "$RUNNER_TEMP/argos.log"
+          exit 1
+
+      - name: Upload Argos distribution
+        uses: actions/upload-artifact@v4
+        with:
+          name: argos-distribution
+          path: build/distributions/argos-package.zip
+          if-no-files-found: error
+          retention-days: 14
+
+  windows-smoke:
+    name: Verify packaged JAR on Windows
+    needs: build
+    runs-on: windows-latest
+    steps:
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Download Linux-built distribution
+        uses: actions/download-artifact@v4
+        with:
+          name: argos-distribution
+
+      - name: Verify startup, health and MCP tools
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ProgressPreference = 'SilentlyContinue'
+          Expand-Archive -LiteralPath 'argos-package.zip' -DestinationPath 'argos' -Force
+          if (-not (Test-Path 'argos/argos.jar')) { throw 'argos.jar missing' }
+          if (-not (Test-Path 'argos/lib')) { throw 'Runtime libraries missing' }
+          $env:ARGOS_PORT = '18082'
+          $workdir = (Resolve-Path 'argos').Path
+          $proc = Start-Process -FilePath 'java' -ArgumentList @('-jar', 'argos.jar') -WorkingDirectory $workdir -PassThru -RedirectStandardOutput 'argos.stdout.log' -RedirectStandardError 'argos.stderr.log'
+          try {
+            $ready = $false
+            for ($attempt = 0; $attempt -lt 30; $attempt++) {
+              Start-Sleep -Seconds 1
+              try {
+                $response = Invoke-RestMethod -Uri 'http://127.0.0.1:18082/health' -TimeoutSec 2
+                if ($response.status -eq 'UP') { $ready = $true; break }
+              } catch { }
+            }
+            if (-not $ready) {
+              Get-Content 'argos.stderr.log' -Tail 50 -ErrorAction SilentlyContinue
+              throw 'Packaged Argos did not become healthy'
+            }
+            $url = 'http://127.0.0.1:18082/mcp'
+            $headers = @{ Accept = 'application/json, text/event-stream' }
+            $request = '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"github-ci","version":"1"}}}'
+            $reply = Invoke-WebRequest -Uri $url -Method POST -ContentType 'application/json' -Headers $headers -Body $request -TimeoutSec 15
+            if ($reply.StatusCode -ne 200 -or $reply.Content -notmatch '"serverInfo"') { throw 'MCP initialize failed' }
+            $session = $reply.Headers['mcp-session-id']
+            if (-not $session) { throw 'Missing MCP session ID' }
+            $headers['Mcp-Session-Id'] = $session
+            $notification = '{"jsonrpc":"2.0","method":"notifications/initialized"}'
+            Invoke-WebRequest -Uri $url -Method POST -ContentType 'application/json' -Headers $headers -Body $notification -TimeoutSec 10 | Out-Null
+            $request = '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
+            $reply = Invoke-WebRequest -Uri $url -Method POST -ContentType 'application/json' -Headers $headers -Body $request -TimeoutSec 15
+            if ($reply.Content -notmatch '"browser_navigate"' -or $reply.Content -notmatch '"browser_screenshot"') {
+              throw 'Argos browser MCP tools were not exposed'
+            }
+            Write-Host 'Argos packaged JAR + MCP tools verified on Windows'
+          } finally {
+            if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force }
+          }
+
+  release:
+    name: Publish tagged GitHub Release
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: [build, windows-smoke]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download verified distribution
+        uses: actions/download-artifact@v4
+        with:
+          name: argos-distribution
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: argos-package.zip
+          fail_on_unmatched_files: true
+          generate_release_notes: true

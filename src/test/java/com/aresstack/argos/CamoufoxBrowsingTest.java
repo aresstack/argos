@@ -124,10 +124,7 @@ class CamoufoxBrowsingTest {
             browser.extract("links", "main");
             assertEquals(List.of(), browser.evaluate("() => window.traces"),
                     "controls, real input and extraction must not dispatch Playwright marker events");
-            // Umlauts arrive correctly, but Playwright Core types non-US characters through its insertText
-            // helper (untrusted InputEvent, playwright4j#36). Checked separately so marker events stay clean.
-            browser.fillTarget("1", "Größe Übermaß");
-            assertEquals("Größe Übermaß", browser.evaluate("() => document.getElementById('q').value"));
+            // Umlauts: strict by default, real keys or a refusal before the first key; see UnicodeInputCamoufoxTest.
             // Nothing of the automation leaks into the page's own realm.
             assertEquals(baseline, browser.evaluate(globals));
 

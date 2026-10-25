@@ -41,7 +41,7 @@ public final class ArgosApplication {
         CamoufoxBrowser browser = new CamoufoxBrowser(config);
         HttpServletStreamableServerTransportProvider transport =
                 HttpServletStreamableServerTransportProvider.builder()
-                        .mcpEndpoint("/mcp").build();
+                        .mcpEndpoint("/").build();
         McpSyncServer mcp = McpServer.sync(transport)
                 .serverInfo("argos", "0.1.0")
                 .capabilities(ServerCapabilities.builder().tools(true).build())
@@ -50,12 +50,12 @@ public final class ArgosApplication {
         Server server = new Server(new InetSocketAddress(config.host(), config.port()));
         ServletContextHandler context = new ServletContextHandler();
         context.setContextPath("/");
-        ServletHolder mcpServlet = new ServletHolder(transport);
+        ServletHolder mcpServlet = new ServletHolder(new ArgosRootMcpServlet(transport));
         mcpServlet.setAsyncSupported(true);
-        context.addServlet(mcpServlet, "/mcp");
+        context.addServlet(mcpServlet, "/");
         FilterHolder authorization = new FilterHolder(new ArgosMcpAuthorizationFilter(config));
         authorization.setAsyncSupported(true);
-        context.addFilter(authorization, "/mcp", EnumSet.of(DispatcherType.REQUEST, DispatcherType.ASYNC));
+        context.addFilter(authorization, "/", EnumSet.of(DispatcherType.REQUEST, DispatcherType.ASYNC));
         context.addServlet(new ServletHolder(new HealthServlet()), "/health");
         context.addServlet(new ServletHolder(new ProtectedResourceServlet(config)),
                 "/.well-known/oauth-protected-resource");
@@ -73,7 +73,7 @@ public final class ArgosApplication {
         server.start();
         System.out.println("Argos ready: http://" + config.host() + ":"
                 + ((org.eclipse.jetty.server.ServerConnector) server.getConnectors()[0]).getLocalPort()
-                + "/mcp (health: /health)");
+                + "/ (MCP root, health: /health)");
         server.join();
     }
 

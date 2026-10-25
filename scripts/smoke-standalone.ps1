@@ -25,7 +25,7 @@ $env:ARGOS_PROFILE_DIR = Join-Path $work 'profile'
 $env:ARGOS_HEADLESS = 'true'
 $backend = $null
 $website = $null
-$url = 'http://127.0.0.1:' + $port + '/mcp'
+$url = 'http://127.0.0.1:' + $port + '/'
 try {
     $backend = Start-Process -FilePath $java -ArgumentList @('-jar', 'argos.jar') -WorkingDirectory $work -PassThru -WindowStyle Hidden -RedirectStandardOutput (Join-Path $work 'out.log') -RedirectStandardError (Join-Path $work 'err.log')
     $healthy = $false
@@ -41,6 +41,18 @@ try {
         throw 'Standalone health check failed.'
     }
     Write-Output 'STANDALONE_HEALTH_OK'
+
+    # Pyloros-compatible discovery: GET / must explicitly return 405, not 400,
+    # 404, or an empty SSE stream. POST / remains the MCP transport.
+    $rootGetStatus = 0
+    try {
+        $rootGet = Invoke-WebRequest -UseBasicParsing -Uri ('http://127.0.0.1:' + $port + '/') -Headers @{ Accept = 'text/event-stream' } -TimeoutSec 6
+        $rootGetStatus = [int]$rootGet.StatusCode
+    } catch [System.Net.WebException] {
+        if ($_.Exception.Response) { $rootGetStatus = [int]$_.Exception.Response.StatusCode } else { throw }
+    }
+    if ($rootGetStatus -ne 405) { throw ('MCP GET / must return 405 like Pyloros, got ' + $rootGetStatus) }
+    Write-Output 'PYLOROS_ROOT_GET_405_OK'
 
     $headers = @{ Accept = 'application/json, text/event-stream'; 'Content-Type' = 'application/json' }
     $initialize = '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"smoke","version":"1"}}}'

@@ -76,6 +76,9 @@ jobs:
           for attempt in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:18082/health | grep -q '"UP"'; then
               echo 'Argos JAR health check passed'
+              ROOT_GET=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 -H 'Accept: text/event-stream' http://127.0.0.1:18082/)
+              test "$ROOT_GET" = 405 || { echo "Expected MCP GET / HTTP 405, got $ROOT_GET"; exit 1; }
+              echo 'Pyloros-compatible MCP GET / HTTP 405 passed'
               exit 0
             fi
             sleep 1
@@ -142,7 +145,15 @@ jobs:
               Get-Content 'argos.stderr.log' -Tail 50 -ErrorAction SilentlyContinue
               throw 'Packaged Argos did not become healthy'
             }
-            $url = 'http://127.0.0.1:18082/mcp'
+            $url = 'http://127.0.0.1:18082/'
+            $rootGetStatus = 0
+            try {
+              $get = Invoke-WebRequest -Uri $url -Headers @{ Accept = 'text/event-stream' } -TimeoutSec 6
+              $rootGetStatus = [int]$get.StatusCode
+            } catch {
+              if ($_.Exception.Response) { $rootGetStatus = [int]$_.Exception.Response.StatusCode } else { throw }
+            }
+            if ($rootGetStatus -ne 405) { throw "Expected Pyloros-compatible GET / 405, got $rootGetStatus" }
             $headers = @{ Accept = 'application/json, text/event-stream' }
             $request = '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"github-ci","version":"1"}}}'
             $reply = Invoke-WebRequest -Uri $url -Method POST -ContentType 'application/json' -Headers $headers -Body $request -TimeoutSec 15

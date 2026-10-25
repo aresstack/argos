@@ -14,7 +14,7 @@ AresStack Webserver (Caddy-Reverse-Proxy)
        │ HTTP nur nach 127.0.0.1
        ▼
 Argos :SERVER_PORT ─── GET /health
-       └─────── /mcp (offizieller MCP Java SDK Streamable HTTP)
+       └─────── / (offizieller MCP Java SDK Streamable HTTP)
                    │
                    ▼
              CamoufoxBrowser
@@ -77,7 +77,7 @@ Die bereits angelegten Webserver-Variablen für Argos sind:
 | `PUBLIC_ORIGIN` | `https://argos.aresstack.de` |
 | `CENTRAL_OAUTH_ISSUER` | `https://argos.aresstack.de` |
 
-`central-oauth` ist der sichere Standard und benötigt die beiden HTTPS-Origins. Argos validiert eingehende JWTs selbst mit der **AnAuthentia**-Bibliothek (Signatur aus JWKS, Issuer, Audience, Ablaufdatum und Scope). `/.well-known/oauth-protected-resource` ist ohne Token erreichbar und verweist auf den zentralen Issuer. `/health` bleibt lokal ohne Token erreichbar; `/mcp` verlangt ein gültiges Bearer-Token mit Scope `argos`. Nur mit ausdrücklich gesetztem `SECURITY_MODE=none` sind lokale MCP-Tests ohne JWT möglich. Dieser Modus darf nicht im öffentlich angebundenen Webserver aktiviert werden.
+`central-oauth` ist der sichere Standard und benötigt die beiden HTTPS-Origins. Argos validiert eingehende JWTs selbst mit der **AnAuthentia**-Bibliothek (Signatur aus JWKS, Issuer, Audience, Ablaufdatum und Scope). `/.well-known/oauth-protected-resource` ist ohne Token erreichbar und verweist auf den zentralen Issuer. `/health` bleibt lokal ohne Token erreichbar; `/` verlangt ein gültiges Bearer-Token mit Scope `argos`. Nur mit ausdrücklich gesetztem `SECURITY_MODE=none` sind lokale MCP-Tests ohne JWT möglich. Dieser Modus darf nicht im öffentlich angebundenen Webserver aktiviert werden.
 
 Start:
 
@@ -85,7 +85,7 @@ Start:
 java -jar .\build\package\argos.jar
 ```
 
-Prüfen bei der gezeigten Konfiguration: `http://127.0.0.1:8085/health`, MCP: `http://127.0.0.1:8085/mcp`.
+Prüfen bei der gezeigten Konfiguration: `http://127.0.0.1:8085/health`, MCP: `http://127.0.0.1:8085/`.
 
 ## AresStack Webserver – Managed JAR
 
@@ -94,9 +94,42 @@ Prüfen bei der gezeigten Konfiguration: `http://127.0.0.1:8085/health`, MCP: `h
 - **Java executable:** Java 21.
 - **Start automatically / Restart automatically:** optional einschalten.
 - **Health check:** `http://127.0.0.1:8085/health` (entspricht `SERVER_PORT`).
-- **Forward to:** `127.0.0.1:8085`, inkl. dem Pfad `/mcp` (entspricht `SERVER_PORT`).
+- **Forward to:** `127.0.0.1:8085`; **MCP-Endpunkt ist `/` (Root)** – genau wie bei Pyloros.
 
 Die öffentliche Adresse und zentrale OAuth-JWT-Ausstellung erfolgen im AresStack Webserver. Argos verwendet dieselbe Signatur- und Scope-Prüfung wie Pyloros, führt jedoch **keine eigenen OAuth-Anmeldeseiten** aus. Ein nicht validiertes Bearer-Token wird mit HTTP 401 zurückgewiesen. **Niemals mit `SECURITY_MODE=none` öffentlich veröffentlichen.** Argos bindet sich nur an `127.0.0.1` oder `::1`.
+
+## ChatGPT-Plugin – exakt dieselben OAuth-/Root-Endpunkte wie Pyloros
+
+Die vorliegende Pyloros-Einrichtungsanleitung ist die Vorlage. Bei Argos werden lediglich der **Dienstname**, die **Subdomain** und der **dienstspezifische Berechtigungsumfang** ersetzt:
+
+| Feld in ChatGPT | Argos |
+| --- | --- |
+| Verbindungsart | Server-URL |
+| Verbindung / MCP-Server-URL | **`https://argos.aresstack.de/`** (Root inklusive abschließendem Slash) |
+| Authentifizierung | OAuth |
+| Registrierungsmethode | Benutzerdefinierter OAuth-Client |
+| OAuth-Callback-URL | Von ChatGPT vorgegebenen Wert **unverändert** verwenden |
+| Client-ID / Client-Secret | Vom zentralen AresStack-OAuth-Server eingerichtetes Wertepaar; keine festen Credentials im Repository |
+| Token-Endpunkt-Authentifizierung | `client_secret_post` |
+| Standard-Scopes | Leer |
+| Basis-Scopes | Der mit dem AresStack OAuth-Client **tatsächlich vereinbarte Scope**; bei Argos muss das ausgestellte Token `argos` enthalten |
+| Autorisierungs-URL | `https://argos.aresstack.de/oauth/authorize` |
+| Token-URL | `https://argos.aresstack.de/oauth/token` |
+| Registrierungs-URL | Leer (fest konfigurierte Clients) |
+| Basis-URL des Autorisierungsservers | `https://argos.aresstack.de` |
+| Resource | **`https://argos.aresstack.de/`** |
+| PKCE (S256) | Aktiviert |
+| OIDC | Deaktiviert; Zusatzfelder leer |
+
+**Root-Verhalten wie Pyloros:**
+
+- `POST /` verarbeitet MCP-JSON-RPC (`initialize`, `tools/list`, `tools/call`).
+- `GET /` antwortet nach erfolgreicher Authentifizierung mit **405 Method Not Allowed** und `Allow: POST`. Kein leerer, sofort beendeter SSE-Stream.
+- `/.well-known/oauth-protected-resource`, `/.well-known/oauth-authorization-server`, `/.well-known/jwks.json`, `/oauth/authorize` und `/oauth/token` werden wie bei Pyloros von der **zentralen OAuth-Komponente des AresStack Webservers** geliefert.
+- `GET /health` ist der interne Prozess-Health-Check.
+- **`/mcp` ist nicht die ChatGPT-Verbindungsadresse.** Der frühere abweichende Argos-Endpunkt wurde zugunsten des Pyloros-Root-Endpunkts ersetzt.
+
+Der Login allein ist **keine** Discovery-Abnahme. Nach erfolgreicher OAuth-Verbindung muss ChatGPT `tools/list` an `POST /` ausführen und die Argos-Werkzeuge erkennen. Der lokale Test `scripts/smoke-standalone.ps1` prüft `GET /` → 405 und `POST /` → `initialize`, `tools/list`, Interaktionen.
 
 ## MCP-Werkzeuge
 

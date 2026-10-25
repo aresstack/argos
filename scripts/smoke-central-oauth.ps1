@@ -55,7 +55,7 @@ try {
         throw 'PUBLIC_ORIGIN, CENTRAL_OAUTH_ISSUER or REQUIRED_SCOPE did not reach OAuth metadata.'
     }
     Write-Output 'OAUTH_ENV_METADATA_OK'
-    $url = 'http://127.0.0.1:' + $port + '/mcp'
+    $url = 'http://127.0.0.1:' + $port + '/'
     $initialization = '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"oauth-test","version":"1"}}}'
     $unauthorized = Status-For $url $initialization $null
     if ($unauthorized.Code -ne 401 -or $unauthorized.Challenge -notmatch 'oauth-protected-resource') {

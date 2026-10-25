@@ -82,6 +82,9 @@ public interface TestBrowserSession extends BrowserContextAccess, AutoCloseable 
 
         public String engine() { return "chromium"; }
 
+        @Override
+        public boolean canCancelDownloads() { return true; }
+
         public void openCurrent(String url) { run(() -> current.navigate(url), 60); }
 
         public String currentText() { return run(() -> current.locator("body").innerText(), 60); }

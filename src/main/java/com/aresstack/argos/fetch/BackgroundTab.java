@@ -5,6 +5,7 @@ import com.microsoft.playwright.BrowserContext;
 import com.microsoft.playwright.Download;
 import com.microsoft.playwright.Page;
 import com.microsoft.playwright.PlaywrightException;
+import com.microsoft.playwright.Request;
 import com.microsoft.playwright.Response;
 import com.microsoft.playwright.TimeoutError;
 import com.microsoft.playwright.options.LoadState;
@@ -38,22 +39,44 @@ public final class BackgroundTab implements AutoCloseable {
     private final Page tab;
     private final String requestedUrl;
     private final AtomicReference<Download> download = new AtomicReference<>();
+    private final BrowserContext context;
+    private final boolean downloadsCancellable;
+    private final java.util.Set<Request> finished = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    private final java.util.Set<String> finishedUrls = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    private final java.util.Map<Request, String> failed = new java.util.concurrent.ConcurrentHashMap<>();
+    private final java.util.function.Consumer<Request> onFinished = request -> {
+        finished.add(request);
+        finishedUrls.add(request.url());
+    };
+    private final java.util.function.Consumer<Request> onFailed =
+            request -> failed.put(request, String.valueOf(request.failure()));
     private Response response;
     private FetchFailure failure;
     private String refusedHop;
+    private boolean downloadSettled;
+    private Page ticker;
 
-    private BackgroundTab(Page tab, String requestedUrl) {
-        this.tab = tab;
+    private BackgroundTab(BrowserContext context, String requestedUrl, boolean downloadsCancellable) {
+        this.context = context;
         this.requestedUrl = requestedUrl;
+        this.downloadsCancellable = downloadsCancellable;
+        // Context level: a download's request may no longer be attributed to the tab.
+        context.onRequestFinished(onFinished);
+        context.onRequestFailed(onFailed);
+        this.tab = context.newPage();
     }
 
     /**
      * Opens a new tab and returns as soon as the navigation committed (response headers arrived) or became a
      * download. The rest of the page keeps loading in the browser while the caller starts further tabs.
      */
+    /**
+     * @param downloadsCancellable whether {@link Download#cancel()} works in this browser (CDP: yes; WebDriver
+     *                             BiDi in Playwright 1.62: no)
+     */
     public static BackgroundTab open(BrowserContext context, String url, double commitTimeoutMillis,
-                                     UrlPolicy policy) {
-        BackgroundTab opened = new BackgroundTab(context.newPage(), url);
+                                     UrlPolicy policy, boolean downloadsCancellable) {
+        BackgroundTab opened = new BackgroundTab(context, url, downloadsCancellable);
         opened.tab.onDownload(opened.download::set);
         opened.tab.onRequest(request -> {
             if (opened.refusedHop != null || !request.isNavigationRequest() || request.url().equals(url)
@@ -165,26 +188,30 @@ public final class BackgroundTab implements AutoCloseable {
     }
 
     /**
-     * The raw bytes of the loaded resource, refusing anything larger than {@code maxBytes}. A body or download
-     * that is not complete within {@code timeoutMillis} is cancelled, so a stalling server cannot hold the
-     * single browser thread.
+     * The raw bytes of the loaded resource, refusing anything larger than {@code maxBytes}. Never blocks the
+     * browser thread longer than {@code timeoutMillis}: it waits by pumping Playwright events in short slices
+     * until the browser reports the request finished, and only then reads the body or the downloaded file.
      */
     public FetchedResource content(long maxBytes, double timeoutMillis) {
         if (failure != null) throw failure;
+        long deadline = System.nanoTime() + (long) (timeoutMillis * 1_000_000);
         Download file = download.get();
-        if (file != null) {
-            return beforeDeadline(timeoutMillis, file::cancel, () -> downloaded(file, maxBytes));
-        }
+        if (file != null) return downloaded(file, maxBytes, deadline, timeoutMillis);
         if (response == null) throw new FetchFailure(FetchFailure.Kind.FAILED, "The browser delivered no response");
         String length = response.headers().get("content-length");
         if (length != null && length.matches("\\d{1,18}") && Long.parseLong(length) > maxBytes) {
             throw tooLarge(Long.parseLong(length), maxBytes);
         }
+        Request request = response.request();
+        if (!pumpUntil(() -> finished.contains(request) || failed.containsKey(request), deadline)) {
+            throw timedOut(timeoutMillis);
+        }
+        if (failed.containsKey(request)) {
+            throw new FetchFailure(FetchFailure.Kind.FAILED, "Transfer failed: " + failed.get(request));
+        }
         byte[] body;
         try {
-            body = beforeDeadline(timeoutMillis, tab::close, response::body);
-        } catch (FetchFailure known) {
-            throw known;
+            body = response.body();
         } catch (PlaywrightException error) {
             throw new FetchFailure(FetchFailure.Kind.FAILED,
                     "The browser did not keep the response body (larger than its collector limit?)", error);
@@ -199,10 +226,24 @@ public final class BackgroundTab implements AutoCloseable {
                 filenameFromDisposition(response.headers().get("content-disposition")), body);
     }
 
-    private FetchedResource downloaded(Download file, long maxBytes) {
+    /**
+     * A browser download. Download.failure()/path() wait for completion without a timeout, so they are only
+     * called once completion is known. Over CDP the download can be cancelled, which ends that wait; over
+     * WebDriver BiDi Playwright 1.62 cannot cancel downloads ({@code cancelDownload} is a no-op), so Argos waits
+     * for the browser to report the download request finished and otherwise gives up with TIMEOUT, leaving the
+     * transfer to the browser (its temporary file is removed when the browser exits).
+     */
+    private FetchedResource downloaded(Download file, long maxBytes, long deadline, double timeoutMillis) {
         try {
+            if (downloadsCancellable) {
+                beforeDeadline(deadline, file::cancel);
+            } else if (!pumpUntil(() -> finishedUrls.contains(file.url()), deadline)) {
+                throw new FetchFailure(FetchFailure.Kind.TIMEOUT, "Download not complete within "
+                        + Math.round(timeoutMillis / 1000) + " s; it cannot be cancelled over WebDriver BiDi");
+            }
             String problem = file.failure();
-            if ("canceled".equals(problem)) throw new FetchFailure(FetchFailure.Kind.TIMEOUT, "Download canceled");
+            downloadSettled = true;
+            if ("canceled".equals(problem)) throw timedOut(timeoutMillis);
             if (problem != null) throw new FetchFailure(FetchFailure.Kind.FAILED, "Download failed: " + problem);
             Path path = file.path();
             long size = Files.size(path);
@@ -216,39 +257,30 @@ public final class BackgroundTab implements AutoCloseable {
         }
     }
 
-    /**
-     * Runs a Playwright call that has no timeout of its own (download completion, response body). Playwright
-     * Java dispatches events while the driver thread waits, so a console tick from a separate, blank helper tab
-     * (about:blank, never a website) lets a handler run {@code onExpiry} once the deadline has passed.
-     */
-    private <T> T beforeDeadline(double timeoutMillis, Runnable onExpiry, java.util.function.Supplier<T> call) {
-        long deadline = System.nanoTime() + (long) (timeoutMillis * 1_000_000);
-        java.util.concurrent.atomic.AtomicBoolean expired = new java.util.concurrent.atomic.AtomicBoolean();
-        Page ticker = tab.context().newPage();
-        try {
-            ticker.onConsoleMessage(message -> {
-                if (DEADLINE_TICK.equals(message.text()) && System.nanoTime() >= deadline
-                        && expired.compareAndSet(false, true)) {
-                    onExpiry.run();
-                }
-            });
-            ticker.evaluate("tick => setInterval(() => console.debug(tick), 250)", DEADLINE_TICK);
-            T result = call.get();
-            if (expired.get()) throw timedOut(timeoutMillis);
-            return result;
-        } catch (PlaywrightException error) {
-            if (expired.get()) throw timedOut(timeoutMillis);
-            throw error;
-        } catch (FetchFailure failed) {
-            if (expired.get()) throw timedOut(timeoutMillis);
-            throw failed;
-        } finally {
-            try {
-                ticker.close();
-            } catch (PlaywrightException ignored) {
-                // Browser gone; nothing left to stop.
-            }
+    /** Waits in short, event-pumping slices until {@code done} holds; {@code false} once the deadline passed. */
+    private boolean pumpUntil(java.util.function.BooleanSupplier done, long deadline) {
+        while (!done.getAsBoolean()) {
+            if (System.nanoTime() >= deadline || tab.isClosed()) return done.getAsBoolean();
+            tab.waitForTimeout(50);
         }
+        return true;
+    }
+
+    /**
+     * CDP only: arms a console tick in a blank helper tab (about:blank, never a website). Playwright Java
+     * dispatches events while the thread waits in Download.failure(), so the handler can cancel the download
+     * once the deadline passed, which ends that wait.
+     */
+    private void beforeDeadline(long deadline, Runnable onExpiry) {
+        java.util.concurrent.atomic.AtomicBoolean expired = new java.util.concurrent.atomic.AtomicBoolean();
+        ticker = tab.context().newPage();
+        ticker.onConsoleMessage(message -> {
+            if (DEADLINE_TICK.equals(message.text()) && System.nanoTime() >= deadline
+                    && expired.compareAndSet(false, true)) {
+                onExpiry.run();
+            }
+        });
+        ticker.evaluate("tick => setInterval(() => console.debug(tick), 250)", DEADLINE_TICK);
     }
 
     private static FetchFailure timedOut(double timeoutMillis) {
@@ -305,9 +337,13 @@ public final class BackgroundTab implements AutoCloseable {
     /** Closes the tab and discards the browser's temporary download file. Never fails. */
     @Override
     public void close() {
+        context.offRequestFinished(onFinished);
+        context.offRequestFailed(onFailed);
         Download file = download.get();
         try {
-            if (file != null) file.delete();
+            // delete() waits for an unfinished download, so only a settled one is deleted here.
+            if (file != null && downloadSettled) file.delete();
+            if (ticker != null && !ticker.isClosed()) ticker.close();
         } catch (PlaywrightException ignored) {
             // The browser may already be gone.
         }

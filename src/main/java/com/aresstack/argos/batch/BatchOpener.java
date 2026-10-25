@@ -48,9 +48,11 @@ public final class BatchOpener {
     }
 
     private final UrlPolicy policy;
+    private final boolean downloadsCancellable;
 
-    public BatchOpener(UrlPolicy policy) {
+    public BatchOpener(UrlPolicy policy, boolean downloadsCancellable) {
         this.policy = policy;
+        this.downloadsCancellable = downloadsCancellable;
     }
 
     /**
@@ -96,7 +98,8 @@ public final class BatchOpener {
             while (!waiting.isEmpty() || !open.isEmpty()) {
                 while (!waiting.isEmpty() && open.size() < options.parallel()) {
                     int index = waiting.poll();
-                    open.add(OpenTab.start(context, index, urls.get(index).trim(), options, policy));
+                    open.add(OpenTab.start(context, index, urls.get(index).trim(), options, policy,
+                            downloadsCancellable));
                 }
                 OpenTab oldest = open.poll();
                 try {
@@ -162,10 +165,11 @@ public final class BatchOpener {
     }
 
     private record OpenTab(int index, String url, BackgroundTab tab, long startedNanos) {
-        static OpenTab start(BrowserContext context, int index, String url, Options options, UrlPolicy policy) {
+        static OpenTab start(BrowserContext context, int index, String url, Options options, UrlPolicy policy,
+                             boolean downloadsCancellable) {
             long started = System.nanoTime();
-            return new OpenTab(index, url, BackgroundTab.open(context, url, options.commitTimeoutMillis(), policy),
-                    started);
+            return new OpenTab(index, url, BackgroundTab.open(context, url, options.commitTimeoutMillis(), policy,
+                    downloadsCancellable), started);
         }
 
         long elapsed() {

@@ -98,12 +98,25 @@ Auf der Platte heißen Dateien nach ihrer ID (`doc-1.pdf`), nie nach dem Server-
 in keinem Toolergebnis. Benutzerinformationen in URLs werden aus den Metadaten entfernt.
 
 Bei echten Browser-Downloads (Attachment) ist die Größe erst nach Abschluss bekannt; Playwright bietet keinen
-Fortschritt. Zu große Dateien werden danach verworfen. Damit ein hängender Server den einzigen Browser-Thread
-nicht blockiert, haben Download-Abschluss und `Response.body()` eine eigene Frist (Einzeldownload 75 s, Batch
-15 s): Ein Hilfstab mit `about:blank` (nie eine Website) erzeugt per Laufzeit-`evaluate` alle 250 ms eine
-Konsolenmeldung. Playwright Java verarbeitet Ereignisse auch während der blockierenden Wartezeit, und nach Ablauf
-der Frist bricht der Handler den Download ab (`Download.cancel()`) bzw. schließt den Tab. Ergebnis ist `TIMEOUT`.
-Getestet mit einem Server, der nach dem ersten Block nichts mehr sendet (`BackgroundTabDeadlineTest`).
+Fortschritt. Zu große Dateien werden danach verworfen.
+
+**Fristen ohne blockierende Aufrufe.** `Response.body()`, `Download.failure()`, `Download.path()` und
+`Download.delete()` warten ohne eigenes Timeout, bis die Übertragung fertig ist. Argos ruft sie deshalb erst
+auf, wenn der Browser das Ende gemeldet hat: Der Browser-Thread wartet in 50-ms-Scheiben
+(`waitForTimeout`, verarbeitet dabei Playwright-Ereignisse) auf `requestfinished`/`requestfailed` der
+Anfrage, höchstens bis zur Frist (Einzeldownload 75 s, Batch 15 s). Danach meldet Argos `TIMEOUT`.
+
+| Fall | CDP (Chromium-Testlauf) | WebDriver BiDi (Camoufox) |
+| --- | --- | --- |
+| Response-Body (inline PDF, XML, …) | Ende über `requestfinished` | Ende über `requestfinished` |
+| Attachment-Download | kein Ende-Ereignis (Anfrage wird sofort als `ERR_ABORTED` gemeldet); stattdessen bricht ein Konsolen-Takt aus einem `about:blank`-Hilfstab den Download nach der Frist per `Download.cancel()` ab | **`Download.cancel()` ist in Playwright 1.62 für BiDi wirkungslos** (`BidiBrowserContext.cancelDownload` ist leer, `coreBundle.js`). Argos wartet auf `requestfinished` der Download-URL; kommt es nicht bis zur Frist, meldet Argos `TIMEOUT` und fasst den Download nicht mehr an (kein `delete()`, das ewig warten würde). Die Übertragung läuft im Browser weiter, bis der Server sie beendet; die temporäre Datei entfernt Playwright beim Browserende. |
+
+Der erste Camoufox-Lauf (Windows, 2c5f7fb) blieb genau an dieser Stelle hängen: Der alte Ablauf rief
+`Download.failure()` auf und verließ sich auf `cancel()`. **Offen:** Ob Camoufox über BiDi für eine
+abgeschlossene Attachment-Übertragung `requestfinished` meldet, ist nur dort messbar. Meldet es das nicht,
+enden Attachment-Downloads in Camoufox immer mit `TIMEOUT` (begrenzt, aber ohne Ergebnis); Inline-Dokumente,
+also der Normalfall für PDFs mit `Content-Type: application/pdf`, sind davon nicht betroffen.
+`BackgroundTabDeadlineTest` prüft auf CDP beide Modi, auf Camoufox den BiDi-Modus.
 
 ## Parallelität: Messung und Grenze des Single-Thread-Executors
 
@@ -121,21 +134,33 @@ Daraus folgt für `browser_open_many`:
    geschlossen ist, wird die nächste Adresse geöffnet.
 
 Gemessen mit `BatchParallelismMeasurementTest` (lokaler Server mit 4 Threads, 4 Adressen, 1500 ms Verzögerung
-je Adresse), Chromium 1243 headless über Playwright4J/CDP, Oktober 2026:
+je Adresse):
 
-| Verzögerung | sequenziell (1 Tab) | gleitendes Fenster (4 Tabs) |
-| --- | --- | --- |
-| nach dem Commit (Body kommt verzögert) | 7068 ms | **2228 ms** |
-| vor dem Commit (Header kommen verzögert) | 6886 ms | 6870 ms (kein Gewinn) |
+| Lauf | ohne Verzögerung, 4 Tabs nacheinander | Body verzögert: sequenziell / 4 Tabs | Header verzögert: sequenziell / 4 Tabs |
+| --- | --- | --- | --- |
+| Chromium 1243 headless, CDP, Linux | 1249 ms | 6909 / **2096 ms** | 6902 / 7036 ms |
+| Camoufox, BiDi, Windows (Angelo, 2c5f7fb, Fixtures über `localhost`) | – | 25 372 / **19 985 ms** | 27 534 / 25 457 ms |
 
-Ergebnis: Die Parallelität ist echt, aber nur für die Ladephase nach dem Commit. Für Seiten, deren Zeit
-überwiegend in Skripten, Nachladen und Rendering steckt (die meisten modernen Seiten), ist der Gewinn
-erheblich; bei langsamen Servern bleibt es sequenziell. `browser_open_many` meldet das nicht als „parallel“,
-sondern liefert `parallelTabs` und pro Eintrag `elapsedMs`.
+Auswertung:
 
-Die Grenze liegt in der Java-Client-Schicht von Playwright und nicht am Browser. Der Lauf mit Camoufox ist
-derselbe Test mit `-PtestCamoufox=true` (siehe unten) und sollte vor einem Release einmal lokal ausgeführt
-und hier ergänzt werden. Im Cloud-Container dieses Arbeitspakets stand kein Camoufox/Firefox zur Verfügung.
+- Eingespart wird höchstens die Wartezeit **nach** dem Commit, also bei 4 Tabs bis zu 3 × 1500 ms. Chromium
+  spart 4813 ms, Camoufox 5387 ms. In beiden Browsern überlappt diese Phase also vollständig.
+- Was **vor** dem Commit liegt (Tab öffnen, Verbindung aufbauen, Header abwarten, Tab schließen), bleibt
+  seriell. Im Camoufox-Lauf waren das rund 4,8 s pro Tab. Der größte Teil davon ist sehr wahrscheinlich ein
+  Artefakt der Testumgebung: `localhost` löst unter Windows zuerst auf `::1` auf, der Testserver hört nur auf
+  `127.0.0.1`, und Windows wartet bei einer abgewiesenen Verbindung etwa 2 s vor dem Rückfall auf IPv4. Die
+  Fixtures verwenden deshalb jetzt `127.0.0.1`. Die neue Spalte „ohne Verzögerung“ misst die echten
+  Grundkosten pro Tab und muss für Camoufox neu erhoben werden.
+- Die Testschwelle prüft deshalb nicht mehr ein festes Verhältnis, sondern dass mindestens 60 % der
+  überlappbaren Wartezeit tatsächlich eingespart werden. Das hätte auch der Camoufox-Lauf mit 5387 ms erfüllt.
+
+**Leistungsversprechen:** `browser_open_many` spart die Lade- und Renderzeit nach dem Commit (typisch der
+größte Teil moderner Seiten), nicht die Antwortzeit langsamer Server und nicht die Grundkosten pro Tab. Bei
+hohen Grundkosten pro Tab in Camoufox ist der Gewinn gegenüber Einzelaufrufen klein. Der wesentliche Nutzen
+bleibt dann: ein Aufruf statt zehn, ein Ergebnis pro URL und eine Fehlerisolation. `browser_open_many` gibt
+`parallelTabs` und pro Eintrag `elapsedMs` aus und nennt sich nicht pauschal „parallel“.
+
+Die Grenze liegt in der Java-Client-Schicht von Playwright und nicht am Browser.
 
 Verworfene Alternativen:
 

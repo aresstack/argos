@@ -32,25 +32,29 @@ public final class FixtureSite implements AutoCloseable {
         server.start();
     }
 
-    /** Fixture address via host name {@code localhost}, which test URL policies admit as an intranet host. */
+    /**
+     * Fixture address on 127.0.0.1, which test URL policies admit as an intranet network. The literal avoids
+     * {@code localhost}, which Windows resolves to ::1 first: each connection then waits about 2 s for the
+     * refused IPv6 attempt, which distorted the Camoufox measurement on Windows.
+     */
     public String url(String path) {
-        return "http://localhost:" + server.getAddress().getPort() + path;
-    }
-
-    /** The same fixture via the loopback literal, which test URL policies do not admit. */
-    public String loopbackUrl(String path) {
         return "http://127.0.0.1:" + server.getAddress().getPort() + path;
     }
 
-    /** URL policy for tests: only {@code localhost} is admitted, the loopback literal stays blocked. */
+    /** A loopback address the test URL policies do not admit (nothing has to listen there). */
+    public String loopbackUrl(String path) {
+        return "http://127.0.0.2:" + server.getAddress().getPort() + path;
+    }
+
+    /** URL policy for tests: only 127.0.0.1 is admitted, the rest of loopback stays blocked. */
     public static com.aresstack.argos.web.UrlPolicy testPolicy() {
-        return new com.aresstack.argos.web.UrlPolicy(false, java.util.List.of("localhost"));
+        return new com.aresstack.argos.web.UrlPolicy(false, java.util.List.of("127.0.0.1/32"));
     }
 
     /** An address on which nothing listens (connection refused). */
     public static String refusedUrl() throws IOException {
         try (ServerSocket socket = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
-            return "http://localhost:" + socket.getLocalPort() + "/";
+            return "http://127.0.0.1:" + socket.getLocalPort() + "/";
         }
     }
 
@@ -76,6 +80,17 @@ public final class FixtureSite implements AutoCloseable {
                     send(exchange, 200, "text/html; charset=utf-8", html("Slow head", "<p>late headers</p>"));
                 }
                 case "/slow-body" -> slowBody(exchange, delay);
+                case "/slow-attachment" -> {
+                    exchange.getResponseHeaders().add("Content-Disposition", "attachment; filename=\"slow.docx\"");
+                    exchange.getResponseHeaders().add("Content-Type", "application/octet-stream");
+                    exchange.sendResponseHeaders(200, docx.length);
+                    try (OutputStream out = exchange.getResponseBody()) {
+                        out.write(docx, 0, docx.length / 2);
+                        out.flush();
+                        Thread.sleep(delay);
+                        out.write(docx, docx.length / 2, docx.length - docx.length / 2);
+                    }
+                }
                 case "/redirect" -> {
                     String query = exchange.getRequestURI().getRawQuery();
                     exchange.getResponseHeaders().add("Location", java.net.URLDecoder.decode(

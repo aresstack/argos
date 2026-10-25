@@ -37,7 +37,7 @@ public final class ResearchDocuments implements AutoCloseable {
         this.browser = browser;
         this.store = store;
         this.policy = policy;
-        this.batch = new BatchOpener(policy);
+        this.batch = new BatchOpener(policy, browser.canCancelDownloads());
     }
 
     /** Downloads {@code url} (absolute, or relative to the current page) and keeps it in the store. */
@@ -46,7 +46,8 @@ public final class ResearchDocuments implements AutoCloseable {
         WebAddress.admit(policy, target);
         long limit = store.maxDocumentBytes();
         FetchedResource resource = unwrapping(() -> browser.inBrowserContext(context -> {
-            try (BackgroundTab tab = BackgroundTab.open(context, target, COMMIT_TIMEOUT_MILLIS, policy)) {
+            try (BackgroundTab tab = BackgroundTab.open(context, target, COMMIT_TIMEOUT_MILLIS, policy,
+                    browser.canCancelDownloads())) {
                 return tab.content(limit, CONTENT_TIMEOUT_MILLIS);
             }
         }, DOWNLOAD_TIMEOUT_SECONDS));

@@ -11,4 +11,12 @@ public interface BrowserContextAccess {
 
     /** URL of the current page, or empty before the browser started. */
     String currentUrl();
+
+    /**
+     * Whether {@code Download.cancel()} takes effect. Playwright 1.62 implements it for CDP only; over WebDriver
+     * BiDi (Camoufox) it is a no-op, so waits for downloads must never rely on it.
+     */
+    default boolean canCancelDownloads() {
+        return false;
+    }
 }

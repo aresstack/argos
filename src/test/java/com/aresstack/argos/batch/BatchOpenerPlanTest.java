@@ -13,11 +13,11 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class BatchOpenerPlanTest {
     // No DNS in unit tests: private-network checks are off except where a test turns them on.
-    private static final BatchOpener OPEN = new BatchOpener(new UrlPolicy(true));
+    private static final BatchOpener OPEN = new BatchOpener(new UrlPolicy(true), false);
 
     @Test
     void reportsAddressesThePolicyRefusesAsBlocked() {
-        BatchEntry[] planned = new BatchOpener(new UrlPolicy(false, List.of("10.1.0.0/16")))
+        BatchEntry[] planned = new BatchOpener(new UrlPolicy(false, List.of("10.1.0.0/16")), false)
                 .plan(List.of("http://127.0.0.1/admin", "http://10.1.2.3/wiki", "http://169.254.169.254/"));
         assertEquals(BatchEntry.Status.BLOCKED, planned[0].status());
         assertNull(planned[1]);

@@ -1,28 +1,60 @@
 package com.aresstack.argos.web;
 
+import com.aresstack.argos.network.NetworkPolicy;
+import com.aresstack.argos.network.NetworkSettings;
+
 import java.net.InetAddress;
 import java.net.URI;
 import java.net.UnknownHostException;
+import java.util.List;
 import java.util.Locale;
 
 /**
- * Navigation gate for the web_* tools, following the protection model of
- * docs/argos-optimization-analysis.md (PR #1): checked before navigating and again on
- * the final URL; a blocked final page is left for about:blank and never returned.
+ * Early, informative URL check for the tools that navigate (web_*, downloads, batch, research).
  *
- * <p>This is not an SSRF guarantee. The browser itself sends redirect hops and
- * subresource requests, and resolves DNS on its own, so an internal redirect target
- * has already been contacted when the final check fails, and DNS rebinding between
- * this check and the browser's lookup cannot be ruled out. Preventing that needs
- * request interception or a browser-level network block, which the analysis defers
- * (route interception is measurable and depends on the event pump). Host allow/block
- * rules for intranets belong to the shared URL policy of work package A.
+ * <p>It owns no security rules of its own: the target decision is delegated to the same
+ * {@link NetworkPolicy} that Argos' local SOCKS5 proxy enforces for every browser connection
+ * (analysis section 5.4, PR #11). The proxy is the boundary; this class only turns a refused
+ * target into a clear {@code BLOCKED} error before the browser starts loading, and lets callers
+ * keep refused redirect targets out of tool results. A host that does not resolve locally is left
+ * to the browser and the proxy, which decide on their own resolution.
+ *
+ * <p>With {@code ARGOS_NETWORK_POLICY=off} there is no boundary, and this check only validates
+ * the URL shape.
  */
 public final class UrlPolicy {
-    private final boolean allowPrivateNetworks;
+    /** A syntactically valid URL whose target the network policy does not admit. */
+    public static final class BlockedUrlException extends IllegalArgumentException {
+        public BlockedUrlException(String message) {
+            super(message);
+        }
+    }
 
-    public UrlPolicy(boolean allowPrivateNetworks) {
-        this.allowPrivateNetworks = allowPrivateNetworks;
+    /** Null when the network policy is off. */
+    private final NetworkPolicy network;
+
+    public UrlPolicy(NetworkPolicy network) {
+        this.network = network;
+    }
+
+    /** The informative check matching the configured network boundary. */
+    public static UrlPolicy from(NetworkSettings settings) {
+        return settings.strictMode() ? new UrlPolicy(settings.policy()) : off();
+    }
+
+    /** Public targets only, the default of {@code ARGOS_NETWORK_POLICY=strict}. */
+    public static UrlPolicy publicOnly() {
+        return new UrlPolicy(NetworkPolicy.publicOnly());
+    }
+
+    /** Public targets plus the given {@code ARGOS_INTRANET_ALLOW} rules (comma separated). */
+    public static UrlPolicy allowing(String intranetRules) {
+        return new UrlPolicy(NetworkPolicy.parse(intranetRules));
+    }
+
+    /** URL shape only, for {@code ARGOS_NETWORK_POLICY=off} and tests against local fixtures. */
+    public static UrlPolicy off() {
+        return new UrlPolicy(null);
     }
 
     public URI check(String url) {
@@ -40,32 +72,32 @@ public final class UrlPolicy {
         if (uri.getHost() == null || uri.getHost().isBlank()) {
             throw new IllegalArgumentException("URL has no host: " + url);
         }
-        if (!allowPrivateNetworks) requirePublicHost(uri.getHost());
+        if (network != null) requireAdmitted(uri.getHost());
         return uri;
     }
 
-    private static void requirePublicHost(String host) {
-        InetAddress[] addresses;
+    /** Whether {@link #check} accepts {@code url}; for checks on redirect hops and final URLs. */
+    public boolean permits(String url) {
         try {
-            addresses = InetAddress.getAllByName(host);
-        } catch (UnknownHostException unknown) {
-            throw new IllegalArgumentException("Cannot resolve host: " + host);
-        }
-        // Every resolved address counts: one private record is enough to reach an internal service.
-        for (InetAddress address : addresses) {
-            if (isPrivate(address)) {
-                throw new IllegalArgumentException("Blocked private or loopback address: " + host);
-            }
+            check(url);
+            return true;
+        } catch (IllegalArgumentException refused) {
+            return false;
         }
     }
 
-    private static boolean isPrivate(InetAddress address) {
-        if (address.isLoopbackAddress() || address.isAnyLocalAddress()
-                || address.isSiteLocalAddress() || address.isLinkLocalAddress()) {
-            return true;
+    private void requireAdmitted(String rawHost) {
+        String host = rawHost.startsWith("[") && rawHost.endsWith("]")
+                ? rawHost.substring(1, rawHost.length() - 1) : rawHost;
+        List<InetAddress> addresses;
+        try {
+            addresses = List.of(InetAddress.getAllByName(host));
+        } catch (UnknownHostException unresolved) {
+            return; // the proxy resolves and decides
         }
-        byte[] raw = address.getAddress();
-        if (raw.length == 16) return (raw[0] & 0xfe) == 0xfc; // IPv6 unique-local fc00::/7
-        return (raw[0] & 0xff) == 100 && (raw[1] & 0xc0) == 64; // carrier-grade NAT 100.64.0.0/10
+        NetworkPolicy.Decision decision = network.check(host, addresses);
+        if (!decision.allowed()) {
+            throw new BlockedUrlException("Blocked by the network policy: " + host + " (" + decision.reason() + ")");
+        }
     }
 }

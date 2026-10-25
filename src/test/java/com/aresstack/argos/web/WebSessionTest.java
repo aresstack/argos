@@ -46,7 +46,7 @@ class WebSessionTest {
                 + "<a href='/'>Home</a>");
         pages.put("/about", "<title>About</title><p>About page</p>");
         browser = new HttpPageBrowser();
-        web = new WebSession(browser, new UrlPolicy(true), null, 40, 50);
+        web = new WebSession(browser, UrlPolicy.off(), null, 40, 50);
     }
 
     @AfterEach void stopSite() {
@@ -121,7 +121,7 @@ class WebSessionTest {
     }
 
     @Test void strictPolicyBlocksLoopbackAndNonWebUrls() {
-        WebSession strict = new WebSession(browser, new UrlPolicy(false), null);
+        WebSession strict = new WebSession(browser, UrlPolicy.publicOnly(), null);
         assertThrows(IllegalArgumentException.class, () -> strict.open(base + "/"));
         assertThrows(IllegalArgumentException.class, () -> strict.open("file:///etc/passwd"));
         assertThrows(IllegalArgumentException.class, () -> strict.open("javascript:alert(1)"));
@@ -130,7 +130,7 @@ class WebSessionTest {
                 "http://[::ffff:127.0.0.1]/")) {
             assertThrows(IllegalArgumentException.class, () -> strict.open(internal), internal);
         }
-        assertDoesNotThrow(() -> new UrlPolicy(false).check("http://[2606:4700::1111]/"));
+        assertDoesNotThrow(() -> UrlPolicy.publicOnly().check("http://[2606:4700::1111]/"));
     }
 
     @Test void strictPolicyAbandonsPagesThatRedirectIntoPrivateNetworks() {
@@ -143,7 +143,7 @@ class WebSessionTest {
             @Override public PageCapture back() { return null; }
             @Override public void clear() { cleared[0] = true; }
         };
-        WebSession strict = new WebSession(redirecting, new UrlPolicy(false), null);
+        WebSession strict = new WebSession(redirecting, UrlPolicy.publicOnly(), null);
         var error = assertThrows(IllegalArgumentException.class, () -> strict.open("http://93.184.215.14/"));
         assertTrue(error.getMessage().startsWith("Blocked after redirect"));
         assertTrue(cleared[0], "the blocked page is left for about:blank");
@@ -155,7 +155,7 @@ class WebSessionTest {
                 new SearchHit("Article", base + "/article", "About Camoufox"),
                 new SearchHit("Duplicate", base + "/article", "same target"),
                 new SearchHit("About", base + "/about", "")), List.of("ATTEMPT: local ORGANIC_RESULTS"));
-        return new WebSession(browser, new UrlPolicy(true), search);
+        return new WebSession(browser, UrlPolicy.off(), search);
     }
 
     @Test void searchResultsAreNumberedAndFollowable() throws Exception {

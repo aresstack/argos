@@ -48,7 +48,8 @@ class CamoufoxWebSearchTest {
         site.start();
         String template = "http://localhost:" + site.getAddress().getPort() + "/search?q={query}";
         try (CamoufoxBrowser browser = new CamoufoxBrowser(new ArgosConfig("127.0.0.1", 0, local.executable(),
-                local.launchOptions(), temporary.resolve("profile"), true))) {
+                local.launchOptions(), temporary.resolve("profile"), true)
+                .withNetwork(com.aresstack.argos.TestNetworks.LOOPBACK))) {
             WebSearchService service = new WebSearchService(new CamoufoxSearchPageBrowser(browser),
                     new SearchSettings(List.of(SearchEngine.custom(template)), 10, Duration.ofMinutes(10)),
                     SearchLayoutResolver.NONE, Clock.systemUTC());

@@ -216,6 +216,8 @@ Die bisherigen Schlüssel `url`, `title` und `text` bleiben erhalten; neu sind `
 
 `browser_wait` verwendet dieselben Bedingungen (bei `fast` die von `balanced`) mit eigenem `timeoutMs` (500–60 000, Standard 10 000).
 
+Mit `ARGOS_TOOL_PROFILE=expert` kommen `browser_download`, `browser_document` und `browser_open_many` hinzu (Dokumente und mehrere Seiten über Hintergrund-Tabs derselben Session, ohne Skript-Injektion); Details und Parallelitätsmessung in [`docs/batch-and-documents.md`](docs/batch-and-documents.md).
+
 `browser_network` entfernt Query-Parameter und Benutzerinformationen aus den protokollierten URLs. Bis zu 200 Ereignisse bleiben im Speicher. `browser_evaluate` kann Webseiten verändern und ist deshalb nur für ausdrücklich autorisierte Nutzer über das gesicherte MCP-Plugin bestimmt.
 
 ### Werkzeugprofile

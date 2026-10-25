@@ -54,7 +54,7 @@ class CamoufoxBrowserTest {
                     "() => document.querySelector('#subject').textContent"));
             assertFalse(browser.networkEvents().isEmpty());
             var web = new com.aresstack.argos.web.WebSession(browser,
-                    new com.aresstack.argos.web.UrlPolicy(true), null);
+                    com.aresstack.argos.web.UrlPolicy.allowing("127.0.0.1,::1"), null);
             assertTrue(web.open(url).contains("TITLE: Argos smoke"));
             assertTrue(web.read(1).contains("Browser research"));
         } finally {
@@ -70,7 +70,7 @@ class CamoufoxBrowserTest {
         try (FixtureServer site = new FixtureServer();
              CamoufoxBrowser browser = new CamoufoxBrowser(new ArgosConfig(
                      "127.0.0.1", 0, local.executable(), local.launchOptions(),
-                     temporary.resolve("profile"), true))) {
+                     temporary.resolve("profile"), true).withNetwork(TestNetworks.LOOPBACK))) {
             // A2: the SPA renders its results 1.2 s after DOMContentLoaded behind a spinner.
             Map<String,Object> spa = browser.navigate(site.url("/spa.html"));
             ReadinessReport readiness = (ReadinessReport) spa.get("readiness");
@@ -84,8 +84,8 @@ class CamoufoxBrowserTest {
 
             try (CamoufoxBrowser thorough = new CamoufoxBrowser(new ArgosConfig(
                     "127.0.0.1", 0, local.executable(), local.launchOptions(), temporary.resolve("thorough"),
-                    true, null, "none", null, "argos", ToolProfile.LEGACY, true,
-                    com.aresstack.argos.page.ReadinessPolicy.thorough()))) {
+                    true, null, "none", null, "argos", ToolProfile.LEGACY,
+                    com.aresstack.argos.page.ReadinessPolicy.thorough()).withNetwork(TestNetworks.LOOPBACK))) {
                 ReadinessReport settled = (ReadinessReport) thorough.navigate(site.url("/spa.html")).get("readiness");
                 assertEquals(ReadinessReport.READY, settled.state(), settled.toString());
                 assertTrue(thorough.snapshot(8000).text().contains("Search results"), settled.toString());

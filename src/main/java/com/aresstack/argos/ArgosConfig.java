@@ -16,7 +16,7 @@ import java.util.Properties;
 public record ArgosConfig(
         String host, int port, Path executable, Path launchOptions, Path profile, boolean headless,
         String publicOrigin, String securityMode, String centralOauthIssuer, String requiredScope,
-        ToolProfile toolProfile, boolean allowPrivateNetworks, ReadinessPolicy readiness, NetworkSettings network) {
+        ToolProfile toolProfile, ReadinessPolicy readiness, NetworkSettings network) {
 
     public ArgosConfig {
         toolProfile = toolProfile == null ? ToolProfile.LEGACY : toolProfile;
@@ -28,7 +28,7 @@ public record ArgosConfig(
     public ArgosConfig(String host, int port, Path executable, Path launchOptions,
                        Path profile, boolean headless) {
         this(host, port, executable, launchOptions, profile, headless,
-                null, "central-oauth", null, "argos", ToolProfile.LEGACY, false, ReadinessPolicy.balanced(),
+                null, "central-oauth", null, "argos", ToolProfile.LEGACY, ReadinessPolicy.balanced(),
                 NetworkSettings.strict());
     }
 
@@ -36,22 +36,21 @@ public record ArgosConfig(
                        boolean headless, String publicOrigin, String securityMode,
                        String centralOauthIssuer, String requiredScope) {
         this(host, port, executable, launchOptions, profile, headless, publicOrigin, securityMode,
-                centralOauthIssuer, requiredScope, ToolProfile.LEGACY, false, ReadinessPolicy.balanced(),
+                centralOauthIssuer, requiredScope, ToolProfile.LEGACY, ReadinessPolicy.balanced(),
                 NetworkSettings.strict());
     }
 
     public ArgosConfig(String host, int port, Path executable, Path launchOptions, Path profile,
                        boolean headless, String publicOrigin, String securityMode, String centralOauthIssuer,
-                       String requiredScope, ToolProfile toolProfile, boolean allowPrivateNetworks,
-                       ReadinessPolicy readiness) {
+                       String requiredScope, ToolProfile toolProfile, ReadinessPolicy readiness) {
         this(host, port, executable, launchOptions, profile, headless, publicOrigin, securityMode,
-                centralOauthIssuer, requiredScope, toolProfile, allowPrivateNetworks, readiness,
+                centralOauthIssuer, requiredScope, toolProfile, readiness,
                 NetworkSettings.strict());
     }
 
     public ArgosConfig withNetwork(NetworkSettings settings) {
         return new ArgosConfig(host, port, executable, launchOptions, profile, headless, publicOrigin,
-                securityMode, centralOauthIssuer, requiredScope, toolProfile, allowPrivateNetworks, readiness,
+                securityMode, centralOauthIssuer, requiredScope, toolProfile, readiness,
                 settings);
     }
 
@@ -62,6 +61,11 @@ public record ArgosConfig(
         Properties desktop = readProperties(Path.of(System.getProperty("user.home"),
                 ".browser-event-hub", "desktop", "camoufox.properties"));
 
+        if (setting("ARGOS_ALLOW_PRIVATE_NETWORKS", application, "browser.allow-private-networks", null) != null) {
+            // One security logic for all tools: the proxy's NetworkPolicy. No second, looser switch.
+            throw new IllegalArgumentException("ARGOS_ALLOW_PRIVATE_NETWORKS was replaced by the network boundary: "
+                    + "admit intranet targets with ARGOS_INTRANET_ALLOW, or debug with ARGOS_NETWORK_POLICY=off.");
+        }
         String portText = setting("SERVER_PORT", application, "server.port", null);
         if (portText == null) {
             throw new IllegalArgumentException(
@@ -111,9 +115,6 @@ public record ArgosConfig(
                 Boolean.parseBoolean(setting("ARGOS_HEADLESS", application, "browser.headless", "false")),
                 publicOrigin, securityMode, issuer, requiredScope,
                 ToolProfile.parse(setting("ARGOS_TOOL_PROFILE", application, "tools.profile", null)),
-                // web_* tools refuse loopback/private targets unless explicitly allowed (local tests).
-                Boolean.parseBoolean(setting("ARGOS_ALLOW_PRIVATE_NETWORKS", application,
-                        "browser.allow-private-networks", "false")),
                 ReadinessPolicy.from(name -> setting(name, application, propertyKey(name), null)),
                 // Every browser connection passes Argos' local proxy and its policy (analysis 5.4).
                 NetworkSettings.parse(

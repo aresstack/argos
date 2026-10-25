@@ -30,10 +30,12 @@ public final class ArgosTools {
     /** Optional research orchestration; null unless ARGOS_RESEARCH=true. */
     private final ResearchTools research;
     private final ArgosBrowsingTools browsing;
+    /** browser_download, browser_document, browser_open_many; null in tests without a document store. */
+    private final DocumentAndBatchTools documents;
     private static final ObjectMapper JSON = new ObjectMapper();
 
     public ArgosTools(CamoufoxBrowser browser) {
-        this(browser, new WebSession(browser, new UrlPolicy(false), null));
+        this(browser, new WebSession(browser, UrlPolicy.publicOnly(), null));
     }
 
     public ArgosTools(CamoufoxBrowser browser, WebSession web) {
@@ -41,7 +43,13 @@ public final class ArgosTools {
     }
 
     public ArgosTools(CamoufoxBrowser browser, WebSession web, ResearchSettings researchSettings) {
+        this(browser, web, researchSettings, null);
+    }
+
+    public ArgosTools(CamoufoxBrowser browser, WebSession web, ResearchSettings researchSettings,
+                      DocumentAndBatchTools documents) {
         this.browser = browser;
+        this.documents = documents;
         this.web = web;
         this.browsing = new ArgosBrowsingTools(browser);
         this.research = researchSettings.enabled() && web.searchPort() != null
@@ -74,6 +82,7 @@ public final class ArgosTools {
                 // web_click, web_fill) joins COMPACT only after it has been tested with small models.
                 tools.addAll(browsing.expert());
                 tools.addAll(expertTools());
+                if (documents != null) tools.addAll(documents.all());
                 yield List.copyOf(tools);
             }
         };

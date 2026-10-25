@@ -51,7 +51,8 @@ class CamoufoxResearchTest {
         site.createContext("/review", exchange -> respond(exchange, 200, article("Review", "")));
         site.start();
         try (CamoufoxBrowser browser = new CamoufoxBrowser(new ArgosConfig("127.0.0.1", 0, local.executable(),
-                local.launchOptions(), temporary.resolve("profile"), true))) {
+                local.launchOptions(), temporary.resolve("profile"), true)
+                .withNetwork(com.aresstack.argos.TestNetworks.LOOPBACK))) {
             ResearchService research = new ResearchService(query -> hits, new CamoufoxResearchPageReader(browser),
                     new ResearchBudget(1, 8, 5, 3, Duration.ofSeconds(150), 3, 2, 3, 1));
 

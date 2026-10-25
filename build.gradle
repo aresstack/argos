@@ -37,6 +37,8 @@ dependencies {
     implementation 'org.eclipse.jetty:jetty-server:12.0.16'
     implementation 'org.eclipse.jetty.ee10:jetty-ee10-servlet:12.0.16'
     implementation 'org.slf4j:slf4j-simple:2.0.16'
+    // Document text extraction (browser_document). Office Open XML / ODF use the JDK, not Apache POI.
+    implementation 'org.apache.pdfbox:pdfbox:3.0.5'
     // Link extraction and search-page analysis from the serialized DOM on the Java side
     // (no page-visible scripts).
     implementation 'org.jsoup:jsoup:1.18.3'
@@ -52,6 +54,9 @@ tasks.named('test') {
     useJUnitPlatform()
     systemProperty 'argos.testCamoufox', providers.gradleProperty('testCamoufox').orElse('false').get()
     systemProperty 'argos.testHumanBrowser', providers.gradleProperty('testHumanBrowser').orElse('').get()
+    // Optional: engine-independent background-tab and batch tests against a local Chromium binary
+    // (e.g. -PtestChromium=/path/to/chrome) where no Camoufox is installed. Production uses Camoufox only.
+    systemProperty 'argos.testChromium', providers.gradleProperty('testChromium').orElse('').get()
     // Test-only environment. Production must receive SERVER_PORT from the managed service.
     environment 'SERVER_PORT', '18098'
     environment 'SECURITY_MODE', 'none'

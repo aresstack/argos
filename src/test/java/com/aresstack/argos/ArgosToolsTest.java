@@ -38,7 +38,7 @@ class ArgosToolsTest {
     @Test void publishesResearchToolsOnlyWhenEnabled() {
         try (CamoufoxBrowser browser = browser()) {
             var enabled = new ResearchSettings(true, ResearchBudget.defaults());
-            var web = new com.aresstack.argos.web.WebSession(browser, new com.aresstack.argos.web.UrlPolicy(false),
+            var web = new com.aresstack.argos.web.WebSession(browser, com.aresstack.argos.web.UrlPolicy.publicOnly(),
                     query -> new SearchResults(List.of(), List.of()));
             for (ToolProfile profile : ToolProfile.values()) {
                 int plain = new ArgosTools(browser, web).forProfile(profile).size();
@@ -78,7 +78,7 @@ class ArgosToolsTest {
     @Test void compactToolsAnswerInPlainTextAndReportErrorsAsToolErrors() {
         try (CamoufoxBrowser browser = browser()) {
             var web = new com.aresstack.argos.web.WebSession(browser,
-                    new com.aresstack.argos.web.UrlPolicy(false), null);
+                    com.aresstack.argos.web.UrlPolicy.publicOnly(), null);
             var tools = new ArgosTools(browser, web).forProfile(ToolProfile.COMPACT);
             var follow = tools.stream().filter(spec -> spec.tool().name().equals("web_follow")).findFirst().orElseThrow();
             var result = follow.callHandler().apply(null, new io.modelcontextprotocol.spec.McpSchema.CallToolRequest(

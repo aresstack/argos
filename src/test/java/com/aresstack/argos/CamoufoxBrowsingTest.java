@@ -77,7 +77,8 @@ class CamoufoxBrowsingTest {
         });
         site.start();
         try (CamoufoxBrowser browser = new CamoufoxBrowser(new ArgosConfig(
-                "127.0.0.1", 0, local.executable(), local.launchOptions(), temporary.resolve("profile"), true))) {
+                "127.0.0.1", 0, local.executable(), local.launchOptions(), temporary.resolve("profile"), true)
+                .withNetwork(TestNetworks.LOOPBACK))) {
             String base = "http://localhost:" + site.getAddress().getPort();
             browser.navigate(base + "/");
             String globals = "() => Object.keys(window).filter(k => /playwright|__pw|aria|argos/i.test(k))";

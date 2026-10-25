@@ -17,6 +17,7 @@ import com.aresstack.argos.network.FirefoxNetworkPrefs;
 import com.aresstack.argos.network.NetworkSettings;
 import com.aresstack.argos.network.Socks5Proxy;
 import com.aresstack.argos.network.UpstreamProxy;
+import com.aresstack.argos.fetch.BrowserContextAccess;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.microsoft.playwright.BrowserContext;
@@ -59,12 +60,13 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Function;
 
 /**
  * Owns one persistent Camoufox browser and serializes every Playwright API call
  * onto a single driver thread. Never attaches to an existing user's browser.
  */
-public final class CamoufoxBrowser implements BrowserPagePort, AutoCloseable {
+public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAccess, AutoCloseable {
     private static final int MAX_NETWORK_EVENTS = 200;
     /** Source documents above this size are not pulled through the protocol for a snapshot. */
     private static final long MAX_SOURCE_BYTES = 8_000_000;
@@ -83,6 +85,8 @@ public final class CamoufoxBrowser implements BrowserPagePort, AutoCloseable {
     private Playwright playwright;
     private Socks5Proxy proxy;
     private BrowserContext context;
+    /** True while a download or batch runs its own background tabs on the driver thread. */
+    private boolean backgroundWork;
 
     public CamoufoxBrowser(ArgosConfig config) {
         this(config, HumanInputSettings.fromEnvironment());
@@ -94,9 +98,14 @@ public final class CamoufoxBrowser implements BrowserPagePort, AutoCloseable {
     }
 
     public <T> T onBrowser(Callable<T> action) {
+        return onBrowser(action, 90);
+    }
+
+    /** Like {@link #onBrowser(Callable)} with a longer budget for multi-tab work such as batches. */
+    public <T> T onBrowser(Callable<T> action, int timeoutSeconds) {
         try {
             Future<T> result = driver.submit(action);
-            return result.get(90, TimeUnit.SECONDS);
+            return result.get(timeoutSeconds, TimeUnit.SECONDS);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new IllegalStateException("Browser task interrupted", e);
@@ -217,6 +226,7 @@ public final class CamoufoxBrowser implements BrowserPagePort, AutoCloseable {
 
     /** Registers a page as tab and records its network traffic. Idempotent. */
     private String adopt(Page page) {
+        if (backgroundWork) return null;
         Optional<String> known = tabs.idOf(page);
         if (known.isPresent()) return known.get();
         String id = tabs.adopt(page);
@@ -383,6 +393,27 @@ public final class CamoufoxBrowser implements BrowserPagePort, AutoCloseable {
             return result;
         });
     }
+
+    @Override
+    public <T> T inBrowserContext(Function<BrowserContext, T> task, int timeoutSeconds) {
+        return onBrowser(() -> {
+            activePage();
+            // Background tabs (downloads, batches) are opened and closed inside this task; they are
+            // not the agent's tabs and must never become current.
+            backgroundWork = true;
+            try {
+                return task.apply(context);
+            } finally {
+                backgroundWork = false;
+            }
+        }, timeoutSeconds);
+    }
+
+    @Override
+    public String currentUrl() {
+        return onBrowser(() -> tabs.current().map(Page::url).orElse(""));
+    }
+
 
     static void requireWebUrl(String target) {
         java.net.URI destination = java.net.URI.create(target);

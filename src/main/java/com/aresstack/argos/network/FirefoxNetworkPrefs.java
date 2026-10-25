@@ -49,7 +49,11 @@ public final class FirefoxNetworkPrefs {
         // WebRTC must never send UDP around the proxy. proxy_only_if_behind_proxy (Camoufox default) asks
         // the document's HTTP channel and is false for about:blank/srcdoc frames, blob: and data:
         // documents (PeerConnectionImpl::ShouldForceProxy), so those could send STUN to any host.
-        // proxy_only gives every document the path that proxied pages already take.
+        // proxy_only gives every document the path that proxied pages already take. It is the one pref here
+        // that is neither a Camoufox default nor invisible: only in such frames a page can see that no
+        // host/srflx candidate is gathered, exactly as in every proxied document already; the alternative
+        // is STUN UDP with the real source address to a page-chosen server. Normal-looking candidates in
+        // all documents need Camoufox's WebRTC spoof address (webrtc:ipv4/ipv6 in CAMOU_CONFIG).
         prefs.put("media.peerconnection.ice.proxy_only", true);
         prefs.put("media.peerconnection.ice.proxy_only_if_behind_proxy", true);
         return prefs;

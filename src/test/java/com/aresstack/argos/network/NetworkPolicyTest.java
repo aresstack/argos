@@ -143,10 +143,33 @@ class NetworkPolicyTest {
     }
 
     @Test
+    void ownIntranetAddressesNeedARangeRuleLikePublicOnes() throws Exception {
+        // Argos runs on 10.0.0.5; wiki.local resolves to that very machine. A host rule admits the rest
+        // of the intranet but not the local hop past the host firewall.
+        InetAddress own = ip("10.0.0.5");
+        NetworkPolicy hostRule = NetworkPolicy.parse("wiki.local").withLocalAddresses(() -> java.util.Set.of(own));
+        assertEquals(AddressClass.LOCAL_INTERFACE, hostRule.classify(own));
+        assertEquals(AddressClass.PRIVATE, hostRule.classify(ip("10.0.0.6")));
+        NetworkPolicy.Decision refused = hostRule.check("wiki.local", List.of(own));
+        assertFalse(refused.allowed());
+        assertTrue(refused.reason().contains("wiki.local@10.0.0.5/32"), refused.reason());
+        assertTrue(hostRule.check("wiki.local", List.of(ip("10.0.0.6"))).allowed());
+        assertTrue(NetworkPolicy.parse("wiki.local@10.0.0.5/32").withLocalAddresses(() -> java.util.Set.of(own))
+                .check("wiki.local", List.of(own)).allowed(), "the suggested range rule admits it");
+        // Loopback stays loopback even when it is (as always) an own address.
+        InetAddress loopback = ip("127.0.0.1");
+        assertEquals(AddressClass.LOOPBACK, NetworkPolicy.publicOnly()
+                .withLocalAddresses(() -> java.util.Set.of(loopback)).classify(loopback));
+    }
+
+    @Test
     void reportsWhenRulesAdmitLoopback() {
         assertTrue(NetworkPolicy.parse("127.0.0.1").admitsLoopback());
         assertTrue(NetworkPolicy.parse("[::1]").admitsLoopback());
         assertTrue(NetworkPolicy.parse("0.0.0.0/0").admitsLoopback());
+        assertTrue(NetworkPolicy.parse("127.0.0.2").admitsLoopback(), "any loopback address, not only 127.0.0.1");
+        assertTrue(NetworkPolicy.parse("127.1.0.0/16").admitsLoopback());
+        assertTrue(NetworkPolicy.parse("wiki.local@127.0.0.2/32").admitsLoopback());
         assertFalse(NetworkPolicy.parse("10.0.0.0/8,wiki.firma.local").admitsLoopback());
     }
 

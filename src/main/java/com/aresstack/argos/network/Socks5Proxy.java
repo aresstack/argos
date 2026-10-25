@@ -238,13 +238,9 @@ public final class Socks5Proxy implements AutoCloseable {
             // A page can trigger refusals in a loop; keep the service log bounded.
             long now = System.nanoTime();
             if (now - logWindowStart > 60_000_000_000L) {
-                if (suppressedInWindow > 0) {
-                    System.err.println("Argos network policy: " + suppressedInWindow
-                            + " further refused connections not logged");
-                }
+                reportSuppressedRefusals();
                 logWindowStart = now;
                 loggedInWindow = 0;
-                suppressedInWindow = 0;
             }
             if (loggedInWindow < LOG_LINES_PER_MINUTE) {
                 loggedInWindow++;
@@ -424,6 +420,18 @@ public final class Socks5Proxy implements AutoCloseable {
         closeQuietly(server);
         open.forEach(Socks5Proxy::closeQuietly);
         open.clear();
+        reportSuppressedRefusals();
+    }
+
+    /** The count of refusals the bounded log left out, at the end of a window and when the proxy stops. */
+    private void reportSuppressedRefusals() {
+        synchronized (blocked) {
+            if (suppressedInWindow > 0) {
+                System.err.println("Argos network policy: " + suppressedInWindow
+                        + " further refused connections not logged");
+                suppressedInWindow = 0;
+            }
+        }
     }
 
     /** The upstream proxy refused; carries the SOCKS reply code for the browser. */

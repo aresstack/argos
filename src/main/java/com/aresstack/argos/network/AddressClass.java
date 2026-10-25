@@ -50,6 +50,10 @@ public enum AddressClass {
         return this == UNSPECIFIED || this == MULTICAST;
     }
 
+    List<IpRange> ranges() {
+        return ranges;
+    }
+
     /** The first matching class, or {@code null} for public addresses. Embedded IPv4 counts as IPv4. */
     public static AddressClass of(InetAddress address) {
         return of(address.getAddress());

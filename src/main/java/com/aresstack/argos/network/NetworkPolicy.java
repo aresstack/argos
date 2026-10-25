@@ -66,12 +66,14 @@ public final class NetworkPolicy {
      * reach every loopback service, including Playwright's and Firefox' own ports.
      */
     public boolean admitsLoopback() {
-        return rules.stream().anyMatch(rule -> rule.range != null && (rule.range.contains(LOOPBACK_V4)
-                || rule.range.contains(LOOPBACK_V6)));
+        return rules.stream().anyMatch(rule -> rule.range != null
+                && AddressClass.LOOPBACK.ranges().stream().anyMatch(loopback -> overlap(rule.range, loopback)));
     }
 
-    private static final byte[] LOOPBACK_V4 = {127, 0, 0, 1};
-    private static final byte[] LOOPBACK_V6 = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1};
+    /** Whether two ranges share an address: either one holds the other's first address. */
+    private static boolean overlap(IpRange a, IpRange b) {
+        return a.contains(b.network()) || b.contains(a.network());
+    }
 
     public static NetworkPolicy parse(String commaSeparated) {
         if (commaSeparated == null || commaSeparated.isBlank()) return publicOnly();
@@ -112,9 +114,13 @@ public final class NetworkPolicy {
         for (InetAddress address : addresses) {
             AddressClass kind = classify(address);
             if (kind == null || admitted(host, address, kind)) continue;
+            String hint = kind.neverAllowed() ? ""
+                    : kind == AddressClass.LOCAL_INTERFACE ? " (this machine's own address; a host rule is not enough,"
+                            + " allow it with a range rule such as " + host + "@" + address.getHostAddress() + "/"
+                            + (address.getAddress().length == 4 ? 32 : 128) + ")"
+                    : " (allow it explicitly with ARGOS_INTRANET_ALLOW)";
             return Decision.blocked(kind.name().toLowerCase(Locale.ROOT).replace('_', '-')
-                    + " address " + address.getHostAddress()
-                    + (kind.neverAllowed() ? "" : " (allow it explicitly with ARGOS_INTRANET_ALLOW)"));
+                    + " address " + address.getHostAddress() + hint);
         }
         return Decision.ALLOWED;
     }
@@ -173,15 +179,19 @@ public final class NetworkPolicy {
         return checkHost(host, resolver);
     }
 
-    /** {@link AddressClass#of}, plus {@link AddressClass#LOCAL_INTERFACE} for this machine's addresses. */
+    /**
+     * {@link AddressClass#of}, plus {@link AddressClass#LOCAL_INTERFACE} for this machine's own addresses,
+     * public or intranet: a connection to them is local and reaches services bound to all interfaces past
+     * the host firewall, so like loopback they need a range rule; a host rule never admits them.
+     */
     public AddressClass classify(InetAddress address) {
         AddressClass kind = AddressClass.of(address);
-        if (kind != null) return kind;
+        if (kind != null && !kind.intranet()) return kind;
         try {
             InetAddress plain = InetAddress.getByAddress(address.getAddress());
-            return localAddresses.get().contains(plain) ? AddressClass.LOCAL_INTERFACE : null;
+            return localAddresses.get().contains(plain) ? AddressClass.LOCAL_INTERFACE : kind;
         } catch (UnknownHostException impossible) {
-            return null;
+            return kind;
         }
     }
 

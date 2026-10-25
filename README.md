@@ -159,7 +159,7 @@ Der Login allein ist **keine** Discovery-Abnahme. Nach erfolgreicher OAuth-Verbi
 | `text` | Inhalt unverändert |
 | `binary` | Kein Text, stattdessen `hint` mit Verweis auf die Dokumentverarbeitung (z. B. PDF) |
 
-Die bisherigen Schlüssel `url`, `title` und `text` bleiben erhalten; neu sind `status`, `documentType`, `contentType`, `truncated`, `characters`, `source` (`dom` oder `response`) und `hint`. Die Ausgabegrenze bleibt 1 000–60 000 Zeichen (Standard 16 000). Externe XML-Entitäten und DTDs werden beim Feed-Parsen nie geladen.
+Die bisherigen Schlüssel `url`, `title` und `text` bleiben erhalten; neu sind `status`, `documentType`, `contentType`, `truncated`, `characters`, `source` (`dom` oder `response`) und `hint`. Die Ausgabegrenze bleibt 1 000–60 000 Zeichen (Standard 16 000). Externe XML-Entitäten und DTDs werden beim Feed-Parsen nie geladen. Firefox rendert `application/rss+xml` und manche anderen Quelldokumente nicht, sondern speichert sie als Download. Solche Feeds, XML-, JSON- und Textdokumente ohne `Content-Disposition: attachment` liest Argos aus der gespeicherten Datei, ohne die Seite zu berühren. Dateien mit `attachment` bleiben Downloads.
 
 `browser_navigate` wartet nach dem Ladeereignis zusätzlich auf eine konfigurierbare **Seitenbereitschaft** und meldet sie als `readiness` (`state` = `ready`, `timeout`, `skipped` oder `static-document`, dazu `met` und `pending`). Ein Zeitlimit ist kein Fehler. Mögliche Bedingungen: Netzwerk ruhig, DOM stabil (Elementanzahl und Textlänge unverändert), kein sichtbarer Ladeindikator, sichtbarer Text vorhanden. Es gibt keine pauschalen Sleeps; abgetastet wird im Poll-Intervall und sofort zurückgekehrt, sobald alle Bedingungen gelten.
 

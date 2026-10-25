@@ -13,6 +13,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.microsoft.playwright.BrowserContext;
 import com.microsoft.playwright.BrowserType;
+import com.microsoft.playwright.Download;
 import com.microsoft.playwright.Locator;
 import com.microsoft.playwright.Page;
 import com.microsoft.playwright.Playwright;
@@ -57,6 +58,9 @@ public final class CamoufoxBrowser implements AutoCloseable {
     private MainDocument mainDocument;
     /** Last top-level response the browser saved as a download; it never replaces the rendered page. */
     private MainDocument lastDownload;
+    private Download download;
+    /** A feed, XML, JSON or text document Firefox saved instead of rendering, read from the saved file. */
+    private SavedDocument saved;
     private Playwright playwright;
     private BrowserContext context;
     private Page page;
@@ -136,13 +140,19 @@ public final class CamoufoxBrowser implements AutoCloseable {
         page = current;
         mainDocument = null;
         lastDownload = null;
+        download = null;
+        saved = null;
         activity.reset();
         // Protocol events only: observing them is invisible to the website.
         current.onRequest(request -> {
-            if (isMainDocument(current, request)) activity.reset();
+            if (isMainDocument(current, request)) {
+                activity.reset();
+                saved = null; // the page loads a new document
+            }
             activity.started();
             record("request", request.method(), request.url(), 0);
         });
+        current.onDownload(started -> download = started);
         current.onResponse(response -> {
             if (isMainDocument(current, response.request())) {
                 MainDocument document = new MainDocument(response);
@@ -210,6 +220,11 @@ public final class CamoufoxBrowser implements AutoCloseable {
                         : mainDocument != previousDocument ? mainDocument : null;
                 if (!isDownload(error, download)) throw error;
                 mainDocument = previousDocument; // the previous page stays rendered
+                Optional<SavedDocument> source = savedSourceDocument(p, download);
+                if (source.isPresent()) {
+                    saved = source.get();
+                    return savedResult(saved);
+                }
                 return downloadResult(target, download);
             }
             // Keep the listener's instance: it may already carry the requestfinished flag.
@@ -259,6 +274,7 @@ public final class CamoufoxBrowser implements AutoCloseable {
     public PageSnapshot snapshot(int maxCharacters) {
         return onBrowser(() -> {
             Page p = activePage();
+            if (saved != null) return snapshots.read(new SavedPageSource(saved), maxCharacters);
             return snapshots.read(new PlaywrightPageSource(p, mainDocument), maxCharacters);
         });
     }
@@ -303,11 +319,13 @@ public final class CamoufoxBrowser implements AutoCloseable {
     }
 
     private DocumentType documentType(Page p) {
-        DocumentType type = DocumentType.classify(contentType(), p.url());
+        DocumentType type = saved != null ? DocumentType.classify(saved.contentType(), saved.url())
+                : DocumentType.classify(contentType(), p.url());
         return type == DocumentType.UNKNOWN ? DocumentType.HTML : type;
     }
 
     private String contentType() {
+        if (saved != null) return saved.contentType();
         return mainDocument == null ? null : mainDocument.contentType();
     }
 
@@ -323,6 +341,63 @@ public final class CamoufoxBrowser implements AutoCloseable {
         if (String.valueOf(error.getMessage()).contains("Download is starting")) return true;
         return download != null && (download.attachment()
                 || DocumentType.classify(download.contentType(), download.url()) == DocumentType.BINARY);
+    }
+
+    /** A source document the browser downloaded; current until the page loads another document. */
+    private record SavedDocument(String url, int status, String contentType, String text) { }
+
+    /**
+     * Firefox saves feeds ({@code application/rss+xml}, {@code application/atom+xml}) and some other source
+     * documents as downloads instead of rendering them. Their text is read from the saved file: nothing of
+     * this reaches the page. An attachment ({@code Content-Disposition}) stays a download.
+     */
+    private Optional<SavedDocument> savedSourceDocument(Page p, MainDocument response) {
+        if (response == null || response.attachment()) return Optional.empty();
+        if (!DocumentType.classify(response.contentType(), response.url()).isSourceDocument()) return Optional.empty();
+        try {
+            if (download == null || !response.url().equals(download.url())) {
+                p.waitForCondition(() -> download != null && response.url().equals(download.url()),
+                        new Page.WaitForConditionOptions().setTimeout(5_000));
+            }
+            Download file = download;
+            download = null;
+            try {
+                Path path = file.path();
+                if (path == null || Files.size(path) > MAX_SOURCE_BYTES) return Optional.empty();
+                String text = new String(Files.readAllBytes(path), charset(response.contentType()));
+                return Optional.of(new SavedDocument(response.url(), response.status(), response.contentType(), text));
+            } finally {
+                file.delete();
+            }
+        } catch (java.io.IOException | RuntimeException unavailable) {
+            return Optional.empty(); // reported as a download, as before
+        }
+    }
+
+    private static java.nio.charset.Charset charset(String contentType) {
+        if (contentType != null) {
+            java.util.regex.Matcher m = java.util.regex.Pattern.compile("charset=\"?([\\w.:-]+)",
+                    java.util.regex.Pattern.CASE_INSENSITIVE).matcher(contentType);
+            if (m.find()) {
+                try {
+                    return java.nio.charset.Charset.forName(m.group(1));
+                } catch (RuntimeException unknown) {
+                    // fall through
+                }
+            }
+        }
+        return java.nio.charset.StandardCharsets.UTF_8;
+    }
+
+    private static Map<String, Object> savedResult(SavedDocument saved) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("url", saved.url());
+        result.put("title", "");
+        result.put("status", saved.status());
+        result.put("documentType", DocumentType.classify(saved.contentType(), saved.url()));
+        if (saved.contentType() != null) result.put("contentType", saved.contentType());
+        result.put("readiness", ReadinessReport.staticDocument());
+        return result;
     }
 
     private static Map<String, Object> downloadResult(String target, MainDocument download) {
@@ -385,6 +460,19 @@ public final class CamoufoxBrowser implements AutoCloseable {
             }
             return body;
         }
+    }
+
+    /** A downloaded source document: everything comes from the saved file, nothing from the page. */
+    private record SavedPageSource(SavedDocument saved) implements PageSource {
+        @Override public String url() { return saved.url(); }
+        @Override public String title() { return ""; }
+        @Override public int status() { return saved.status(); }
+        @Override public String contentType() { return saved.contentType(); }
+        @Override public Optional<String> responseText() { return Optional.of(saved.text()); }
+        @Override public boolean hasBody() { return false; }
+        @Override public String bodyText() { return ""; }
+        @Override public String rootText() { return saved.text(); }
+        @Override public String documentSource() { return saved.text(); }
     }
 
     /** Reads the current document via protocol data and Playwright's utility world only. */

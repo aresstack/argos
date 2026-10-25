@@ -40,7 +40,7 @@ public final class SnapshotReader {
                     .orElseGet(() -> new Extracted(page.rootText().trim(), "dom"));
             case JSON -> page.responseText().map(json -> new Extracted(DocumentText.json(json), "response"))
                     .orElseGet(() -> new Extracted(DocumentText.json(renderedText(page)), "dom"));
-            case TEXT -> page.responseText().map(text -> new Extracted(text, "response"))
+            case TEXT -> page.responseText().map(text -> new Extracted(DocumentText.plainText(text), "response"))
                     .orElseGet(() -> new Extracted(renderedText(page), "dom"));
             default -> new Extracted(renderedText(page), "dom");
         };

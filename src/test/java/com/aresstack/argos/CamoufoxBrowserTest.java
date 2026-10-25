@@ -47,6 +47,10 @@ class CamoufoxBrowserTest {
             assertEquals("Clicked successfully", browser.evaluate(
                     "() => document.querySelector('#subject').textContent"));
             assertFalse(browser.networkEvents().isEmpty());
+            var web = new com.aresstack.argos.web.WebSession(browser,
+                    new com.aresstack.argos.web.UrlPolicy(true), null);
+            assertTrue(web.open(url).contains("TITLE: Argos smoke"));
+            assertTrue(web.read(1).contains("Browser research"));
         } finally {
             site.stop(0);
         }

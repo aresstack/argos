@@ -55,6 +55,8 @@ public final class CamoufoxBrowser implements AutoCloseable {
     private final NetworkActivity activity = new NetworkActivity(System::currentTimeMillis);
     private final SnapshotReader snapshots = new SnapshotReader();
     private MainDocument mainDocument;
+    /** Last top-level response the browser saved as a download; it never replaces the rendered page. */
+    private MainDocument lastDownload;
     private Playwright playwright;
     private BrowserContext context;
     private Page page;
@@ -133,6 +135,7 @@ public final class CamoufoxBrowser implements AutoCloseable {
                 .orElseGet(context::newPage);
         page = current;
         mainDocument = null;
+        lastDownload = null;
         activity.reset();
         // Protocol events only: observing them is invisible to the website.
         current.onRequest(request -> {
@@ -141,7 +144,11 @@ public final class CamoufoxBrowser implements AutoCloseable {
             record("request", request.method(), request.url(), 0);
         });
         current.onResponse(response -> {
-            if (isMainDocument(current, response.request())) mainDocument = new MainDocument(response);
+            if (isMainDocument(current, response.request())) {
+                MainDocument document = new MainDocument(response);
+                if (document.attachment()) lastDownload = document;
+                else mainDocument = document;
+            }
             record("response", response.request().method(), response.url(), response.status());
         });
         current.onRequestFinished(request -> activity.ended());
@@ -187,13 +194,19 @@ public final class CamoufoxBrowser implements AutoCloseable {
             }
             Page p = activePage();
             ReadinessPolicy policy = config.readiness();
+            MainDocument previousDocument = mainDocument;
+            MainDocument previousDownload = lastDownload;
             Response response;
             try {
                 response = p.navigate(target, new Page.NavigateOptions()
                         .setWaitUntil(waitUntil(policy)).setTimeout(45_000));
             } catch (PlaywrightException error) {
-                if (!isDownload(error)) throw error;
-                return downloadResult(target);
+                // Only a response of this navigation may turn the failure into a download.
+                MainDocument download = lastDownload != previousDownload ? lastDownload
+                        : mainDocument != previousDocument ? mainDocument : null;
+                if (!isDownload(error, download)) throw error;
+                mainDocument = previousDocument; // the previous page stays rendered
+                return downloadResult(target, download);
             }
             if (response != null && isMainDocument(p, response.request())) mainDocument = new MainDocument(response);
             ReadinessReport readiness = settle(p, policy, null);
@@ -294,19 +307,18 @@ public final class CamoufoxBrowser implements AutoCloseable {
         };
     }
 
-    private boolean isDownload(PlaywrightException error) {
-        String message = String.valueOf(error.getMessage());
-        if (message.contains("Download is starting")) return true;
-        return mainDocument != null && (mainDocument.attachment()
-                || DocumentType.classify(mainDocument.contentType(), mainDocument.url()) == DocumentType.BINARY);
+    private static boolean isDownload(PlaywrightException error, MainDocument download) {
+        if (String.valueOf(error.getMessage()).contains("Download is starting")) return true;
+        return download != null && (download.attachment()
+                || DocumentType.classify(download.contentType(), download.url()) == DocumentType.BINARY);
     }
 
-    private Map<String, Object> downloadResult(String target) {
-        String type = mainDocument == null ? null : mainDocument.contentType();
+    private static Map<String, Object> downloadResult(String target, MainDocument download) {
+        String type = download == null ? null : download.contentType();
         Map<String, Object> result = new LinkedHashMap<>();
-        result.put("url", mainDocument == null ? target : mainDocument.url());
+        result.put("url", download == null ? target : download.url());
         result.put("title", "");
-        result.put("status", mainDocument == null ? 0 : mainDocument.status());
+        result.put("status", download == null ? 0 : download.status());
         result.put("documentType", DocumentType.BINARY);
         if (type != null) result.put("contentType", type);
         result.put("hint", "The browser treated this URL as a download, so no page was rendered. "

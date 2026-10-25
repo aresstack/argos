@@ -224,9 +224,14 @@ final class HumanTyping {
         return codePoint >= 0x20 && codePoint <= 0x7e || codePoint == '\n' || codePoint == '\r';
     }
 
-    /** Capitals (also Ä, Ö, Ü once Playwright sends them as real keys) and the shifted US symbols. */
+    /**
+     * Whether a person holds Shift for the character: US capitals and shifted symbols, and capital letters outside
+     * the US layout (Ä, Ö, Ü are Shift + ä, ö, ü on the keyboards that have them).
+     */
     static boolean shifted(int codePoint) {
-        return Character.isUpperCase(codePoint) || SHIFTED_SYMBOLS.indexOf(codePoint) >= 0;
+        return codePoint >= 'A' && codePoint <= 'Z' || SHIFTED_SYMBOLS.indexOf(codePoint) >= 0
+                || !inLayout(codePoint) && Character.isUpperCase(codePoint)
+                        && Character.toLowerCase(codePoint) != codePoint;
     }
 
     private static boolean isLetter(int codePoint) {

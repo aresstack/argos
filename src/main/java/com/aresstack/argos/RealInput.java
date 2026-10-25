@@ -310,6 +310,7 @@ final class RealInput {
      * Backspace are always pressed: reading the current value would go through Playwright's marked element reads.
      */
     void replaceText(Page page, Locator target, String text) {
+        text = lineEnds(text);
         rejectUntypeable(text);
         ElementHandle element = target.elementHandle(new Locator.ElementHandleOptions().setTimeout(ACTION_TIMEOUT_MS));
         try {
@@ -333,11 +334,13 @@ final class RealInput {
 
     /** Types {@code text} into the focused element. A trailing newline presses Enter. */
     void type(Page page, String text) {
+        text = lineEnds(text);
         rejectUntypeable(text);
         type(InputDevice.of(page), text);
     }
 
     void type(InputDevice device, String text) {
+        text = lineEnds(text);
         rejectUntypeable(text);
         playKeys(device, typing.type(text), true);
     }
@@ -420,11 +423,15 @@ final class RealInput {
         return untypeable(key.codePointAt(0), typed > 0);
     }
 
+    /** Windows (CRLF) and old Mac (CR) line ends as {@code \n}: one line break is one Enter. */
+    static String lineEnds(String text) {
+        return text.replace("\r\n", "\n").replace('\r', '\n');
+    }
+
     /** A line break before the end; one trailing newline (also CRLF) presses Enter on purpose. */
     static boolean lineBreakInside(String text) {
-        String body = text.endsWith("\r\n") ? text.substring(0, text.length() - 2)
-                : text.endsWith("\n") || text.endsWith("\r") ? text.substring(0, text.length() - 1) : text;
-        return body.indexOf('\n') >= 0 || body.indexOf('\r') >= 0;
+        String normalized = lineEnds(text);
+        return normalized.indexOf('\n') >= 0 && normalized.indexOf('\n') < normalized.length() - 1;
     }
 
     private static IllegalStateException untypeable(int codePoint, boolean erased) {

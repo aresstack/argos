@@ -38,18 +38,16 @@ class EvalHarnessCamoufoxTest {
                 return find(report, "(\\d+) clear nights") + " clear nights according to the annual report.";
             },
             "follow-link", steps -> {
-                steps.tool("web_open", "{\"url\": \"" + site + "/kvo/\"}");
+                steps.tool("web_open", "{\"url\": \"" + site + "/\"}");
                 String links = steps.tool("web_links", "{}");
                 String table = steps.tool("web_follow", "{\"link_id\": \"" + idOf(links, "Instruments") + "\"}");
                 assertTrue(table.contains("1.8 m"), table);
                 return "The Halvard Reflector (1.8 m).";
             },
             "dynamic-page", steps -> {
-                String page = steps.tool("web_open", "{\"url\": \"" + site + "/kvo/events\"}");
-                for (int attempt = 0; attempt < 5 && !page.contains("Next public lecture"); attempt++) {
-                    Thread.sleep(1000); // a language model needs at least this long for its next turn
-                    page = steps.tool("web_read", "{}");
-                }
+                String page = steps.tool("web_open", "{\"url\": \"" + site + "/events\"}");
+                // No waiting and no second read: web_open itself waits while "Loading…" has requests open.
+                assertTrue(page.contains("Next public lecture"), page);
                 return "The next public lecture is given by " + find(page, "with (Dr\\. \\w+ \\w+)");
             },
             "search-retry", steps -> {
@@ -68,7 +66,7 @@ class EvalHarnessCamoufoxTest {
                 return "It is the " + find(mirror, "named the (\\w+ Dark-Sky Zone)");
             },
             "simple-form", steps -> {
-                steps.tool("web_open", "{\"url\": \"" + site + "/kvo/tickets\"}");
+                steps.tool("web_open", "{\"url\": \"" + site + "/tickets\"}");
                 String controls = steps.tool("web_controls", "{}");
                 assertTrue(controls.contains("Ticket number"), controls);
                 steps.tool("web_fill", "{\"target\": \"Ticket number\", \"text\": \"KV-4471\"}");
@@ -77,7 +75,7 @@ class EvalHarnessCamoufoxTest {
                 return find(status, "(Ticket KV-4471: CONFIRMED\\. Seat F12)");
             },
             "long-page", steps -> {
-                String part = steps.tool("web_open", "{\"url\": \"" + site + "/kvo/archive\"}");
+                String part = steps.tool("web_open", "{\"url\": \"" + site + "/archive\"}");
                 for (int next = 2; !part.contains("founding director") && part.contains("web_read part="); next++) {
                     part = steps.tool("web_read", "{\"part\": " + next + "}");
                 }
@@ -104,6 +102,14 @@ class EvalHarnessCamoufoxTest {
                             "compact-interact", 1, transcript);
                     report.add(record, transcript, world.requests());
                 }
+            }
+            // Expert profile: web_read continues on the page browser_navigate opened (first Windows run, PR #13).
+            try (ArgosUnderTest.Session session = argos.startSession(EvalProfile.EXPERT, false);
+                 McpToolGateway gateway = new McpToolGateway(session.url(), Duration.ofSeconds(120))) {
+                assertFalse(gateway.call("browser_navigate", Map.of("url", world.siteBase() + "/archive")).error());
+                ToolGateway.ToolOutcome part = gateway.call("web_read", Map.of("part", 3));
+                assertFalse(part.error(), part.text());
+                assertTrue(part.text().contains("Margit Solberg"), part.text());
             }
         }
         report.finish("reference agent");

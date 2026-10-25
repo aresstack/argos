@@ -22,6 +22,11 @@ public enum EvalProfile {
         this.compactInteraction = compactInteraction;
     }
 
+    /** compact has no tool that types into a field or presses a button. */
+    public boolean canSubmitForms() {
+        return this != COMPACT;
+    }
+
     public String id() {
         return name().toLowerCase(Locale.ROOT).replace('_', '-');
     }

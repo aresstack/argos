@@ -8,14 +8,19 @@ import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 
 /**
  * Runs the task set for every configured model and tool profile against Argos and writes one report.
- * See docs/model-evaluation.md for the command and every setting.
+ * Exits with status 2 when the evaluation is incomplete (a model could not be loaded or failed mid-run), so a
+ * partial result is never mistaken for a finished one. See docs/model-evaluation.md.
  */
 public final class EvalMain {
+    static final int INCOMPLETE = 2;
+
     private EvalMain() {
     }
 
@@ -27,18 +32,28 @@ public final class EvalMain {
         String stamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss"));
         EvalReport report = new EvalReport(settings.outputDirectory().resolve(stamp));
         Path browserProfile = Files.createTempDirectory("argos-eval-profile");
+        Set<String> unavailable = new HashSet<>();
 
         try (FixtureWorld world = new FixtureWorld();
              ArgosUnderTest argos = new ArgosUnderTest(ArgosConfig.fromEnvironment(), browserProfile,
-                     settings.headless(), world)) {
-            String warmedUp = null;
+                     settings.headless(), world, settings.partCharacters())) {
+            ChatModel loaded = null;
             for (EvalSettings.Target target : settings.targets()) {
+                if (unavailable.contains(target.model())) {
+                    report.addSkipped(target.id(), "model could not be loaded, see warm-up");
+                    System.out.println("Skipping " + target.id() + ": model could not be loaded");
+                    continue;
+                }
                 ChatModel model = settings.chatModel(target.model());
-                if (!target.model().equals(warmedUp)) {
+                if (loaded == null || !loaded.name().equals(target.model())) {
+                    // Free the GPU for the next model; two models side by side would distort or prevent the run.
+                    if (loaded != null) loaded.release();
                     EvalReport.Warmup warmup = warmUp(model);
                     report.addWarmup(warmup);
-                    warmedUp = target.model();
+                    loaded = model;
                     if (warmup.error() != null) {
+                        unavailable.add(target.model());
+                        report.addSkipped(target.id(), "model could not be loaded, see warm-up");
                         System.out.println("Skipping " + target.id() + ": " + warmup.error());
                         continue;
                     }
@@ -49,13 +64,19 @@ public final class EvalMain {
                     }
                 }
             }
+            if (loaded != null) loaded.release();
         }
         Path summary = report.finish(settings.describe());
         for (EvalReport.Configuration c : EvalReport.configurations(report.records())) {
-            System.out.printf(Locale.ROOT, "%s@%s: %d of %d tasks, %.1f tool calls per task, %d errors%n",
-                    c.model(), c.profile(), c.successes(), c.runs(), c.toolCallsPerRun(), c.errors());
+            System.out.printf(Locale.ROOT, "%s@%s: %d of %d solvable tasks, %.1f tool calls per task, %d errors%s%n",
+                    c.model(), c.profile(), c.successes(), c.solvableRuns(), c.toolCallsPerRun(), c.errors(),
+                    c.invalidRuns() > 0 ? ", " + c.invalidRuns() + " INVALID runs (model errors)" : "");
         }
         System.out.println("Report: " + summary.toAbsolutePath());
+        if (!report.complete()) {
+            System.err.println("INCOMPLETE evaluation: " + report.incompleteReason());
+            System.exit(INCOMPLETE);
+        }
     }
 
     private static void runTask(EvalSettings settings, EvalReport report, FixtureWorld world, ArgosUnderTest argos,
@@ -69,13 +90,17 @@ public final class EvalMain {
              McpToolGateway gateway = new McpToolGateway(session.url(), Duration.ofSeconds(180))) {
             report.addTools(target.profile().id(), gateway.tools().stream().map(ToolDefinition::name).toList());
             record = new AgentLoop(model, gateway, settings.maxTurns(), settings.taskTimeLimit(),
-                    "ollama".equals(settings.api()) ? settings.generation().contextLength() : null)
-                    .run(task, task.promptFor(world.siteBase()), target.profile().id(), repetition, transcript);
+                    "ollama".equals(settings.api()) ? settings.generation().contextLength() : null,
+                    settings.systemPrompt())
+                    .run(task, task.promptFor(world.siteBase()), target.profile().id(), repetition,
+                            task.solvableWith(target.profile()), transcript);
         }
         report.add(record, transcript, task.live() ? List.of() : world.requests());
-        System.out.printf(Locale.ROOT, "%-28s %-15s run %d: %-4s %2d calls, %d errors, %d recovery, %5.1f s, %s%n",
-                target.id(), task.id(), repetition, record.successful() ? "OK" : "FAIL", record.toolCallCount(),
-                record.errors(), record.recoveryActions(), record.elapsedMillis() / 1000.0, record.stopReason());
+        System.out.printf(Locale.ROOT, "%-28s %-15s run %d: %-7s %2d calls, %d errors, %d recovery, %5.1f s, %s%n",
+                target.id(), task.id(), repetition,
+                !record.valid() ? "INVALID" : record.successful() ? "OK" : record.applicable() ? "FAIL" : "n/a",
+                record.toolCallCount(), record.errors(), record.recoveryActions(), record.elapsedMillis() / 1000.0,
+                record.stopReason());
     }
 
     /** Loads the model before the first task, so loading never counts as task time. */

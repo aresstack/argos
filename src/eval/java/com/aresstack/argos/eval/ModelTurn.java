@@ -8,15 +8,17 @@ import java.util.List;
  * @param promptTokens     tokens the provider counted for the input, or -1 if it reported none
  * @param completionTokens tokens the provider counted for the output, or -1 if it reported none
  * @param loadMillis       time the server spent loading the model for this request (Ollama only, else 0)
+ * @param thinking         the model's separate reasoning text (Ollama "thinking"), or empty
  */
 public record ModelTurn(String content, List<ToolCall> toolCalls, int promptTokens, int completionTokens,
-                        long loadMillis) {
+                        long loadMillis, String thinking) {
     public ModelTurn {
         content = content == null ? "" : content;
         toolCalls = toolCalls == null ? List.of() : List.copyOf(toolCalls);
+        thinking = thinking == null ? "" : thinking;
     }
 
     public ModelTurn(String content, List<ToolCall> toolCalls, int promptTokens, int completionTokens) {
-        this(content, toolCalls, promptTokens, completionTokens, 0);
+        this(content, toolCalls, promptTokens, completionTokens, 0, "");
     }
 }

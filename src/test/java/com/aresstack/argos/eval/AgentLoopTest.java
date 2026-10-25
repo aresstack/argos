@@ -37,7 +37,7 @@ class AgentLoopTest {
         }
     }
 
-    static final class FakeTools implements ToolGateway {
+    static class FakeTools implements ToolGateway {
         final List<String> calls = new ArrayList<>();
 
         @Override
@@ -112,6 +112,62 @@ class AgentLoopTest {
     }
 
     @Test
+    void modelErrorsAndUnsolvableTasksStayOutOfTheSuccessRateAndMarkTheReportIncomplete() throws Exception {
+        RunRecord invalid = new AgentLoop(new ScriptedModel(), new FakeTools(), 5, Duration.ofMinutes(1), 8192)
+                .run(TASK, "q", "expert", 1, new ArrayList<>());
+        RunRecord notSolvable = new AgentLoop(new ScriptedModel(new ModelTurn("No form tool.", List.of(), 1, 1)),
+                new FakeTools(), 5, Duration.ofMinutes(1), 8192).run(TASK, "q", "expert", 1, false, new ArrayList<>());
+        RunRecord solved = new AgentLoop(new ScriptedModel(call("web_search", "{\"query\": \"x\"}"),
+                new ModelTurn("212", List.of(), 1, 1)), new FakeTools(), 5, Duration.ofMinutes(1), 8192)
+                .run(TASK, "q", "expert", 1, new ArrayList<>());
+
+        assertFalse(invalid.valid());
+        var configuration = EvalReport.configurations(List.of(invalid, notSolvable, solved)).get(0);
+        assertEquals(1, configuration.solvableRuns());
+        assertEquals(1, configuration.notSolvableRuns());
+        assertEquals(1, configuration.invalidRuns());
+        assertEquals(1.0, configuration.successRate());
+
+        EvalReport report = new EvalReport(java.nio.file.Files.createTempDirectory("eval-report"));
+        report.add(solved, List.of(), List.of());
+        assertTrue(report.complete());
+        report.addSkipped("gpt-oss:20b@compact", "model could not be loaded, see warm-up");
+        report.add(invalid, List.of(), List.of());
+        assertFalse(report.complete());
+        String summary = java.nio.file.Files.readString(report.finish("s"));
+        assertTrue(summary.startsWith("# Argos model evaluation\n\n> **INCOMPLETE.** `gpt-oss:20b@compact` did not run"),
+                summary);
+    }
+
+    @Test
+    void thinkingGoesBackToTheModelWithItsToolCall() {
+        ScriptedModel model = new ScriptedModel(new ModelTurn("", List.of(new ToolCall("c", "web_search",
+                "{\"query\": \"x\"}", false)), 1, 1, 0, "I should search."), new ModelTurn("212", List.of(), 1, 1));
+        List<ChatMessage> transcript = new ArrayList<>();
+        new AgentLoop(model, new FakeTools(), 5, Duration.ofMinutes(1), 8192).run(TASK, "q", "compact", 1, transcript);
+
+        assertEquals("I should search.", transcript.get(2).thinking());
+    }
+
+    @Test
+    void aConversationLargerThanTheContextIsFlaggedEvenWhenTheServerReportsLess() {
+        String bigPage = "x".repeat(40_000);
+        ToolGateway pages = new FakeTools() {
+            @Override
+            public ToolOutcome call(String name, Map<String, Object> arguments) {
+                return new ToolOutcome(bigPage, false);
+            }
+        };
+        ScriptedModel model = new ScriptedModel(call("web_search", "{\"query\": \"x\"}"),
+                new ModelTurn("212", List.of(), 7000, 1));
+        RunRecord record = new AgentLoop(model, pages, 5, Duration.ofMinutes(1), 8192)
+                .run(TASK, "q", "compact", 1, new ArrayList<>());
+
+        assertTrue(record.estimatedPromptTokens() > 8192, String.valueOf(record.estimatedPromptTokens()));
+        assertTrue(record.contextFull());
+    }
+
+    @Test
     void anAnswerWithoutAnyWorkingToolCallIsNotASuccessAndAFullContextIsFlagged() {
         ScriptedModel guessing = new ScriptedModel(new ModelTurn("212", List.of(), 8000, 3));
         RunRecord record = new AgentLoop(guessing, new FakeTools(), 5, Duration.ofMinutes(1), 8192)
@@ -144,11 +200,14 @@ class AgentLoopTest {
         RunRecord failed = new AgentLoop(model, new FakeTools(), 5, Duration.ofMinutes(1), 8192)
                 .run(TASK, "q", "compact", 1, new ArrayList<>());
 
-        String summary = EvalReport.summary("model=x", Map.of("compact", List.of("web_search")), List.of(), List.of(failed));
+        String summary = EvalReport.summary("model=x", Map.of("compact", List.of("web_search")), List.of(), List.of(),
+                List.of(failed));
 
-        assertTrue(summary.contains("| scripted | compact | **0/1** (0%) | 1 (1.0) | 1 | 0 | 0 | 110/11 |"), summary);
+        assertTrue(summary.contains("| scripted | compact | **0/1** (0%) | 0 | 0 | 1 (1.0) | 1 | 0 | 0 | 110/11 |"),
+                summary);
+        assertFalse(summary.contains("INCOMPLETE"));
         assertTrue(summary.contains("| t | ✗ 1 |"));
-        assertTrue(summary.contains("| t | test | 1 | **no** | 1 | 1 | 0 | 110/11 (100) |"));
+        assertTrue(summary.contains("| t | test | 1 | **no** | 1 | 1 | 0 | 110/11 (100, est. "), summary);
         assertTrue(summary.contains("## Failures"));
         assertTrue(summary.contains("`web_search {\"query\": \"first\"}` ERROR"));
     }

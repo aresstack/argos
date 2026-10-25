@@ -103,18 +103,35 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
     /** Counted down once the stopped browser has exited (or was killed). */
     private volatile CountDownLatch browserStopped;
     private Socks5Proxy proxy;
+    private final HostResolver resolver;
+    private static final long LOADING_GRACE_MILLIS = 8_000;
+    private static final java.util.regex.Pattern LOADING_HINT = java.util.regex.Pattern.compile(
+            "(?iu)\\b(loading|wird geladen|lädt|bitte warten|please wait)\\b");
     private BrowserContext context;
     /** True while a download or batch runs its own background tabs on the driver thread. */
     private boolean backgroundWork;
 
     public CamoufoxBrowser(ArgosConfig config) {
-        this(config, HumanInputSettings.fromEnvironment());
+        this(config, HumanInputSettings.fromEnvironment(), HostResolver.SYSTEM);
+    }
+
+    /**
+     * With another host resolution for the policy and the proxy, e.g. the model evaluation's fictional
+     * {@code .test} domains on loopback. Every connection still passes the proxy and its policy.
+     */
+    public CamoufoxBrowser(ArgosConfig config, HostResolver resolver) {
+        this(config, HumanInputSettings.fromEnvironment(), resolver);
     }
 
     CamoufoxBrowser(ArgosConfig config, HumanInputSettings humanInput) {
+        this(config, humanInput, HostResolver.SYSTEM);
+    }
+
+    private CamoufoxBrowser(ArgosConfig config, HumanInputSettings humanInput, HostResolver resolver) {
         this.config = config;
         this.input = new RealInput(humanInput);
-        this.urlPolicy = UrlPolicy.from(config.network());
+        this.resolver = resolver;
+        this.urlPolicy = UrlPolicy.from(config.network(), resolver);
         this.network = new NetworkRecorder(masker, config.networkBodies());
     }
 
@@ -327,7 +344,7 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
                     }
                 }
                 // Fail closed: no proxy, no browser.
-                proxy = Socks5Proxy.start(network, HostResolver.SYSTEM);
+                proxy = Socks5Proxy.start(network, resolver);
                 proxy.protectLoopbackPort(config.port());
                 prefs.putAll(FirefoxNetworkPrefs.forLocalSocks(proxy.port()));
             } else {
@@ -611,6 +628,11 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
     }
 
     @Override
+    public String currentAddress() {
+        return currentUrl();
+    }
+
+    @Override
     public String currentUrl() {
         return onBrowser(() -> tabs.current().map(this::shownUrl).orElse(""));
     }
@@ -669,13 +691,13 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
                     .setWaitUntil(WaitUntilState.DOMCONTENTLOADED).setTimeout(45_000);
             if (referer != null && !referer.isBlank()) options.setReferer(referer);
             p.navigate(url, options);
-            return capture(p);
+            return captureWhenLoaded(p);
         });
     }
 
     @Override
     public PageCapture current() {
-        return onBrowser(() -> capture(activePage()));
+        return onBrowser(() -> captureWhenLoaded(activePage()));
     }
 
     @Override
@@ -694,6 +716,24 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
             activePage().navigate("about:blank");
             return null;
         });
+    }
+
+    /**
+     * A page that still says it is loading while its own requests are in flight (a single-page app waiting for
+     * its data) is read again once those requests finished, at most {@link #LOADING_GRACE_MILLIS} later. Only
+     * protocol events are watched; the second read happens only for such pages. Small models otherwise read
+     * "Loading…" and give up (Phase 7 evaluation, task dynamic-page).
+     */
+    private PageCapture captureWhenLoaded(Page p) {
+        PageCapture capture = capture(p);
+        if (!LOADING_HINT.matcher(capture.text()).find()) return capture;
+        NetworkActivity activity = document(p).activity;
+        long deadline = System.currentTimeMillis() + LOADING_GRACE_MILLIS;
+        if (activity.inflight() == 0) return capture;
+        while (activity.inflight() > 0 && System.currentTimeMillis() < deadline) p.waitForTimeout(150);
+        // Rendering the arrived data takes a moment after the response.
+        p.waitForTimeout(200);
+        return capture(p);
     }
 
     private PageCapture capture(Page p) {

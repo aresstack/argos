@@ -18,16 +18,17 @@ public final class TaskCatalog {
         return List.of(
                 new EvalTask("find-site", "find a site",
                         "What is the web address (URL) of the official website of the Kestrel Valley Observatory?",
-                        List.of("/kvo/?(?=$|[\\s)\\].,;'\"<>*`])"), List.of("/fans/", "hotel-kestrel"), EvalTask.Setup.NONE),
+                        List.of("kestrel-observatory\\.test(:\\d+)?/?(?=$|[\\s)\\].,;'\"<>*`])"),
+                        List.of("fanclub", "hotel\\.test"), EvalTask.Setup.NONE),
                 new EvalTask("search-pick", "web search, pick relevant hits",
                         "How many clear nights did the Kestrel Valley Observatory record in 2025? "
                                 + "I need the official number, not a guess.",
                         List.of("\\b212\\b"), List.of("\\b150\\b"), EvalTask.Setup.NONE),
                 new EvalTask("follow-link", "follow a link",
-                        "Start on {site}/kvo/ and find out which telescope of the observatory has the largest aperture.",
+                        "Start on {site}/ and find out which telescope of the observatory has the largest aperture.",
                         List.of("halvard"), List.of(), EvalTask.Setup.NONE),
                 new EvalTask("dynamic-page", "read a dynamic page",
-                        "Open {site}/kvo/events . Who gives the next public lecture?",
+                        "Open {site}/events . Who gives the next public lecture?",
                         List.of("marrow"), List.of(), EvalTask.Setup.NONE),
                 new EvalTask("search-retry", "recover from a failed search",
                         "On which hours is the Kestrel Valley Observatory open on Saturdays? Use a web search.",
@@ -37,10 +38,10 @@ public final class TaskCatalog {
                         "What is the name of the protected dark-sky zone around the Kestrel Valley Observatory?",
                         List.of("ravenmoor"), List.of(), EvalTask.Setup.NONE),
                 new EvalTask("simple-form", "fill a simple form",
-                        "On {site}/kvo/tickets you can check tickets. What is the status and the seat of ticket KV-4471?",
-                        List.of("confirmed", "F\\s?12"), List.of(), EvalTask.Setup.NONE),
+                        "On {site}/tickets you can check tickets. What is the status and the seat of ticket KV-4471?",
+                        List.of("confirmed", "F\\s?12"), List.of(), EvalTask.Setup.NONE, true),
                 new EvalTask("long-page", "read a long page in parts",
-                        "Open {site}/kvo/archive . Who was the founding director of the observatory?",
+                        "Open {site}/archive . Who was the founding director of the observatory?",
                         List.of("solberg"), List.of(), EvalTask.Setup.NONE));
     }
 

@@ -1,5 +1,6 @@
 package com.aresstack.argos.eval;
 
+import com.aresstack.argos.network.HostResolver;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 
@@ -21,20 +22,29 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * A small fictional web on loopback, so that answers cannot come from a model's training data and every run
- * sees the same pages. The search engine is addressed as {@code localhost}, the sites as {@code 127.0.0.1}:
- * different hosts, so Argos' search analysis treats the hits as external results, as on a real engine.
+ * sees the same pages. Each site has its own domain under the reserved {@code .test} top-level domain (RFC
+ * 2606), resolved to loopback by {@link #resolver()} for Argos' network policy and proxy. Real-looking domains
+ * matter: with {@code http://127.0.0.1:port} addresses, local models often refused to open a page at all,
+ * assuming local addresses were off limits (first Windows run, PR #13).
  *
- * <p>Pages: the Kestrel Valley Observatory site (/kvo/...), plus distractors (fan club, hotel, forum) and a
- * mirror (/atlas/...). /kvo/darksky always fails with HTTP 500; the next search fails once with HTTP 503
- * after {@link #failNextSearch()}.
+ * <p>Sites: the Kestrel Valley Observatory ({@link #OBSERVATORY}), distractors (fan club, hotel, forum), a
+ * mirror (sky atlas) and a search engine. The observatory's /darksky always fails with HTTP 500; the next
+ * search fails once with HTTP 503 after {@link #failNextSearch()}.
  */
 public final class FixtureWorld implements AutoCloseable {
     private static final Set<String> STOP_WORDS = Set.of("the", "and", "for", "what", "which", "who", "how", "many",
             "with", "from", "that", "this", "are", "was", "did", "does", "have", "has", "its", "official", "website",
             "site", "page", "web", "www", "http", "https", "find", "about", "near", "der", "die", "das", "und");
 
+    public static final String OBSERVATORY = "www.kestrel-observatory.test";
+    static final String FAN_CLUB = "kvo-fanclub.test";
+    static final String HOTEL = "kestrel-valley-hotel.test";
+    static final String FORUM = "stargazer-forum.test";
+    static final String ATLAS = "nordic-sky-atlas.test";
+    static final String ENGINE = "kestrelsearch.test";
+
     /** One indexed page: title and snippet as the engine shows them, plus terms the engine matches on. */
-    record Entry(String path, String title, String snippet, String terms) {
+    record Entry(String host, String path, String title, String snippet, String terms) {
         Set<String> tokens() {
             return tokenize(title + " " + snippet + " " + terms);
         }
@@ -42,47 +52,48 @@ public final class FixtureWorld implements AutoCloseable {
 
     // Index order breaks score ties: distractors come first, so picking the right hit is the model's job.
     static final List<Entry> INDEX = List.of(
-            new Entry("/fans/kvo", "Kestrel Valley Observatory Fan Club (unofficial)",
+            new Entry(FAN_CLUB, "/", "Kestrel Valley Observatory Fan Club (unofficial)",
                     "Unofficial fan pages, photos and rumours about the Kestrel Valley Observatory.",
                     "observatory fans club photos rumours"),
-            new Entry("/hotel-kestrel/", "Kestrel Valley Hotel – stay near the observatory",
+            new Entry(HOTEL, "/", "Kestrel Valley Hotel – stay near the observatory",
                     "Rooms with a view of the Kestrel Valley, 10 minutes from the observatory. Restaurant opening hours on Saturday and Sunday.",
                     "hotel rooms restaurant opening hours saturday sunday visit observatory"),
-            new Entry("/kvo/", "Kestrel Valley Observatory – Official Website",
+            new Entry(OBSERVATORY, "/", "Kestrel Valley Observatory – Official Website",
                     "Public observing nights, lectures, museum and visitor information of the Kestrel Valley Observatory.",
                     "official homepage visit visitor opening hours saturday sunday admission contact address"),
-            new Entry("/forum/kvo-clear-nights",
+            new Entry(FORUM, "/threads/kvo-clear-nights",
                     "Stargazer Forum: How many clear nights did Kestrel Valley Observatory have in 2025?",
                     "Forum thread with guesses about the number of clear nights at the observatory last year.",
                     "clear nights 2025 weather statistics number"),
-            new Entry("/kvo/report-2025", "Annual Report 2025 – Kestrel Valley Observatory",
+            new Entry(OBSERVATORY, "/report-2025", "Annual Report 2025 – Kestrel Valley Observatory",
                     "Observing statistics, clear nights, visitors and finances of the observatory for 2025.",
                     "annual report statistics clear nights 2025 visitors number"),
-            new Entry("/kvo/darksky", "Dark-sky protection zone map – Kestrel Valley Observatory",
+            new Entry(OBSERVATORY, "/darksky", "Dark-sky protection zone map – Kestrel Valley Observatory",
                     "Official map and name of the protected dark-sky zone around the observatory.",
                     "dark sky darksky zone protection protected area map name light pollution"),
-            new Entry("/atlas/kvo-darksky", "Nordic Sky Atlas: Kestrel Valley dark-sky zone (mirror)",
+            new Entry(ATLAS, "/maps/kestrel-valley", "Nordic Sky Atlas: Kestrel Valley dark-sky zone (mirror)",
                     "Mirror of the observatory's dark-sky map with the zone's lighting rules.",
                     "dark sky darksky zone protection protected area map name light pollution mirror"),
-            new Entry("/kvo/instruments", "Instruments – Kestrel Valley Observatory",
+            new Entry(OBSERVATORY, "/instruments", "Instruments – Kestrel Valley Observatory",
                     "Telescopes of the observatory with type, aperture and year of service.",
                     "telescope telescopes aperture mirror reflector refractor"),
-            new Entry("/kvo/events", "Events – Kestrel Valley Observatory",
+            new Entry(OBSERVATORY, "/events", "Events – Kestrel Valley Observatory",
                     "Upcoming lectures and observing nights.", "events lecture lectures talk speaker calendar"),
-            new Entry("/kvo/archive", "History and archive – Kestrel Valley Observatory",
+            new Entry(OBSERVATORY, "/archive", "History and archive – Kestrel Valley Observatory",
                     "Night logs since 1962 and the history of the observatory.",
                     "history archive founding founded director logbook"));
 
+    /** Static pages by host + path. */
     private static final Map<String, String> PAGES = Map.ofEntries(
-            Map.entry("/kvo/", "kvo-home.html"),
-            Map.entry("/kvo/instruments", "kvo-instruments.html"),
-            Map.entry("/kvo/events", "kvo-events.html"),
-            Map.entry("/kvo/tickets", "kvo-tickets.html"),
-            Map.entry("/kvo/report-2025", "kvo-report-2025.html"),
-            Map.entry("/forum/kvo-clear-nights", "forum-clear-nights.html"),
-            Map.entry("/fans/kvo", "fans-kvo.html"),
-            Map.entry("/hotel-kestrel/", "hotel.html"),
-            Map.entry("/atlas/kvo-darksky", "atlas-darksky.html"));
+            Map.entry(OBSERVATORY + "/", "kvo-home.html"),
+            Map.entry(OBSERVATORY + "/instruments", "kvo-instruments.html"),
+            Map.entry(OBSERVATORY + "/events", "kvo-events.html"),
+            Map.entry(OBSERVATORY + "/tickets", "kvo-tickets.html"),
+            Map.entry(OBSERVATORY + "/report-2025", "kvo-report-2025.html"),
+            Map.entry(FORUM + "/threads/kvo-clear-nights", "forum-clear-nights.html"),
+            Map.entry(FAN_CLUB + "/", "fans-kvo.html"),
+            Map.entry(HOTEL + "/", "hotel.html"),
+            Map.entry(ATLAS + "/maps/kestrel-valley", "atlas-darksky.html"));
 
     private final HttpServer server;
     private final AtomicBoolean failNextSearch = new AtomicBoolean();
@@ -95,14 +106,24 @@ public final class FixtureWorld implements AutoCloseable {
         server.start();
     }
 
-    /** Base URL of the sites, e.g. {@code http://127.0.0.1:41234}. */
+    /** Base URL of the observatory's site, e.g. {@code http://www.kestrel-observatory.test:41234}. */
     public String siteBase() {
-        return "http://127.0.0.1:" + server.getAddress().getPort();
+        return base(OBSERVATORY);
+    }
+
+    String base(String host) {
+        return "http://" + host + ":" + server.getAddress().getPort();
     }
 
     /** The engine's URL template for Argos' custom search engine. */
     public String searchTemplate() {
-        return "http://localhost:" + server.getAddress().getPort() + "/search?q={query}";
+        return base(ENGINE) + "/search?q={query}";
+    }
+
+    /** Resolves the world's {@code .test} domains to loopback; every other name the usual way. */
+    public static HostResolver resolver() {
+        return host -> host.toLowerCase(Locale.ROOT).endsWith(".test")
+                ? List.of(InetAddress.getLoopbackAddress()) : HostResolver.SYSTEM.resolve(host);
     }
 
     /** The next search request answers HTTP 503 once (recovery task). */
@@ -124,10 +145,12 @@ public final class FixtureWorld implements AutoCloseable {
 
     private void handle(HttpExchange exchange) throws IOException {
         try (exchange) {
+            String host = hostOf(exchange);
             String path = exchange.getRequestURI().getPath();
             String query = exchange.getRequestURI().getRawQuery();
-            requests.add(path + (query == null ? "" : "?" + query));
-            if (path.equals("/search")) {
+            String page = host + path;
+            requests.add(page + (query == null ? "" : "?" + query));
+            if (page.equals(ENGINE + "/search")) {
                 if (failNextSearch.getAndSet(false)) {
                     respond(exchange, 503, "text/html; charset=utf-8", "<!DOCTYPE html><html><head><title>503 Service "
                             + "Unavailable</title></head><body><h1>Service Unavailable</h1><p>Search is temporarily "
@@ -135,17 +158,17 @@ public final class FixtureWorld implements AutoCloseable {
                 } else {
                     respond(exchange, 200, "text/html; charset=utf-8", searchPage(parameter(query, "q")));
                 }
-            } else if (path.equals("/kvo/darksky")) {
+            } else if (page.equals(OBSERVATORY + "/darksky")) {
                 respond(exchange, 500, "text/html; charset=utf-8", resource("server-error.html"));
-            } else if (path.equals("/kvo/api/events.json")) {
+            } else if (page.equals(OBSERVATORY + "/api/events.json")) {
                 pause(1500);
                 respond(exchange, 200, "application/json", resource("kvo-events.json"));
-            } else if (path.equals("/kvo/tickets/status")) {
+            } else if (page.equals(OBSERVATORY + "/tickets/status")) {
                 respond(exchange, 200, "text/html; charset=utf-8", ticketStatus(parameter(query, "ticket")));
-            } else if (path.equals("/kvo/archive")) {
+            } else if (page.equals(OBSERVATORY + "/archive")) {
                 respond(exchange, 200, "text/html; charset=utf-8", archivePage());
-            } else if (PAGES.containsKey(path)) {
-                respond(exchange, 200, "text/html; charset=utf-8", resource(PAGES.get(path)));
+            } else if (PAGES.containsKey(page)) {
+                respond(exchange, 200, "text/html; charset=utf-8", resource(PAGES.get(page)));
             } else if (path.equals("/favicon.ico")) {
                 exchange.sendResponseHeaders(404, -1);
             } else {
@@ -153,6 +176,14 @@ public final class FixtureWorld implements AutoCloseable {
                         + "</title></head><body><h1>Not Found</h1><p>No page at " + escape(path) + ".</p></body></html>");
             }
         }
+    }
+
+    /** The site a request is for, from its Host header (without port). */
+    private static String hostOf(HttpExchange exchange) {
+        String host = exchange.getRequestHeaders().getFirst("Host");
+        if (host == null) return "";
+        int colon = host.lastIndexOf(':');
+        return (colon > 0 ? host.substring(0, colon) : host).toLowerCase(Locale.ROOT);
     }
 
     /** The engine's result page for a query, as the browser receives it. */
@@ -190,7 +221,7 @@ public final class FixtureWorld implements AutoCloseable {
             html.append("<p class='no-results'>No results found for <b>").append(escape(query)).append("</b>.</p>");
         }
         for (Entry hit : hits.subList(0, Math.min(8, hits.size()))) {
-            html.append("<article class='card'><h3><a href='").append(siteBase()).append(hit.path()).append("'>")
+            html.append("<article class='card'><h3><a href='").append(base(hit.host())).append(hit.path()).append("'>")
                     .append(escape(hit.title())).append("</a></h3><p>").append(escape(hit.snippet()))
                     .append("</p></article>");
         }
@@ -204,14 +235,14 @@ public final class FixtureWorld implements AutoCloseable {
                 ? "<p>Ticket KV-4471: CONFIRMED. Seat F12, Saturday public observing night, 18:00.</p>"
                 : "<p>Ticket " + escape(normalized) + " was not found. Please check the number.</p>";
         return "<!DOCTYPE html><html><head><meta charset='utf-8'><title>Ticket status – Kestrel Valley Observatory</title>"
-                + "</head><body><nav><a href='/kvo/'>Home</a> | <a href='/kvo/tickets'>Check another ticket</a></nav>"
+                + "</head><body><nav><a href='/'>Home</a> | <a href='/tickets'>Check another ticket</a></nav>"
                 + "<h1>Ticket status</h1>" + body + "</body></html>";
     }
 
     /** A long logbook (several web_read parts); the founding history sits at the very end. */
     static String archivePage() {
         StringBuilder html = new StringBuilder("<!DOCTYPE html><html><head><meta charset='utf-8'><title>History and archive"
-                + " – Kestrel Valley Observatory</title></head><body><nav><a href='/kvo/'>Home</a></nav>"
+                + " – Kestrel Valley Observatory</title></head><body><nav><a href='/'>Home</a></nav>"
                 + "<h1>History and archive</h1><h2>Night logs</h2>");
         String[] observers = {"A. Lind", "K. Varga", "P. Okafor", "M. Hale", "S. Brandt", "T. Ruiz"};
         String[] targets = {"M31", "Jupiter", "the Pleiades", "comet C/1985", "Saturn", "M42", "the Moon", "Vega"};

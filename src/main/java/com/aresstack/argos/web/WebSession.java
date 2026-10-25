@@ -35,6 +35,8 @@ public final class WebSession {
     private List<SearchHit> results = List.of();
     private Listing lastListing = Listing.LINKS;
     private PageCapture page;
+    /** What the browser showed when the session last lost its page (search results page, blocked target). */
+    private String abandonedAddress;
 
     public WebSession(BrowserPagePort browser, UrlPolicy policy, WebSearchPort search) {
         this(browser, policy, search, DEFAULT_PART_CHARACTERS, DEFAULT_MAX_LINKS);
@@ -67,6 +69,7 @@ public final class WebSession {
         // The search provider navigated the browser; the previous page and its link ids are gone.
         page = null;
         links.clear();
+        abandonedAddress = browser.currentAddress();
         StringBuilder out = new StringBuilder();
         for (int i = 0; i < results.size(); i++) {
             SearchHit hit = results.get(i);
@@ -96,6 +99,11 @@ public final class WebSession {
     /** Links of the last capture; no extra browser read (web_read refreshes late-loaded links). */
     public synchronized String links() {
         requirePage();
+        String shown = browser.currentAddress();
+        // Another tool moved on (browser_navigate, web_click): list the links of the page shown now.
+        if (shown != null && shown.regionMatches(true, 0, "http", 0, 4) && !shown.equals(page.url())) {
+            accept(browser.current());
+        }
         lastListing = Listing.LINKS;
         List<PageLink> current = links.links();
         if (current.isEmpty()) return "No links on " + page.url();
@@ -148,11 +156,35 @@ public final class WebSession {
             page = null;
             links.clear();
             browser.clear();
+            abandonedAddress = null;
             throw new IllegalArgumentException("Blocked after redirect: " + blocked.getMessage());
         }
         page = capture;
         links.update(capture.url(), extractor.extract(capture.html(), capture.url()));
         return capture;
+    }
+
+    /**
+     * A web page another tool opened (browser_navigate, web_click, a tab switch) since the session lost its own:
+     * web_read and web_links continue there instead of claiming that no page is open (Phase 7 evaluation,
+     * expert profile). The search results page and anything the policy refuses are never adopted.
+     */
+    private PageCapture pageOpenedElsewhere() {
+        String address;
+        try {
+            address = browser.currentAddress();
+        } catch (RuntimeException unavailable) {
+            return null;
+        }
+        if (address == null || !address.regionMatches(true, 0, "http", 0, 4) || address.equals(abandonedAddress)) {
+            return null;
+        }
+        try {
+            policy.check(address);
+        } catch (IllegalArgumentException refused) {
+            return null;
+        }
+        return browser.current();
     }
 
     private String show(PageCapture capture, int part) {
@@ -177,6 +209,11 @@ public final class WebSession {
 
     private void requirePage() {
         if (page != null) return;
+        PageCapture opened = pageOpenedElsewhere();
+        if (opened != null) {
+            accept(opened);
+            return;
+        }
         if (!results.isEmpty()) {
             throw new IllegalStateException("No page is open since the last web_search. "
                     + "Open a result first, e.g. web_follow link_id=\"result-1\".");

@@ -27,13 +27,22 @@ public final class EvalReport {
     private final List<RunRecord> records = new ArrayList<>();
     private final List<Warmup> warmups = new ArrayList<>();
     private final Map<String, List<String>> toolsByProfile = new LinkedHashMap<>();
+    private final List<Skipped> skipped = new ArrayList<>();
+
+    /** A model/profile pair that did not run at all. */
+    public record Skipped(String configuration, String reason) {
+    }
 
     /** The first request to a model: loads it into memory, measured apart from the tasks. */
     public record Warmup(String model, long loadMillis, long elapsedMillis, String error) {
     }
 
-    /** Totals of one model with one profile. */
-    public record Configuration(String model, String profile, int runs, int successes, double successRate,
+    /**
+     * Totals of one model with one profile. The success rate counts only valid runs of tasks the profile can
+     * solve; runs the profile cannot solve and invalid runs (model errors) are counted apart.
+     */
+    public record Configuration(String model, String profile, int runs, int solvableRuns, int notSolvableRuns,
+                                int invalidRuns, int successes, double successRate,
                                 int toolCalls, double toolCallsPerRun, int errors, int recoveryActions,
                                 int recoveredRuns, int promptTokens, int completionTokens, int contextFullRuns,
                                 long elapsedMillis, long modelMillis, long loadMillis, long toolMillis) {
@@ -50,6 +59,23 @@ public final class EvalReport {
 
     public void addWarmup(Warmup warmup) {
         warmups.add(warmup);
+    }
+
+    public void addSkipped(String configuration, String reason) {
+        skipped.add(new Skipped(configuration, reason));
+    }
+
+    /** False when a configuration did not run or a run hit a model error: the comparison is incomplete. */
+    public boolean complete() {
+        return skipped.isEmpty() && records.stream().allMatch(RunRecord::valid);
+    }
+
+    public String incompleteReason() {
+        List<String> reasons = new ArrayList<>();
+        skipped.forEach(skip -> reasons.add(skip.configuration() + " not run: " + skip.reason()));
+        long invalid = records.stream().filter(record -> !record.valid()).count();
+        if (invalid > 0) reasons.add(invalid + " run(s) ended with a model error");
+        return String.join("; ", reasons);
     }
 
     public void addTools(String profile, List<String> names) {
@@ -78,13 +104,17 @@ public final class EvalReport {
         Map<String, Object> all = new LinkedHashMap<>();
         all.put("generatedAt", Instant.now().toString());
         all.put("settings", settings);
+        all.put("complete", complete());
+        if (!complete()) all.put("incomplete", incompleteReason());
+        all.put("skipped", skipped);
         all.put("tools", toolsByProfile);
         all.put("warmups", warmups);
         all.put("configurations", configurations(records));
         all.put("records", records);
         PRETTY.writeValue(directory.resolve("results.json").toFile(), all);
         Path summary = directory.resolve("summary.md");
-        Files.writeString(summary, summary(settings, toolsByProfile, warmups, records), StandardCharsets.UTF_8);
+        Files.writeString(summary, summary(settings, toolsByProfile, warmups, skipped, records),
+                StandardCharsets.UTF_8);
         return summary;
     }
 
@@ -95,10 +125,15 @@ public final class EvalReport {
         List<Configuration> configurations = new ArrayList<>();
         for (List<RunRecord> group : groups.values()) {
             int runs = group.size();
-            int successes = (int) group.stream().filter(RunRecord::successful).count();
+            int invalid = (int) group.stream().filter(record -> !record.valid()).count();
+            int notSolvable = (int) group.stream().filter(record -> record.valid() && !record.applicable()).count();
+            int solvable = runs - invalid - notSolvable;
+            int successes = (int) group.stream()
+                    .filter(record -> record.valid() && record.applicable() && record.successful()).count();
             int calls = group.stream().mapToInt(RunRecord::toolCallCount).sum();
-            configurations.add(new Configuration(group.get(0).model(), group.get(0).profile(), runs, successes,
-                    successes / (double) runs, calls, calls / (double) runs,
+            configurations.add(new Configuration(group.get(0).model(), group.get(0).profile(), runs, solvable,
+                    notSolvable, invalid, successes, solvable == 0 ? 0 : successes / (double) solvable,
+                    calls, calls / (double) runs,
                     group.stream().mapToInt(RunRecord::errors).sum(),
                     group.stream().mapToInt(RunRecord::recoveryActions).sum(),
                     (int) group.stream().filter(RunRecord::recovered).count(),
@@ -114,26 +149,45 @@ public final class EvalReport {
     }
 
     static String summary(String settings, Map<String, List<String>> tools, List<Warmup> warmups,
-                          List<RunRecord> records) {
-        StringBuilder out = new StringBuilder("# Argos model evaluation\n\n")
-                .append("Settings: ").append(settings).append("\n\n");
+                          List<Skipped> skipped, List<RunRecord> records) {
+        StringBuilder out = new StringBuilder("# Argos model evaluation\n\n");
+        long invalid = records.stream().filter(record -> !record.valid()).count();
+        if (!skipped.isEmpty() || invalid > 0) {
+            out.append("> **INCOMPLETE.** ");
+            skipped.forEach(skip -> out.append('`').append(skip.configuration()).append("` did not run (")
+                    .append(skip.reason()).append("). "));
+            if (invalid > 0) out.append(invalid).append(" run(s) ended with a model error and are not counted. ");
+            out.append("Do not compare these results as if they were complete.\n\n");
+        }
+        out.append("Settings: ").append(settings).append("\n\n");
         tools.forEach((profile, names) -> out.append("Tools of `").append(profile).append("` (").append(names.size())
                 .append("): ").append(String.join(", ", names)).append("\n\n"));
 
-        out.append("## Comparison\n\n| Model | Profile | Success | Tool calls (per task) | Errors | Recovery actions "
-                + "| Recovered runs | Tokens in/out | Context full | Time s | Model s | Tools s | Load s |\n"
-                + "|---|---|---|---|---|---|---|---|---|---|---|---|---|\n");
+        out.append("## Comparison\n\n| Model | Profile | Success (solvable tasks) | Not solvable | Invalid "
+                + "| Tool calls (per task) | Errors | Recovery actions | Recovered runs | Tokens in/out | Context full "
+                + "| Time s | Model s | Tools s | Load s |\n"
+                + "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n");
         for (Configuration c : configurations(records)) {
             out.append("| ").append(c.model()).append(" | ").append(c.profile()).append(" | **")
-                    .append(c.successes()).append('/').append(c.runs()).append(String.format(Locale.ROOT,
-                            "** (%.0f%%) | %d (%.1f) | %d | %d | %d | %d/%d | %d | %.1f | %.1f | %.1f | %.1f |%n",
-                            c.successRate() * 100, c.toolCalls(), c.toolCallsPerRun(), c.errors(),
+                    .append(c.successes()).append('/').append(c.solvableRuns()).append(String.format(Locale.ROOT,
+                            "** (%.0f%%) | %d | %d | %d (%.1f) | %d | %d | %d | %d/%d | %d | %.1f | %.1f | %.1f | %.1f |%n",
+                            c.successRate() * 100, c.notSolvableRuns(), c.invalidRuns(), c.toolCalls(),
+                            c.toolCallsPerRun(), c.errors(),
                             c.recoveryActions(), c.recoveredRuns(), c.promptTokens(), c.completionTokens(),
                             c.contextFullRuns(), c.elapsedMillis() / 1000.0, c.modelMillis() / 1000.0,
                             c.toolMillis() / 1000.0, c.loadMillis() / 1000.0));
         }
-        out.append("\nTime = wall clock of the tasks. Model s excludes loading; Load s is loading during the tasks "
+        out.append("\nNot solvable: tasks the profile's tools cannot do (a form without form tools); they still run "
+                + "and are listed, but do not count. Invalid: runs that ended with a model error. Context full: the "
+                + "conversation reached 95 % of num_ctx, so the server probably dropped earlier messages. "
+                + "Time = wall clock of the tasks; Model s excludes loading; Load s is loading during the tasks "
                 + "(after the warm-up it should stay near 0).\n");
+
+        if (!skipped.isEmpty()) {
+            out.append("\n## Not run\n\n");
+            skipped.forEach(skip -> out.append("- `").append(skip.configuration()).append("`: ").append(skip.reason())
+                    .append('\n'));
+        }
 
         if (!warmups.isEmpty()) {
             out.append("\n## Model warm-up (not part of the task times)\n\n| Model | Load s | First answer s | Error |\n"
@@ -147,7 +201,8 @@ public final class EvalReport {
 
         List<String> configurations = records.stream().map(r -> r.model() + "@" + r.profile()).distinct().toList();
         List<String> tasks = records.stream().map(RunRecord::task).distinct().toList();
-        out.append("\n## Tasks\n\nEach cell: ✓/✗ per run, with tool calls.\n\n| Task |");
+        out.append("\n## Tasks\n\nEach cell: ✓/✗ per run with its tool calls; n/a = not solvable with the profile, "
+                + "! = model error.\n\n| Task |");
         configurations.forEach(configuration -> out.append(' ').append(configuration).append(" |"));
         out.append("\n|---|").append("---|".repeat(configurations.size())).append('\n');
         for (String task : tasks) {
@@ -156,7 +211,8 @@ public final class EvalReport {
                 List<String> cells = new ArrayList<>();
                 for (RunRecord record : records) {
                     if (record.task().equals(task) && (record.model() + "@" + record.profile()).equals(configuration)) {
-                        cells.add((record.successful() ? "✓ " : "✗ ") + record.toolCallCount());
+                        String mark = !record.valid() ? "! " : record.successful() ? "✓ " : "✗ ";
+                        cells.add(mark + record.toolCallCount() + (record.applicable() ? "" : " n/a"));
                     }
                 }
                 out.append(' ').append(cells.isEmpty() ? "–" : String.join(", ", cells)).append(" |");
@@ -166,18 +222,20 @@ public final class EvalReport {
 
         for (String configuration : configurations) {
             out.append("\n## ").append(configuration).append("\n\n| Task | Category | Run | OK | Tool calls | Errors "
-                    + "| Recovery | Tokens in/out (max prompt) | Time s | Stop | Calls | Answer |\n"
+                    + "| Recovery | Tokens in/out (max prompt, estimate) | Time s | Stop | Calls | Answer |\n"
                     + "|---|---|---|---|---|---|---|---|---|---|---|---|\n");
             for (RunRecord record : records) {
                 if (!(record.model() + "@" + record.profile()).equals(configuration)) continue;
                 out.append("| ").append(record.task()).append(" | ").append(record.category()).append(" | ")
-                        .append(record.repetition()).append(" | ").append(record.successful() ? "yes" : "**no**")
+                        .append(record.repetition()).append(" | ").append(!record.valid() ? "invalid"
+                                : record.successful() ? "yes" : record.applicable() ? "**no**" : "no (n/a)")
                         .append(" | ").append(record.toolCallCount())
                         .append(record.textualToolCalls() > 0 ? " (" + record.textualToolCalls() + " as text)" : "")
                         .append(" | ").append(record.errors()).append(" | ").append(record.recoveryActions())
                         .append(record.recovered() ? " (recovered)" : "").append(" | ")
                         .append(record.promptTokens() < 0 ? "n/a" : record.promptTokens() + "/"
-                                + record.completionTokens() + " (" + record.maxPromptTokens() + ")")
+                                + record.completionTokens() + " (" + record.maxPromptTokens() + ", est. "
+                                + record.estimatedPromptTokens() + ")")
                         .append(record.contextFull() ? " **context full**" : "")
                         .append(" | ").append(String.format(Locale.ROOT, "%.1f", record.elapsedMillis() / 1000.0))
                         .append(" | ").append(record.stopReason()).append(" | ").append(callSequence(record))

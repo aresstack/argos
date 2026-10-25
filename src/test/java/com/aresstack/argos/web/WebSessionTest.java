@@ -189,6 +189,31 @@ class WebSessionTest {
         assertTrue(unknown.getMessage().contains("result-1 to result-2"), unknown.getMessage());
     }
 
+    @Test void readAndLinksContinueOnAPageAnotherToolOpened() throws Exception {
+        HttpPageBrowser shared = new HttpPageBrowser();
+        WebSession session = new WebSession(shared, UrlPolicy.off(), null);
+        shared.open(base + "/about", null);           // e.g. browser_navigate in the expert profile
+
+        assertTrue(session.read(1).contains("TITLE: About"), "no 'No page is open yet' after browser_navigate");
+        session.open(base + "/");
+        shared.open(base + "/article", null);         // e.g. web_click followed a link
+        assertTrue(session.links().contains("link-1: Home"), session.links());
+        assertTrue(session.follow("link-1").contains("TITLE: Start"));
+    }
+
+    @Test void theSearchResultsPageIsNeverAdopted() throws Exception {
+        HttpPageBrowser shared = new HttpPageBrowser();
+        WebSearchPort engine = query -> {
+            shared.open(base + "/", null);            // the provider shows its results page in the browser
+            return new SearchResults(List.of(new SearchHit("Article", base + "/article", "")), List.of());
+        };
+        WebSession session = new WebSession(shared, UrlPolicy.off(), engine);
+        session.search("camoufox");
+
+        var error = assertThrows(IllegalStateException.class, () -> session.read(1));
+        assertTrue(error.getMessage().contains("web_follow link_id=\"result-1\""), error.getMessage());
+    }
+
     @Test void pageLinkIdsAreInvalidAfterANewSearch() throws Exception {
         WebSession searching = searching();
         searching.open(base + "/");

@@ -29,8 +29,16 @@ class FixtureWorldSerpTest {
 
             assertEquals(SearchOutcome.ORGANIC_RESULTS, result.outcome(), query);
             assertEquals(world.expectedHits(query), result.candidates().size(), query);
-            assertTrue(result.candidates().stream().allMatch(c -> c.url().startsWith(world.siteBase())), query);
+            assertTrue(result.candidates().stream().allMatch(c -> java.net.URI.create(c.url()).getHost().endsWith(".test")),
+                    query);
         }
+    }
+
+    @Test
+    void theWorldsDomainsResolveToLoopbackOnly() throws Exception {
+        assertTrue(FixtureWorld.resolver().resolve("www.kestrel-observatory.test").get(0).isLoopbackAddress());
+        assertThrows(java.net.UnknownHostException.class,
+                () -> FixtureWorld.resolver().resolve("no-such-host.invalid"));
     }
 
     @Test

@@ -51,6 +51,7 @@ public final class OllamaChatModel implements ChatModel {
         if (generation.seed() != null) options.put("seed", generation.seed());
         if (generation.contextLength() != null) options.put("num_ctx", generation.contextLength());
         if (generation.maxOutputTokens() != null) options.put("num_predict", generation.maxOutputTokens());
+        if (generation.gpuLayers() != null) options.put("num_gpu", generation.gpuLayers());
         if (!options.isEmpty()) body.put("options", options);
 
         JsonNode answer = http.post(endpoint, body);
@@ -70,7 +71,18 @@ public final class OllamaChatModel implements ChatModel {
             calls.addAll(TextualToolCalls.parse(content, names));
         }
         return new ModelTurn(content, calls, answer.path("prompt_eval_count").asInt(-1),
-                answer.path("eval_count").asInt(-1), answer.path("load_duration").asLong(0) / 1_000_000);
+                answer.path("eval_count").asInt(-1), answer.path("load_duration").asLong(0) / 1_000_000,
+                message.path("thinking").asText(""));
+    }
+
+    /** Unloads the model (keep_alive 0), so the next model of the evaluation finds the GPU memory free. */
+    @Override
+    public void release() {
+        try {
+            http.post(endpoint, Map.of("model", model, "messages", List.of(), "keep_alive", 0));
+        } catch (ModelException ignored) {
+            // Best effort: a model that cannot be unloaded is reported by the next warm-up, if at all.
+        }
     }
 
     /** "true"/"false" as booleans; a level such as "low" (gpt-oss) as text. */
@@ -86,6 +98,7 @@ public final class OllamaChatModel implements ChatModel {
             wire.put("tool_calls", message.toolCalls().stream().map(call -> Map.of("function",
                     Map.of("name", call.name(), "arguments", argumentsObject(call.arguments())))).toList());
         }
+        if (!message.thinking().isEmpty()) wire.put("thinking", message.thinking());
         if ("tool".equals(message.role()) && message.toolName() != null) wire.put("tool_name", message.toolName());
         return wire;
     }

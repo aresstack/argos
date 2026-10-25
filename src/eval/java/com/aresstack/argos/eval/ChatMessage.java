@@ -9,11 +9,18 @@ import java.util.List;
  * @param toolCalls  calls the assistant requested (assistant messages only)
  * @param toolCallId the call this message answers (tool messages only; may be null for Ollama)
  * @param toolName   the tool that produced this message (tool messages only)
+ * @param thinking   the assistant's separate reasoning; gpt-oss needs it back on its tool-calling turns
  */
-public record ChatMessage(String role, String content, List<ToolCall> toolCalls, String toolCallId, String toolName) {
+public record ChatMessage(String role, String content, List<ToolCall> toolCalls, String toolCallId, String toolName,
+                          String thinking) {
     public ChatMessage {
         content = content == null ? "" : content;
         toolCalls = toolCalls == null ? List.of() : List.copyOf(toolCalls);
+        thinking = thinking == null ? "" : thinking;
+    }
+
+    public ChatMessage(String role, String content, List<ToolCall> toolCalls, String toolCallId, String toolName) {
+        this(role, content, toolCalls, toolCallId, toolName, "");
     }
 
     public static ChatMessage system(String content) {
@@ -26,6 +33,10 @@ public record ChatMessage(String role, String content, List<ToolCall> toolCalls,
 
     public static ChatMessage assistant(String content, List<ToolCall> calls) {
         return new ChatMessage("assistant", content, calls, null, null);
+    }
+
+    public static ChatMessage assistant(ModelTurn turn) {
+        return new ChatMessage("assistant", turn.content(), turn.toolCalls(), null, null, turn.thinking());
     }
 
     public static ChatMessage tool(ToolCall call, String content) {

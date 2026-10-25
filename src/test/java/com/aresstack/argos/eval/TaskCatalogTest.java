@@ -23,11 +23,20 @@ class TaskCatalogTest {
     @Test
     void findSiteAcceptsTheHomepageButNotSubpagesOrDistractors() {
         EvalTask findSite = task("find-site");
-        assertTrue(findSite.accepts("The official website is http://127.0.0.1:4321/kvo/"));
-        assertTrue(findSite.accepts("It is http://127.0.0.1:4321/kvo/."));
-        assertTrue(findSite.accepts("[Official site](http://127.0.0.1:4321/kvo/)"));
-        assertFalse(findSite.accepts("http://127.0.0.1:4321/kvo/instruments"));
-        assertFalse(findSite.accepts("http://127.0.0.1:4321/fans/kvo"));
+        assertTrue(findSite.accepts("The official website is http://www.kestrel-observatory.test:4321/"));
+        assertTrue(findSite.accepts("It is http://www.kestrel-observatory.test:4321."));
+        assertTrue(findSite.accepts("[Official site](http://www.kestrel-observatory.test:4321/)"));
+        assertTrue(findSite.accepts("www.kestrel-observatory.test"));
+        assertFalse(findSite.accepts("http://www.kestrel-observatory.test:4321/instruments"));
+        assertFalse(findSite.accepts("http://kvo-fanclub.test:4321/ (not www.kestrel-observatory.test)"));
+    }
+
+    @Test
+    void theFormTaskIsNotSolvableWithTheCompactTools() {
+        assertFalse(task("simple-form").solvableWith(EvalProfile.COMPACT));
+        assertTrue(task("simple-form").solvableWith(EvalProfile.COMPACT_INTERACT));
+        assertTrue(task("simple-form").solvableWith(EvalProfile.EXPERT));
+        assertTrue(task("long-page").solvableWith(EvalProfile.COMPACT));
     }
 
     @Test

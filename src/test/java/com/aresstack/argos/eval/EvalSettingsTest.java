@@ -18,7 +18,9 @@ class EvalSettingsTest {
 
         assertEquals(List.of("gemma4:e2b@compact", "gpt-oss:20b@compact", "gpt-oss:20b@expert"), ids(settings));
         assertEquals("http://127.0.0.1:11434", settings.baseUrl());
-        assertEquals(new GenerationSettings(0.0, 42, 8192, 4096, null, null), settings.generation());
+        assertEquals(new GenerationSettings(0.0, 42, 8192, 4096, null, null, null), settings.generation());
+        assertEquals(AgentLoop.AUTHORIZED_SYSTEM_PROMPT, settings.systemPrompt());
+        assertEquals(12_000, settings.partCharacters());
         assertEquals("fixtures", settings.tasks());
         assertInstanceOf(OllamaChatModel.class, settings.chatModel("gemma4:e2b"));
     }
@@ -31,6 +33,17 @@ class EvalSettingsTest {
                 Map.of("runs", "qwen2.5-coder:14b@Compact-Interact")::get)));
         assertThrows(IllegalArgumentException.class, () -> EvalSettings.from(Map.of("runs", "gemma4:e2b")::get));
         assertThrows(IllegalArgumentException.class, () -> EvalSettings.from(Map.of("runs", "m@tiny")::get));
+    }
+
+    @Test
+    void offloadPromptAndPartSizeAreSettable() {
+        EvalSettings settings = EvalSettings.from(Map.of("num-gpu", "16", "prompt", "plain", "part-chars", "6000")::get);
+
+        assertEquals(16, settings.generation().gpuLayers());
+        assertEquals(AgentLoop.SYSTEM_PROMPT, settings.systemPrompt());
+        assertEquals(6000, settings.partCharacters());
+        assertTrue(settings.describe().contains("num_gpu=16"));
+        assertThrows(IllegalArgumentException.class, () -> EvalSettings.from(Map.of("prompt", "nice")::get));
     }
 
     @Test

@@ -57,7 +57,7 @@ class ChatModelWireTest {
                 "function":{"name":"web_open","arguments":"{\\"url\\": \\"http://b\\"}"}}]}}],
                 "usage":{"prompt_tokens":321,"completion_tokens":12}}""");
         OpenAiChatModel model = new OpenAiChatModel(base + "/v1/", "gpt-oss:120b", "secret-key", Duration.ofSeconds(5),
-                new GenerationSettings(0.0, 42, 8192, 4096, null, "low"));
+                new GenerationSettings(0.0, 42, 8192, 4096, null, "low", null));
 
         ModelTurn turn = model.complete(conversation(), TOOLS);
 
@@ -80,10 +80,10 @@ class ChatModelWireTest {
     @Test
     void ollamaNativeRequestSetsContextAndReadsObjectArguments() throws Exception {
         String base = serve("/api/chat", 200, """
-                {"message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"web_open",
+                {"message":{"role":"assistant","content":"","thinking":"open it","tool_calls":[{"function":{"name":"web_open",
                 "arguments":{"url":"http://b"}}}]},"prompt_eval_count":900,"eval_count":30,"load_duration":2500000000}""");
         OllamaChatModel model = new OllamaChatModel(base, "gpt-oss:20b", Duration.ofSeconds(5),
-                new GenerationSettings(0.0, 42, 8192, 4096, "low", null));
+                new GenerationSettings(0.0, 42, 8192, 4096, "low", null, 16));
 
         ModelTurn turn = model.complete(conversation(), TOOLS);
 
@@ -94,12 +94,18 @@ class ChatModelWireTest {
         assertEquals(4096, body.path("options").path("num_predict").asInt());
         assertEquals("low", body.path("think").asText());
         assertEquals("15m", body.path("keep_alive").asText());
+        assertEquals(16, body.path("options").path("num_gpu").asInt());
         assertEquals("http://a", body.path("messages").path(2).path("tool_calls").path(0).path("function")
                 .path("arguments").path("url").asText(), "Ollama expects arguments as an object");
         assertEquals("web_open", body.path("messages").path(3).path("tool_name").asText());
         assertEquals("{\"url\":\"http://b\"}", turn.toolCalls().get(0).arguments());
         assertEquals(900, turn.promptTokens());
         assertEquals(2500, turn.loadMillis());
+        assertEquals("open it", turn.thinking());
+
+        model.release();
+        assertEquals(0, received.get().path("keep_alive").asInt(-1), "unloading sends keep_alive 0");
+        assertTrue(received.get().path("messages").isEmpty());
     }
 
     @Test
@@ -107,7 +113,7 @@ class ChatModelWireTest {
         String base = serve("/api/chat", 200, """
                 {"message":{"role":"assistant","content":"<tool_call>{\\"name\\": \\"web_open\\", \\"arguments\\": {\\"url\\": \\"http://c\\"}}</tool_call>"}}""");
         ModelTurn turn = new OllamaChatModel(base, "gemma4:e2b", Duration.ofSeconds(5),
-                new GenerationSettings(null, null, null, null, "false", null))
+                new GenerationSettings(null, null, null, null, "false", null, null))
                 .complete(conversation(), TOOLS);
 
         assertTrue(turn.toolCalls().get(0).textual());

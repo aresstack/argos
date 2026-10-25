@@ -11,14 +11,22 @@ import java.util.List;
  * @param stopReason      answered, max_steps, empty_answer, model_error or time_limit
  * @param modelMillis     time spent waiting for the model, without model loading
  * @param loadMillis      time the model server spent loading the model (reported separately, Ollama only)
- * @param maxPromptTokens largest single prompt; near the context length the server starts cutting old messages
- * @param contextFull     maxPromptTokens reached 95% of the configured context length
+ * @param maxPromptTokens largest single prompt the server reported
+ * @param estimatedPromptTokens largest conversation the harness sent, estimated from its characters (about 3.5
+ *                        per token); the server may report less after cutting old messages to fit its context
+ * @param contextFull     the reported or the estimated prompt reached 95% of the configured context length,
+ *                        so the server probably dropped earlier messages (possibly the question itself)
+ * @param applicable      the profile's tools can solve the task (false: e.g. a form task with compact tools)
+ * @param valid           the model could be asked (false after a model or endpoint error): an invalid run
+ *                        measures the server, not the model, and is reported apart from the success rate
  */
 public record RunRecord(String task, String category, String model, String profile, int repetition,
+                        boolean applicable, boolean valid,
                         boolean successful, String stopReason, String finalAnswer,
                         int toolCallCount, int errors, List<String> errorMessages, int recoveryActions,
                         boolean recovered, int textualToolCalls, int modelTurns,
-                        int promptTokens, int completionTokens, int maxPromptTokens, boolean contextFull,
+                        int promptTokens, int completionTokens, int maxPromptTokens, int estimatedPromptTokens,
+                        boolean contextFull,
                         long elapsedMillis, long modelMillis, long loadMillis, long toolMillis, List<Call> toolCalls) {
 
     /** One tool call as the model issued it and what came back (preview only; the transcript has everything). */

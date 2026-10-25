@@ -8,17 +8,19 @@ package com.aresstack.argos.eval;
  * @param maxOutputTokens Ollama num_predict / OpenAI max_tokens per answer
  * @param think           Ollama "think": true, false, or a level such as low/medium/high (gpt-oss); null = default
  * @param reasoningEffort OpenAI reasoning_effort; null = server default
+ * @param gpuLayers       Ollama num_gpu: model layers on the GPU, the rest on the CPU; null = Ollama decides
  */
 public record GenerationSettings(Double temperature, Integer seed, Integer contextLength, Integer maxOutputTokens,
-                                 String think, String reasoningEffort) {
+                                 String think, String reasoningEffort, Integer gpuLayers) {
     public static GenerationSettings defaults() {
-        return new GenerationSettings(0.0, 42, 8192, 4096, null, null);
+        return new GenerationSettings(0.0, 42, 8192, 4096, null, null, null);
     }
 
     public String describe() {
         return "temperature=" + temperature + ", seed=" + seed + ", num_ctx=" + contextLength
                 + ", max_output_tokens=" + maxOutputTokens
                 + (think == null ? "" : ", think=" + think)
-                + (reasoningEffort == null ? "" : ", reasoning_effort=" + reasoningEffort);
+                + (reasoningEffort == null ? "" : ", reasoning_effort=" + reasoningEffort)
+                + (gpuLayers == null ? "" : ", num_gpu=" + gpuLayers);
     }
 }

@@ -68,8 +68,9 @@ public final class OpenAiChatModel implements ChatModel {
             calls.addAll(TextualToolCalls.parse(content, names));
         }
         JsonNode usage = answer.path("usage");
+        String reasoning = message.path("reasoning_content").asText(message.path("reasoning").asText(""));
         return new ModelTurn(content, calls, usage.path("prompt_tokens").asInt(-1),
-                usage.path("completion_tokens").asInt(-1));
+                usage.path("completion_tokens").asInt(-1), 0, reasoning);
     }
 
     private static Map<String, Object> wire(ChatMessage message) {

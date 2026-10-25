@@ -11,10 +11,21 @@ import java.util.regex.Pattern;
  * @param forbidden patterns of known wrong answers (distractors) that must not occur
  * @param setup     what the fixture world does differently for this task; {@code LIVE} uses the real web and
  *                  Argos' configured search engines instead of the fixture world
+ * @param needsForm the task requires submitting a form, which the six compact tools cannot do
  */
 public record EvalTask(String id, String category, String prompt, List<String> expected, List<String> forbidden,
-                       Setup setup) {
+                       Setup setup, boolean needsForm) {
     public enum Setup { NONE, FAIL_FIRST_SEARCH, LIVE }
+
+    public EvalTask(String id, String category, String prompt, List<String> expected, List<String> forbidden,
+                    Setup setup) {
+        this(id, category, prompt, expected, forbidden, setup, false);
+    }
+
+    /** Whether the profile's tools can solve the task at all; inapplicable runs are reported apart. */
+    public boolean solvableWith(EvalProfile profile) {
+        return !needsForm || profile.canSubmitForms();
+    }
 
     public boolean live() {
         return setup == Setup.LIVE;

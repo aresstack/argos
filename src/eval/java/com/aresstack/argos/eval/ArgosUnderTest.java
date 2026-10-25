@@ -33,18 +33,27 @@ public final class ArgosUnderTest implements AutoCloseable {
     private final UrlPolicy urlPolicy;
     private final ResearchDocuments documents;
     private final FixtureWorld world;
+    private final int partCharacters;
 
     public ArgosUnderTest(ArgosConfig installed, Path profileDirectory, boolean headless, FixtureWorld world) {
+        this(installed, profileDirectory, headless, world, WebSession.DEFAULT_PART_CHARACTERS);
+    }
+
+    /** @param partCharacters web_read part size, for A/B runs against small context lengths */
+    public ArgosUnderTest(ArgosConfig installed, Path profileDirectory, boolean headless, FixtureWorld world,
+                          int partCharacters) {
         installed.requireBrowserConfiguration();
         // Loopback is admitted by rule (the fixture world); everything else keeps the strict boundary.
         NetworkSettings network = NetworkSettings.parse("strict", "127.0.0.1,::1", null, null);
         this.config = new ArgosConfig("127.0.0.1", 0, installed.executable(), installed.launchOptions(),
                 profileDirectory, headless, null, "none", null, "argos", installed.toolProfile(), installed.readiness(),
                 network, false);
-        this.browser = new CamoufoxBrowser(config);
-        this.urlPolicy = UrlPolicy.from(network);
+        // The fixture world's .test domains resolve to loopback; the policy and the proxy still decide.
+        this.browser = new CamoufoxBrowser(config, FixtureWorld.resolver());
+        this.urlPolicy = UrlPolicy.from(network, FixtureWorld.resolver());
         this.documents = new ResearchDocuments(browser, new DocumentStore(), urlPolicy);
         this.world = world;
+        this.partCharacters = partCharacters;
     }
 
     /**
@@ -55,7 +64,8 @@ public final class ArgosUnderTest implements AutoCloseable {
         browser.clear();
         SearchSettings search = live ? SearchSettings.fromEnvironment()
                 : new SearchSettings(List.of(SearchEngine.custom(world.searchTemplate())), 10, Duration.ofMinutes(10));
-        WebSession web = new WebSession(browser, urlPolicy, new BrowserWebSearch(browser, search));
+        WebSession web = new WebSession(browser, urlPolicy, new BrowserWebSearch(browser, search), partCharacters,
+                WebSession.DEFAULT_MAX_LINKS);
         List<SyncToolSpecification> tools = new ArrayList<>(new ArgosTools(browser, web,
                 ResearchSettings.fromEnvironment(), new DocumentAndBatchTools(documents)).forProfile(profile.base));
         if (profile.compactInteraction) tools.addAll(new ArgosBrowsingTools(browser).compact());

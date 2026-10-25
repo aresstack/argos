@@ -22,6 +22,12 @@ public final class AgentLoop {
             through the tools; do not guess and do not answer from memory. If a tool fails or a page is not \
             helpful, try another way. When you know the answer, reply with a short final answer (one or two \
             sentences) without calling a tool.""";
+    /**
+     * The same prompt plus one neutral sentence that every web address is allowed. Without it, local models
+     * refused to open test addresses they assumed were off limits (first Windows run, PR #13).
+     */
+    public static final String AUTHORIZED_SYSTEM_PROMPT = SYSTEM_PROMPT + """
+             All web addresses in the question are reachable and you are allowed to open them.""";
     private static final ObjectMapper JSON = new ObjectMapper();
     /** HTTP error pages as Argos shows them: the page text, near the top. */
     private static final Pattern ERROR_PAGE = Pattern.compile(
@@ -33,26 +39,42 @@ public final class AgentLoop {
     private final int maxTurns;
     private final Duration timeLimit;
     private final Integer contextLength;
+    private final String systemPrompt;
 
     public AgentLoop(ChatModel model, ToolGateway tools, int maxTurns, Duration timeLimit, Integer contextLength) {
+        this(model, tools, maxTurns, timeLimit, contextLength, SYSTEM_PROMPT);
+    }
+
+    public AgentLoop(ChatModel model, ToolGateway tools, int maxTurns, Duration timeLimit, Integer contextLength,
+                     String systemPrompt) {
         this.model = model;
         this.tools = tools;
         this.maxTurns = maxTurns;
         this.timeLimit = timeLimit;
         this.contextLength = contextLength;
+        this.systemPrompt = systemPrompt;
     }
 
     /** Runs one task; the transcript receives every message for later inspection. */
     public RunRecord run(EvalTask task, String prompt, String profile, int repetition, List<ChatMessage> transcript) {
+        return run(task, prompt, profile, repetition, true, transcript);
+    }
+
+    /** As above; {@code applicable} records whether the profile's tools can solve the task at all. */
+    public RunRecord run(EvalTask task, String prompt, String profile, int repetition, boolean applicable,
+                         List<ChatMessage> transcript) {
         List<ToolDefinition> definitions = tools.tools();
         Set<String> names = definitions.stream().map(ToolDefinition::name).collect(Collectors.toSet());
-        transcript.add(ChatMessage.system(SYSTEM_PROMPT));
+        int schemaCharacters = definitions.stream().mapToInt(definition -> definition.name().length()
+                + definition.description().length() + definition.inputSchema().toString().length()).sum();
+        transcript.add(ChatMessage.system(systemPrompt));
         transcript.add(ChatMessage.user(prompt));
 
         long started = System.nanoTime();
         long modelNanos = 0;
         long loadMillis = 0;
         int maxPrompt = -1;
+        int maxEstimate = 0;
         long toolNanos = 0;
         int promptTokens = 0;
         int completionTokens = 0;
@@ -74,6 +96,7 @@ public final class AgentLoop {
                 break;
             }
             turn++;
+            maxEstimate = Math.max(maxEstimate, estimateTokens(transcript, schemaCharacters));
             ModelTurn reply;
             long modelStart = System.nanoTime();
             try {
@@ -93,11 +116,11 @@ public final class AgentLoop {
 
             if (reply.toolCalls().isEmpty()) {
                 answer = TextualToolCalls.withoutThinking(reply.content());
-                transcript.add(ChatMessage.assistant(reply.content(), List.of()));
+                transcript.add(ChatMessage.assistant(reply));
                 stop = answer.isBlank() ? "empty_answer" : "answered";
                 break;
             }
-            transcript.add(ChatMessage.assistant(reply.content(), reply.toolCalls()));
+            transcript.add(ChatMessage.assistant(reply));
             for (ToolCall call : reply.toolCalls()) {
                 if (call.textual()) textual++;
                 if (lastWasSetback) recoveryActions++;
@@ -120,11 +143,13 @@ public final class AgentLoop {
         // An answer counts only if it was researched: at least one tool call must have worked.
         boolean researched = calls.stream().anyMatch(call -> !call.error());
         boolean successful = "answered".equals(stop) && researched && task.accepts(answer);
-        boolean contextFull = contextLength != null && maxPrompt >= contextLength * 0.95;
-        return new RunRecord(task.id(), task.category(), model.name(), profile, repetition, successful, stop, answer,
+        boolean contextFull = contextLength != null
+                && (maxPrompt >= contextLength * 0.95 || maxEstimate >= contextLength * 0.95);
+        return new RunRecord(task.id(), task.category(), model.name(), profile, repetition, applicable,
+                !"model_error".equals(stop), successful, stop, answer,
                 calls.size(), errors, List.copyOf(errorMessages), recoveryActions, successful && setbacks > 0, textual,
                 turn, tokensReported ? promptTokens : -1, tokensReported ? completionTokens : -1, maxPrompt,
-                contextFull, (System.nanoTime() - started) / 1_000_000,
+                maxEstimate, contextFull, (System.nanoTime() - started) / 1_000_000,
                 Math.max(0, modelNanos / 1_000_000 - loadMillis), loadMillis, toolNanos / 1_000_000,
                 List.copyOf(calls));
     }
@@ -147,6 +172,16 @@ public final class AgentLoop {
                     + ": expected a JSON object such as {\"url\": \"https://example.org\"}", true);
         }
         return tools.call(call.name(), arguments);
+    }
+
+    /** Rough token count of what the next request carries: about 3.5 characters per token, plus tool schemas. */
+    static int estimateTokens(List<ChatMessage> messages, int schemaCharacters) {
+        long characters = schemaCharacters;
+        for (ChatMessage message : messages) {
+            characters += message.content().length() + message.thinking().length() + 8;
+            for (ToolCall call : message.toolCalls()) characters += call.name().length() + call.arguments().length();
+        }
+        return (int) Math.min(Integer.MAX_VALUE, characters * 2 / 7);
     }
 
     /** Not an error flag, but a dead end the model has to work around. */

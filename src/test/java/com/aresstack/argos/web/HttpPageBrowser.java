@@ -28,6 +28,11 @@ final class HttpPageBrowser implements BrowserPagePort {
     }
 
     @Override
+    public String currentAddress() {
+        return history.isEmpty() ? "about:blank" : history.peek();
+    }
+
+    @Override
     public PageCapture back() {
         if (history.size() < 2) return null;
         history.pop();

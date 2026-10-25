@@ -17,7 +17,8 @@ import java.util.function.Function;
  */
 public record EvalSettings(String api, String baseUrl, String apiKey, List<Target> targets, String tasks,
                            int repeat, int maxTurns, Duration taskTimeLimit, Duration requestTimeout,
-                           GenerationSettings generation, boolean headless, Path outputDirectory) {
+                           GenerationSettings generation, String prompt, int partCharacters, boolean headless,
+                           Path outputDirectory) {
 
     /** Same tasks for both local models with the compact tools first, then the larger one with expert. */
     public static final String DEFAULT_RUNS = "gemma4:e2b@compact,gpt-oss:20b@compact,gpt-oss:20b@expert";
@@ -50,13 +51,20 @@ public record EvalSettings(String api, String baseUrl, String apiKey, List<Targe
                 integer(settings, "seed", defaults.seed(), Integer.MIN_VALUE, Integer.MAX_VALUE),
                 integer(settings, "num-ctx", defaults.contextLength(), 2048, 262144),
                 integer(settings, "max-output-tokens", defaults.maxOutputTokens(), 64, 131072),
-                value(settings, "think", null), value(settings, "reasoning-effort", null));
+                value(settings, "think", null), value(settings, "reasoning-effort", null),
+                integer(settings, "num-gpu", null, 0, 1000));
+        String prompt = value(settings, "prompt", "authorized").toLowerCase(Locale.ROOT);
+        if (!prompt.equals("authorized") && !prompt.equals("plain")) {
+            throw new IllegalArgumentException("eval.prompt must be 'authorized' or 'plain': " + prompt);
+        }
         return new EvalSettings(api, value(settings, "base-url", defaultUrl), value(settings, "api-key", null),
                 targets(settings), value(settings, "tasks", "fixtures"),
                 integer(settings, "repeat", 1, 1, 50), integer(settings, "max-turns", 15, 1, 100),
                 Duration.ofSeconds(integer(settings, "task-time-limit-s", 600, 10, 7200)),
                 Duration.ofSeconds(integer(settings, "request-timeout-s", 300, 5, 3600)),
-                generation, !"false".equalsIgnoreCase(value(settings, "headless", "true")),
+                generation, prompt,
+                integer(settings, "part-chars", com.aresstack.argos.web.WebSession.DEFAULT_PART_CHARACTERS, 1000, 100_000),
+                !"false".equalsIgnoreCase(value(settings, "headless", "true")),
                 Path.of(value(settings, "out", "build/eval")));
     }
 
@@ -83,6 +91,10 @@ public record EvalSettings(String api, String baseUrl, String apiKey, List<Targe
         return targets;
     }
 
+    public String systemPrompt() {
+        return prompt.equals("plain") ? AgentLoop.SYSTEM_PROMPT : AgentLoop.AUTHORIZED_SYSTEM_PROMPT;
+    }
+
     public ChatModel chatModel(String model) {
         return api.equals("ollama")
                 ? new OllamaChatModel(baseUrl, model, requestTimeout, generation)
@@ -93,7 +105,8 @@ public record EvalSettings(String api, String baseUrl, String apiKey, List<Targe
     public String describe() {
         return "api=" + api + ", baseUrl=" + baseUrl + ", runs=" + String.join(" ",
                 targets.stream().map(Target::id).toList()) + ", tasks=" + tasks + ", repeat=" + repeat
-                + ", maxTurns=" + maxTurns + ", " + generation.describe()
+                + ", maxTurns=" + maxTurns + ", prompt=" + prompt + ", partChars=" + partCharacters
+                + ", " + generation.describe()
                 + ", apiKey=" + (apiKey == null ? "none" : "set");
     }
 

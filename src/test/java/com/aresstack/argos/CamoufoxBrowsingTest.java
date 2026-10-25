@@ -31,6 +31,8 @@ class CamoufoxBrowsingTest {
             <input type="password" aria-label="Passwort" value="geheim">
             <button id="go">Suchen</button>
             <label for="ort">Ort</label><input id="ort" placeholder="Suchen">
+            <textarea aria-label="Notiz" id="note"></textarea>
+            <div id="slot"><button id="again">Nochmal</button></div>
             <div style="height:3000px"><button id="tall" style="height:2500px;width:200px"
               onclick="this.textContent='tall clicked'">Hoch</button></div>
             <p id="log">idle</p>
@@ -45,6 +47,14 @@ class CamoufoxBrowsingTest {
               for (const type of ['__playwright_mark_target__', '__playwright_reset_targets__'])
                 document.addEventListener(type, () => traces.push(type), true);
               const log = document.getElementById('log');
+              // Re-render: the button is replaced by an equal new element after each click.
+              document.getElementById('slot').addEventListener('click', e => {
+                if (e.target.id !== 'again') return;
+                const fresh = document.createElement('button');
+                fresh.id = 'again'; fresh.textContent = 'Nochmal';
+                fresh.dataset.count = String(Number(e.target.dataset.count || 0) + 1);
+                document.getElementById('slot').replaceChildren(fresh);
+              });
               document.getElementById('go').addEventListener('click', e =>
                 log.textContent = 'clicked trusted=' + e.isTrusted + ' value=' + document.getElementById('q').value);
               document.getElementById('q').addEventListener('keydown', e => { if (!e.isTrusted) log.textContent = 'untrusted key'; });
@@ -95,11 +105,29 @@ class CamoufoxBrowsingTest {
             // An element taller than the viewport is still hit by the verified random point.
             browser.clickTarget("Hoch");
             assertEquals("tall clicked", browser.evaluate("() => document.getElementById('tall').textContent"));
+            // Password field: typed for real, never echoed by the control list.
+            browser.fillTarget("Passwort", "neu-Geheim42");
+            assertEquals("neu-Geheim42", browser.evaluate("() => document.querySelector('[type=password]').value"));
+            assertFalse(browser.controls().all().toString().contains("neu-Geheim42"));
+            // Longer input with a newline in a textarea.
+            String longText = "Lorem ipsum dolor sit amet, ".repeat(8) + "\nzweite Zeile";
+            browser.fillTarget("Notiz", longText);
+            assertEquals(longText, browser.evaluate("() => document.getElementById('note').value"));
+            // Re-render between listing and clicking: the stale ref is looked up again by role and name.
+            int again = browser.controls().all().stream().filter(c -> c.name().equals("Nochmal")).findFirst()
+                    .orElseThrow().number();
+            browser.clickTarget(String.valueOf(again));
+            browser.clickTarget(String.valueOf(again));
+            assertEquals("2", browser.evaluate("() => document.getElementById('again').dataset.count"));
             browser.extract("overview", null);
             browser.extract("metadata", null);
             browser.extract("links", "main");
             assertEquals(List.of(), browser.evaluate("() => window.traces"),
                     "controls, real input and extraction must not dispatch Playwright marker events");
+            // Umlauts arrive correctly, but Playwright Core types non-US characters through its insertText
+            // helper (untrusted InputEvent, playwright4j#36). Checked separately so marker events stay clean.
+            browser.fillTarget("1", "Größe Übermaß");
+            assertEquals("Größe Übermaß", browser.evaluate("() => document.getElementById('q').value"));
             // Nothing of the automation leaks into the page's own realm.
             assertEquals(baseline, browser.evaluate(globals));
 

@@ -147,6 +147,8 @@ Der Login allein ist **keine** Discovery-Abnahme. Nach erfolgreicher OAuth-Verbi
 
 ### Tabs, Historie, Bedienelemente und Extraktion
 
+Diese Werkzeuge stehen in `ArgosBrowsingTools` als getrennte Listen `expert()` und `compact()` bereit und werden erst über die Profilauswahl veröffentlicht. Das bisherige Profil bleibt bei genau neun Werkzeugen. `web_controls`, `web_click` und `web_fill` sind für kleine Modelle vorgesehen, müssen aber vor der Aufnahme ins Kompaktprofil gegen kleine Modelle getestet werden.
+
 | Tool | Profil | Zweck |
 | --- | --- | --- |
 | `browser_tabs`, `browser_tab_new`, `browser_tab_select`, `browser_tab_close` | expert | Tabs mit kurzen Ids (`t1`, `t2`); von Webseiten geöffnete Tabs (`target=_blank`) werden übernommen und nach einem Klick aktuell |

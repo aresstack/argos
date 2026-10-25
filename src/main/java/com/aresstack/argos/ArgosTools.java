@@ -61,9 +61,6 @@ public final class ArgosTools {
                         return failure(error);
                     }
                 }).build());
-        ArgosBrowsingTools browsing = new ArgosBrowsingTools(browser);
-        tools.addAll(browsing.expert());
-        tools.addAll(browsing.compact());
         return List.copyOf(tools);
     }
 

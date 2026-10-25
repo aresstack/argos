@@ -1,0 +1,15 @@
+<!doctype html>
+<html><head><title>SPA fixture</title></head>
+<body>
+<div id="app"><div class="spinner" role="progressbar">Loading…</div></div>
+<script>
+  // The site's own script: renders content late, like a single-page application.
+  setTimeout(function () {
+    fetch('/data.json').then(function (r) { return r.json(); }).then(function (data) {
+      document.getElementById('app').innerHTML =
+        '<h1>Search results</h1><ul>' + data.items.map(function (i) {
+          return '<li>' + i.name + '</li>'; }).join('') + '</ul>';
+    });
+  }, 1200);
+</script>
+</body></html>

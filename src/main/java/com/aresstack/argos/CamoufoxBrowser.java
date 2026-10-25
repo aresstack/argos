@@ -1,11 +1,23 @@
 package com.aresstack.argos;
 
+import com.aresstack.argos.page.DocumentType;
+import com.aresstack.argos.page.NetworkActivity;
+import com.aresstack.argos.page.PageSample;
+import com.aresstack.argos.page.PageSnapshot;
+import com.aresstack.argos.page.PageSource;
+import com.aresstack.argos.page.ReadinessPolicy;
+import com.aresstack.argos.page.ReadinessReport;
+import com.aresstack.argos.page.ReadinessWaiter;
+import com.aresstack.argos.page.SnapshotReader;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.microsoft.playwright.BrowserContext;
 import com.microsoft.playwright.BrowserType;
+import com.microsoft.playwright.Locator;
 import com.microsoft.playwright.Page;
 import com.microsoft.playwright.Playwright;
+import com.microsoft.playwright.PlaywrightException;
+import com.microsoft.playwright.Request;
 import com.microsoft.playwright.Response;
 import com.microsoft.playwright.options.WaitUntilState;
 
@@ -19,6 +31,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -31,11 +44,17 @@ import java.util.concurrent.TimeUnit;
  */
 public final class CamoufoxBrowser implements AutoCloseable {
     private static final int MAX_NETWORK_EVENTS = 200;
+    /** Source documents above this size are not pulled through the protocol for a snapshot. */
+    private static final long MAX_SOURCE_BYTES = 8_000_000;
+    private static final int PROBE_TIMEOUT_MS = 2_000;
     private final ArgosConfig config;
     private final ExecutorService driver = Executors.newSingleThreadExecutor(
             runnable -> Thread.ofPlatform().name("argos-camoufox-driver").unstarted(runnable));
     private final ObjectMapper mapper = new ObjectMapper();
     private final Deque<Map<String, Object>> network = new ArrayDeque<>();
+    private final NetworkActivity activity = new NetworkActivity(System::currentTimeMillis);
+    private final SnapshotReader snapshots = new SnapshotReader();
+    private MainDocument mainDocument;
     private Playwright playwright;
     private BrowserContext context;
     private Page page;
@@ -110,12 +129,35 @@ public final class CamoufoxBrowser implements AutoCloseable {
                 throw error;
             }
         }
-        page = context.pages().stream().filter(p -> !p.isClosed()).findFirst()
+        Page current = context.pages().stream().filter(p -> !p.isClosed()).findFirst()
                 .orElseGet(context::newPage);
-        page.onRequest(request -> record("request", request.method(), request.url(), 0));
-        page.onResponse(response -> record("response", response.request().method(), response.url(), response.status()));
-        page.onRequestFailed(request -> record("failed", request.method(), request.url(), 0));
-        return page;
+        page = current;
+        mainDocument = null;
+        activity.reset();
+        // Protocol events only: observing them is invisible to the website.
+        current.onRequest(request -> {
+            if (isMainDocument(current, request)) activity.reset();
+            activity.started();
+            record("request", request.method(), request.url(), 0);
+        });
+        current.onResponse(response -> {
+            if (isMainDocument(current, response.request())) mainDocument = new MainDocument(response);
+            record("response", response.request().method(), response.url(), response.status());
+        });
+        current.onRequestFinished(request -> activity.ended());
+        current.onRequestFailed(request -> {
+            activity.ended();
+            record("failed", request.method(), request.url(), 0);
+        });
+        return current;
+    }
+
+    private static boolean isMainDocument(Page owner, Request request) {
+        try {
+            return request.isNavigationRequest() && request.frame() == owner.mainFrame();
+        } catch (RuntimeException workerOrDetachedFrame) {
+            return false;
+        }
     }
 
     private void record(String kind, String method, String originalUrl, int status) {
@@ -137,27 +179,223 @@ public final class CamoufoxBrowser implements AutoCloseable {
     public Map<String, Object> navigate(String target) {
         return onBrowser(() -> {
             java.net.URI destination = java.net.URI.create(target);
-            if (!(destination.getScheme().equalsIgnoreCase("http")
+            if (destination.getScheme() == null
+                    || !(destination.getScheme().equalsIgnoreCase("http")
                     || destination.getScheme().equalsIgnoreCase("https"))
                     || destination.getHost() == null) {
                 throw new IllegalArgumentException("Navigation requires an absolute http(s) URL");
             }
             Page p = activePage();
-            Response response = p.navigate(target, new Page.NavigateOptions()
-                    .setWaitUntil(WaitUntilState.DOMCONTENTLOADED).setTimeout(45_000));
-            return Map.of("url", p.url(), "title", p.title(),
-                    "status", response == null ? 0 : response.status());
+            ReadinessPolicy policy = config.readiness();
+            Response response;
+            try {
+                response = p.navigate(target, new Page.NavigateOptions()
+                        .setWaitUntil(waitUntil(policy)).setTimeout(45_000));
+            } catch (PlaywrightException error) {
+                if (!isDownload(error)) throw error;
+                return downloadResult(target);
+            }
+            if (response != null && isMainDocument(p, response.request())) mainDocument = new MainDocument(response);
+            ReadinessReport readiness = settle(p, policy, null);
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("url", p.url());
+            result.put("title", p.title());
+            result.put("status", response == null ? 0 : response.status());
+            result.put("documentType", documentType(p));
+            result.put("contentType", contentType());
+            result.put("readiness", readiness);
+            return result;
         });
     }
 
-    public Map<String, Object> snapshot(int maxCharacters) {
+    /**
+     * Waits until the configured readiness conditions hold, optionally also for a
+     * visible element ({@code selector}) and/or visible {@code text}.
+     */
+    public Map<String, Object> waitFor(String selector, String text, int timeoutMillis) {
         return onBrowser(() -> {
             Page p = activePage();
-            int limit = Math.min(60_000, Math.max(1_000, maxCharacters));
-            String text = p.locator("body").innerText();
-            if (text.length() > limit) text = text.substring(0, limit) + "\n[TRUNCATED]";
-            return Map.of("url", p.url(), "title", p.title(), "text", text);
+            ReadinessPolicy configured = config.readiness().settles() ? config.readiness() : ReadinessPolicy.balanced();
+            ReadinessPolicy policy = configured.withTimeout(Math.max(500, Math.min(60_000, timeoutMillis)));
+            Locator target = null;
+            if (selector != null && !selector.isBlank()) {
+                target = p.locator(selector);
+                if (text != null && !text.isBlank()) target = target.filter(new Locator.FilterOptions().setHasText(text));
+            } else if (text != null && !text.isBlank()) {
+                target = p.getByText(text);
+            }
+            ReadinessReport readiness = target == null ? settle(p, policy, null)
+                    : awaitConditions(p, policy, target);
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("url", p.url());
+            result.put("title", p.title());
+            result.put("documentType", documentType(p));
+            result.put("readiness", readiness);
+            return result;
         });
+    }
+
+    public PageSnapshot snapshot(int maxCharacters) {
+        return onBrowser(() -> {
+            Page p = activePage();
+            return snapshots.read(new PlaywrightPageSource(p, mainDocument), maxCharacters);
+        });
+    }
+
+    private ReadinessReport settle(Page p, ReadinessPolicy policy, Locator target) throws Exception {
+        if (!policy.settles()) return ReadinessReport.skipped();
+        DocumentType type = documentType(p);
+        if (type.isSourceDocument() || type == DocumentType.BINARY) return ReadinessReport.staticDocument();
+        return awaitConditions(p, policy, target);
+    }
+
+    private ReadinessReport awaitConditions(Page p, ReadinessPolicy policy, Locator target) throws Exception {
+        ReadinessWaiter waiter = new ReadinessWaiter(System::currentTimeMillis, p::waitForTimeout);
+        return waiter.await(policy, target != null, () -> sample(p, policy, target));
+    }
+
+    /**
+     * Observes the page through Playwright's isolated utility world (CSS locators,
+     * text queries) and protocol events. Nothing runs in the page's own world.
+     */
+    private PageSample sample(Page p, ReadinessPolicy policy, Locator target) {
+        Locator.FilterOptions visible = new Locator.FilterOptions().setVisible(true);
+        int elements = p.locator("*").count();
+        int textLength = visibleText(p).length();
+        boolean loading = !policy.loadingSelectors().isEmpty()
+                && p.locator(String.join(", ", policy.loadingSelectors())).filter(visible).count() > 0;
+        boolean targetVisible = target == null || target.filter(visible).count() > 0;
+        return new PageSample(elements, textLength, loading, targetVisible, activity.inflight(), activity.quietMillis());
+    }
+
+    private static String visibleText(Page p) {
+        Locator body = p.locator("body");
+        if (body.count() > 0) return body.first().innerText(new Locator.InnerTextOptions().setTimeout(PROBE_TIMEOUT_MS));
+        Locator root = p.locator(":root");
+        if (root.count() == 0) return "";
+        String text = root.first().textContent(new Locator.TextContentOptions().setTimeout(PROBE_TIMEOUT_MS));
+        return text == null ? "" : text;
+    }
+
+    private DocumentType documentType(Page p) {
+        DocumentType type = DocumentType.classify(contentType(), p.url());
+        return type == DocumentType.UNKNOWN ? DocumentType.HTML : type;
+    }
+
+    private String contentType() {
+        return mainDocument == null ? null : mainDocument.contentType();
+    }
+
+    private static WaitUntilState waitUntil(ReadinessPolicy policy) {
+        return switch (policy.waitUntil()) {
+            case "commit" -> WaitUntilState.COMMIT;
+            case "load" -> WaitUntilState.LOAD;
+            default -> WaitUntilState.DOMCONTENTLOADED;
+        };
+    }
+
+    private boolean isDownload(PlaywrightException error) {
+        String message = String.valueOf(error.getMessage());
+        if (message.contains("Download is starting")) return true;
+        return mainDocument != null && (mainDocument.attachment()
+                || DocumentType.classify(mainDocument.contentType(), mainDocument.url()) == DocumentType.BINARY);
+    }
+
+    private Map<String, Object> downloadResult(String target) {
+        String type = mainDocument == null ? null : mainDocument.contentType();
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("url", mainDocument == null ? target : mainDocument.url());
+        result.put("title", "");
+        result.put("status", mainDocument == null ? 0 : mainDocument.status());
+        result.put("documentType", DocumentType.BINARY);
+        if (type != null) result.put("contentType", type);
+        result.put("hint", "The browser treated this URL as a download, so no page was rendered. "
+                + "Use document processing (download and extract) to read it.");
+        return result;
+    }
+
+    /** The top-level document response; its body is fetched lazily and only once. */
+    private static final class MainDocument {
+        private final Response response;
+        private final String url;
+        private final int status;
+        private final String contentType;
+        private final boolean attachment;
+        private Optional<String> body;
+
+        MainDocument(Response response) {
+            this.response = response;
+            this.url = response.url();
+            this.status = response.status();
+            this.contentType = response.headerValue("content-type");
+            String disposition = response.headerValue("content-disposition");
+            this.attachment = disposition != null && disposition.toLowerCase(java.util.Locale.ROOT).startsWith("attachment");
+        }
+
+        String url() { return url; }
+        int status() { return status; }
+        String contentType() { return contentType; }
+        boolean attachment() { return attachment; }
+
+        /** Response bodies travel over the protocol; the page cannot observe this read. */
+        Optional<String> body() {
+            if (body != null) return body;
+            try {
+                String length = response.headerValue("content-length");
+                if (length != null && Long.parseLong(length.trim()) > MAX_SOURCE_BYTES) return body = Optional.empty();
+                body = Optional.ofNullable(response.text());
+            } catch (RuntimeException unavailable) {
+                // Some protocol versions do not retain navigation bodies; fall back to the DOM.
+                body = Optional.empty();
+            }
+            return body;
+        }
+    }
+
+    /** Reads the current document via protocol data and Playwright's utility world only. */
+    private static final class PlaywrightPageSource implements PageSource {
+        private final Page page;
+        private final MainDocument document;
+        private Boolean hasBody;
+
+        PlaywrightPageSource(Page page, MainDocument document) {
+            this.page = page;
+            this.document = document;
+        }
+
+        @Override public String url() { return page.url(); }
+        @Override public String title() { return page.title(); }
+        @Override public int status() { return document == null ? 0 : document.status(); }
+        @Override public String contentType() { return document == null ? null : document.contentType(); }
+
+        @Override
+        public Optional<String> responseText() {
+            return document == null ? Optional.empty() : document.body();
+        }
+
+        @Override
+        public boolean hasBody() {
+            if (hasBody == null) hasBody = page.locator("body").count() > 0;
+            return hasBody;
+        }
+
+        @Override
+        public String bodyText() {
+            return page.locator("body").first().innerText(new Locator.InnerTextOptions().setTimeout(PROBE_TIMEOUT_MS));
+        }
+
+        @Override
+        public String rootText() {
+            Locator root = page.locator(":root");
+            if (root.count() == 0) return "";
+            String text = root.first().textContent(new Locator.TextContentOptions().setTimeout(PROBE_TIMEOUT_MS));
+            return text == null ? "" : text;
+        }
+
+        @Override
+        public String documentSource() {
+            return page.content();
+        }
     }
 
     public Map<String, Object> inspect(String selector, int limit) {

@@ -1,5 +1,7 @@
 package com.aresstack.argos;
 
+import com.aresstack.argos.page.ReadinessPolicy;
+
 import java.io.IOException;
 import java.io.Reader;
 import java.net.URI;
@@ -12,13 +14,24 @@ import java.util.Properties;
 /** Environment-first configuration compatible with AresStack / Pyloros. */
 public record ArgosConfig(
         String host, int port, Path executable, Path launchOptions, Path profile, boolean headless,
-        String publicOrigin, String securityMode, String centralOauthIssuer, String requiredScope) {
+        String publicOrigin, String securityMode, String centralOauthIssuer, String requiredScope,
+        ReadinessPolicy readiness) {
+
+    public ArgosConfig {
+        if (readiness == null) readiness = ReadinessPolicy.balanced();
+    }
+
+    public ArgosConfig(String host, int port, Path executable, Path launchOptions, Path profile, boolean headless,
+                       String publicOrigin, String securityMode, String centralOauthIssuer, String requiredScope) {
+        this(host, port, executable, launchOptions, profile, headless,
+                publicOrigin, securityMode, centralOauthIssuer, requiredScope, ReadinessPolicy.balanced());
+    }
 
     // Direct browser-test construction remains independent of server configuration.
     public ArgosConfig(String host, int port, Path executable, Path launchOptions,
                        Path profile, boolean headless) {
         this(host, port, executable, launchOptions, profile, headless,
-                null, "central-oauth", null, "argos");
+                null, "central-oauth", null, "argos", ReadinessPolicy.balanced());
     }
 
     public static ArgosConfig fromEnvironment() throws IOException {
@@ -75,7 +88,8 @@ public record ArgosConfig(
                 options == null ? null : Path.of(options).toAbsolutePath(),
                 Path.of(profile).toAbsolutePath(),
                 Boolean.parseBoolean(setting("ARGOS_HEADLESS", application, "browser.headless", "false")),
-                publicOrigin, securityMode, issuer, requiredScope);
+                publicOrigin, securityMode, issuer, requiredScope,
+                ReadinessPolicy.from(name -> setting(name, application, propertyKey(name), null)));
     }
 
     private static Properties readProperties(Path path) throws IOException {
@@ -93,6 +107,11 @@ public record ArgosConfig(
         if (env != null && !env.isBlank()) return env.trim();
         String property = properties.getProperty(key);
         return property != null && !property.isBlank() ? property.trim() : fallback;
+    }
+
+    /** ARGOS_READY_DOM_STABLE_MS → ready.dom.stable.ms in argos.properties. */
+    private static String propertyKey(String environment) {
+        return environment.replaceFirst("^ARGOS_", "").toLowerCase(Locale.ROOT).replace('_', '.');
     }
 
     private static String normalizeOrigin(String value) {

@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Springer: Latest articles</title>
+    <link>https://link.springer.com/</link>
+    <description>Recently published &lt;b&gt;research&lt;/b&gt; articles</description>
+    <item>
+      <title>Robust page readiness for research agents</title>
+      <link>https://link.springer.com/article/10.1000/argos-1</link>
+      <pubDate>Fri, 23 Oct 2026 08:00:00 GMT</pubDate>
+      <description><![CDATA[<p>We study <em>dynamic</em> content loading.</p>]]></description>
+    </item>
+    <item>
+      <title>Feeds are documents, too</title>
+      <link>https://link.springer.com/article/10.1000/argos-2</link>
+      <dc:date>2026-10-24</dc:date>
+    </item>
+  </channel>
+</rss>

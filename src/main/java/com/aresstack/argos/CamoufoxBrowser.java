@@ -46,6 +46,9 @@ public final class CamoufoxBrowser implements BrowserPagePort, AutoCloseable {
     private Playwright playwright;
     private BrowserContext context;
     private Page page;
+    /** Top-level navigation requests started and main-frame documents committed (protocol events only). */
+    private volatile int navigationsStarted;
+    private volatile int documentsCommitted;
 
     public CamoufoxBrowser(ArgosConfig config) {
         this.config = config;
@@ -122,6 +125,13 @@ public final class CamoufoxBrowser implements BrowserPagePort, AutoCloseable {
         page.onRequest(request -> record("request", request.method(), request.url(), 0));
         page.onResponse(response -> record("response", response.request().method(), response.url(), response.status()));
         page.onRequestFailed(request -> record("failed", request.method(), request.url(), 0));
+        Page current = page;
+        current.onRequest(request -> {
+            if (request.isNavigationRequest() && request.frame() == current.mainFrame()) navigationsStarted++;
+        });
+        current.onFrameNavigated(frame -> {
+            if (frame == current.mainFrame()) documentsCommitted++;
+        });
         return page;
     }
 
@@ -305,12 +315,35 @@ public final class CamoufoxBrowser implements BrowserPagePort, AutoCloseable {
             if (box == null || box.width < 1 || box.height < 1) return false;
             double x = box.x + box.width / 2;
             double y = box.y + box.height / 2;
+            int started = navigationsStarted;
+            int committed = documentsCommitted;
             p.mouse().move(x, y, new Mouse.MoveOptions().setSteps(12));
             p.mouse().click(x, y);
-            p.waitForTimeout(800);
+            awaitNavigationAfterInput(p, started, committed);
             settle(p);
             return true;
         });
+    }
+
+    /**
+     * A click that submits a form (a consent wall) navigates a moment later, often back to the same URL
+     * after a redirect, so the old document's load state says nothing yet. Waits briefly for a top-level
+     * request to start and, if one does, for the new document to commit. Protocol events only.
+     */
+    private void awaitNavigationAfterInput(Page p, int started, int committed) {
+        try {
+            p.waitForCondition(() -> navigationsStarted > started,
+                    new Page.WaitForConditionOptions().setTimeout(1_500));
+        } catch (PlaywrightException noNavigation) {
+            return; // the banner closed in place
+        }
+        try {
+            p.waitForCondition(() -> documentsCommitted > committed,
+                    new Page.WaitForConditionOptions().setTimeout(15_000));
+            p.waitForLoadState(LoadState.DOMCONTENTLOADED, new Page.WaitForLoadStateOptions().setTimeout(5_000));
+        } catch (PlaywrightException slow) {
+            // Reading proceeds with the document that is there.
+        }
     }
 
     /** DOMContentLoaded is enough to read; give late resources a bounded chance, never a long sleep. */

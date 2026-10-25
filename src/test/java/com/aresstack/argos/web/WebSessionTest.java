@@ -134,31 +134,68 @@ class WebSessionTest {
     }
 
     @Test void strictPolicyAbandonsPagesThatRedirectIntoPrivateNetworks() {
+        boolean[] cleared = {false};
         BrowserPagePort redirecting = new BrowserPagePort() {
             @Override public PageCapture open(String url, String referer) {
                 return new PageCapture("http://127.0.0.1/admin", "Router", "secret", "");
             }
             @Override public PageCapture current() { return open(null, null); }
             @Override public PageCapture back() { return null; }
+            @Override public void clear() { cleared[0] = true; }
         };
         WebSession strict = new WebSession(redirecting, new UrlPolicy(false), null);
         var error = assertThrows(IllegalArgumentException.class, () -> strict.open("http://93.184.215.14/"));
         assertTrue(error.getMessage().startsWith("Blocked after redirect"));
+        assertTrue(cleared[0], "the blocked page is left for about:blank");
         assertThrows(IllegalStateException.class, strict::links);
     }
 
-    @Test void searchResultsAreNumberedAndFollowable() throws Exception {
+    private WebSession searching() {
         WebSearchPort search = query -> new SearchResults(List.of(
                 new SearchHit("Article", base + "/article", "About Camoufox"),
                 new SearchHit("Duplicate", base + "/article", "same target"),
                 new SearchHit("About", base + "/about", "")), List.of("ATTEMPT: local ORGANIC_RESULTS"));
-        WebSession searching = new WebSession(browser, new UrlPolicy(true), search);
+        return new WebSession(browser, new UrlPolicy(true), search);
+    }
+
+    @Test void searchResultsAreNumberedAndFollowable() throws Exception {
+        WebSession searching = searching();
         String answer = searching.search("camoufox");
-        assertEquals("1: Article — " + base + "/article\n   About Camoufox\n"
-                + "2: About — " + base + "/about\n"
-                + "Open a result with web_follow link_id=\"1\" or web_open url=\"...\".\n"
+        assertEquals("result-1: Article — " + base + "/article\n   About Camoufox\n"
+                + "result-2: About — " + base + "/about\n"
+                + "Open a result with web_follow link_id=\"result-1\".\n"
                 + "ATTEMPT: local ORGANIC_RESULTS", answer);
-        assertTrue(searching.follow("2").contains("TITLE: About"));
+        assertTrue(searching.follow("result-2").contains("TITLE: About"));
+    }
+
+    @Test void searchThenLinksThenFollowPicksTheSearchResult() throws Exception {
+        WebSession searching = searching();
+        searching.open(base + "/");
+        searching.search("camoufox");
+        var error = assertThrows(IllegalStateException.class, searching::links);
+        assertTrue(error.getMessage().contains("web_follow link_id=\"result-1\""), error.getMessage());
+        assertTrue(searching.follow("1").contains("TITLE: Article"), "bare 1 = result-1 of the last search");
+        assertTrue(searching.follow("2").contains("TITLE: About"), "still the result list until web_links");
+    }
+
+    @Test void searchAndPageSnapshotsDoNotOverwriteEachOther() throws Exception {
+        WebSession searching = searching();
+        searching.search("camoufox");
+        searching.follow("result-1");              // Article page: link-1 = Home
+        searching.links();
+        assertTrue(searching.follow("1").contains("TITLE: Start"), "after web_links a bare 1 is link-1");
+        assertTrue(searching.follow("result-2").contains("TITLE: About"), "results survive page navigation");
+        var unknown = assertThrows(IllegalArgumentException.class, () -> searching.follow("result-7"));
+        assertTrue(unknown.getMessage().contains("result-1 to result-2"), unknown.getMessage());
+    }
+
+    @Test void pageLinkIdsAreInvalidAfterANewSearch() throws Exception {
+        WebSession searching = searching();
+        searching.open(base + "/");
+        searching.links();
+        searching.search("camoufox");
+        var error = assertThrows(IllegalArgumentException.class, () -> searching.follow("link-1"));
+        assertTrue(error.getMessage().contains("call web_links first"));
     }
 
     @Test void unconfiguredSearchFailsWithAHelpfulMessage() {

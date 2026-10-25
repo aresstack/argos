@@ -192,6 +192,14 @@ public final class CamoufoxBrowser implements BrowserPagePort, AutoCloseable {
         });
     }
 
+    @Override
+    public void clear() {
+        onBrowser(() -> {
+            activePage().navigate("about:blank");
+            return null;
+        });
+    }
+
     private static PageCapture capture(Page p) {
         // Every in-page read is a protocol evaluation (with user activation, see
         // playwright4j #37), so take one content() call and avoid title()/innerText()/count().

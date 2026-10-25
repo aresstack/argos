@@ -1,26 +1,39 @@
 package com.aresstack.argos.web;
 
-import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * The research session behind the compact web_* tools, modeled on AskAI's
  * BrowserSession. Every answer is short numbered plain text, which small models
  * follow more reliably than nested JSON. Navigation is a real browser navigation
  * with the current page as referer; no script is injected into the page.
+ *
+ * <p>Search results (result-N) and page links (link-N) are separate snapshots. A bare
+ * number such as "2" refers to the list the agent saw last: web_search shows results,
+ * web_links shows links. Anything that cannot be resolved fails with a clear message.
  */
 public final class WebSession {
     public static final int DEFAULT_PART_CHARACTERS = 12_000;
     public static final int DEFAULT_MAX_LINKS = 150;
-    private static final String SEARCH_PAGE = "search:";
+    private static final Pattern TARGET = Pattern.compile(
+            "^\\[?\\s*(link|result)?\\s*[-_ #]?\\s*(\\d{1,4})\\s*]?$");
+
+    private enum Listing { RESULTS, LINKS }
 
     private final BrowserPagePort browser;
     private final UrlPolicy policy;
     private final WebSearchPort search;
     private final int partCharacters;
+    private final int maxLinks;
     private final LinkExtractor extractor = new LinkExtractor();
     private final LinkRegistry links;
+    private List<SearchHit> results = List.of();
+    private Listing lastListing = Listing.LINKS;
     private PageCapture page;
 
     public WebSession(BrowserPagePort browser, UrlPolicy policy, WebSearchPort search) {
@@ -33,27 +46,34 @@ public final class WebSession {
         this.policy = policy;
         this.search = search == null ? new UnavailableWebSearch() : search;
         this.partCharacters = partCharacters;
+        this.maxLinks = maxLinks;
         this.links = new LinkRegistry(maxLinks);
     }
 
     public synchronized String search(String query) throws Exception {
         if (query == null || query.isBlank()) throw new IllegalArgumentException("Empty search query.");
-        SearchResults results = search.search(query.trim());
-        links.update(SEARCH_PAGE + query.trim(), results.hits().stream()
-                .map(hit -> new LinkExtractor.Anchor(hit.title(), hit.url())).toList());
-        Map<String, String> snippets = new HashMap<>();
-        results.hits().forEach(hit -> snippets.putIfAbsent(hit.url(), hit.snippet()));
-        StringBuilder out = new StringBuilder();
-        List<PageLink> registered = links.links();
-        for (int i = 0; i < registered.size(); i++) {
-            PageLink hit = registered.get(i);
-            out.append(i + 1).append(": ").append(hit.text()).append(" — ").append(hit.url()).append('\n');
-            String snippet = snippets.get(hit.url());
-            if (snippet != null && !snippet.isBlank()) out.append("   ").append(snippet.strip()).append('\n');
+        SearchResults found = search.search(query.trim());
+        Map<String, SearchHit> byUrl = new LinkedHashMap<>();
+        for (SearchHit hit : found.hits()) {
+            if (byUrl.size() < maxLinks) byUrl.putIfAbsent(hit.url(), hit);
         }
-        if (registered.isEmpty()) out.append("No results.\n");
-        else out.append("Open a result with web_follow link_id=\"1\" or web_open url=\"...\".\n");
-        results.notes().forEach(note -> out.append(note).append('\n'));
+        results = List.copyOf(byUrl.values());
+        lastListing = Listing.RESULTS;
+        // The search provider navigated the browser; the previous page and its link ids are gone.
+        page = null;
+        links.clear();
+        StringBuilder out = new StringBuilder();
+        for (int i = 0; i < results.size(); i++) {
+            SearchHit hit = results.get(i);
+            out.append("result-").append(i + 1).append(": ").append(hit.title())
+                    .append(" — ").append(hit.url()).append('\n');
+            if (hit.snippet() != null && !hit.snippet().isBlank()) {
+                out.append("   ").append(hit.snippet().strip()).append('\n');
+            }
+        }
+        if (results.isEmpty()) out.append("No results.\n");
+        else out.append("Open a result with web_follow link_id=\"result-1\".\n");
+        found.notes().forEach(note -> out.append(note).append('\n'));
         return out.toString().stripTrailing();
     }
 
@@ -71,6 +91,7 @@ public final class WebSession {
     /** Links of the last capture; no extra browser read (web_read refreshes late-loaded links). */
     public synchronized String links() {
         requirePage();
+        lastListing = Listing.LINKS;
         List<PageLink> current = links.links();
         if (current.isEmpty()) return "No links on " + page.url();
         StringBuilder out = new StringBuilder();
@@ -83,10 +104,25 @@ public final class WebSession {
         return out.toString().stripTrailing();
     }
 
-    public synchronized String follow(String linkId) {
-        PageLink link = links.find(linkId);
+    /** Accepts "result-2", "link-3", "Link 3", "[3]" and bare "3" (resolved against the last list). */
+    public synchronized String follow(String target) {
+        Matcher match = TARGET.matcher(target == null ? "" : target.trim().toLowerCase(Locale.ROOT));
+        if (!match.matches()) {
+            throw new IllegalArgumentException("Unknown link id: " + target
+                    + ". Use an id such as link-3 from web_links or result-2 from web_search.");
+        }
+        int number = Integer.parseInt(match.group(2));
+        boolean result = match.group(1) == null ? lastListing == Listing.RESULTS : match.group(1).equals("result");
+        if (result) {
+            if (number < 1 || number > results.size()) {
+                throw new IllegalArgumentException("Unknown result id: result-" + number + ". The last web_search "
+                        + (results.isEmpty() ? "returned no results." : "returned result-1 to result-" + results.size() + "."));
+            }
+            return open(results.get(number - 1).url());
+        }
+        PageLink link = page == null ? null : links.find(number);
         if (link == null) {
-            throw new IllegalArgumentException("Unknown link id: " + linkId
+            throw new IllegalArgumentException("Unknown link id: link-" + number
                     + ". Link ids belong to the current page; call web_links first.");
         }
         return open(link.url());
@@ -106,11 +142,7 @@ public final class WebSession {
         } catch (IllegalArgumentException blocked) {
             page = null;
             links.clear();
-            try {
-                browser.back();
-            } catch (RuntimeException ignored) {
-                // Without history the session simply has no current page anymore.
-            }
+            browser.clear();
             throw new IllegalArgumentException("Blocked after redirect: " + blocked.getMessage());
         }
         page = capture;
@@ -139,6 +171,11 @@ public final class WebSession {
     }
 
     private void requirePage() {
-        if (page == null) throw new IllegalStateException("No page is open yet. Call web_open or web_search first.");
+        if (page != null) return;
+        if (!results.isEmpty()) {
+            throw new IllegalStateException("No page is open since the last web_search. "
+                    + "Open a result first, e.g. web_follow link_id=\"result-1\".");
+        }
+        throw new IllegalStateException("No page is open yet. Call web_open or web_search first.");
     }
 }

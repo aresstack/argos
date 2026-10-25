@@ -3,7 +3,6 @@ package com.aresstack.argos.web;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -59,18 +58,12 @@ final class LinkRegistry {
         return truncated;
     }
 
-    /** Accepts "link-3", "3", "Link 3" and "[3]" — small models are not always exact. */
-    PageLink find(String id) {
-        String wanted = normalize(id);
+    /** The link with id link-{@code number}, or null. */
+    PageLink find(int number) {
+        String id = "link-" + number;
         for (PageLink link : byUrl.values()) {
-            if (normalize(link.id()).equals(wanted)) return link;
+            if (link.id().equals(id)) return link;
         }
         return null;
-    }
-
-    private static String normalize(String id) {
-        String value = id == null ? "" : id.trim().toLowerCase(Locale.ROOT);
-        value = value.replaceAll("[\\[\\]#\"']", "").replaceFirst("^link[-_ ]?", "");
-        return value.trim();
     }
 }

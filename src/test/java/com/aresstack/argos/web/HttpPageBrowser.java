@@ -34,6 +34,11 @@ final class HttpPageBrowser implements BrowserPagePort {
         return fetch(history.peek(), null);
     }
 
+    @Override
+    public void clear() {
+        history.clear();
+    }
+
     private PageCapture fetch(String url, String referer) {
         try {
             HttpRequest.Builder request = HttpRequest.newBuilder(URI.create(url));

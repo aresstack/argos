@@ -58,7 +58,7 @@ public final class ArgosTools {
      */
     public List<SyncToolSpecification> webTools() {
         List<SyncToolSpecification> tools = new ArrayList<>();
-        tools.add(text("web_search", "Search the web. Returns numbered results with title, url and snippet. "
+        tools.add(text("web_search", "Search the web. Returns results result-1, result-2, ... with title, url and snippet. "
                         + "Example: {\"query\": \"camoufox webdriver bidi\"}",
                 Map.of("query", field("string", "What to search for")), List.of("query"),
                 args -> web.search(string(args, "query"))));
@@ -73,9 +73,9 @@ public final class ArgosTools {
         tools.add(text("web_links", "List the links of the current page as link-1, link-2, ... "
                         + "Use the id with web_follow. Call web_read first if the page loaded more content. Example: {}",
                 Map.of(), List.of(), args -> web.links()));
-        tools.add(text("web_follow", "Open a link of the current page by its id from web_links, "
-                        + "or a result number from web_search. Example: {\"link_id\": \"link-3\"}",
-                Map.of("link_id", field("string", "Link id such as link-3")), List.of("link_id"),
+        tools.add(text("web_follow", "Open a link by its id: link-3 from web_links or result-2 from web_search. "
+                        + "A bare number uses the list you saw last. Example: {\"link_id\": \"link-3\"}",
+                Map.of("link_id", field("string", "Id such as link-3 or result-2")), List.of("link_id"),
                 args -> web.follow(string(args, "link_id"))));
         tools.add(text("web_back", "Go back to the previous page and return its text. Example: {}",
                 Map.of(), List.of(), args -> web.back()));

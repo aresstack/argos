@@ -6,9 +6,17 @@ import java.net.UnknownHostException;
 import java.util.Locale;
 
 /**
- * Gate for every agent-driven navigation: only absolute http(s) URLs, and no
- * loopback/private/link-local targets unless explicitly allowed. Applied before
- * navigating and again on the final URL after redirects.
+ * Navigation gate for the web_* tools, following the protection model of
+ * docs/argos-optimization-analysis.md (PR #1): checked before navigating and again on
+ * the final URL; a blocked final page is left for about:blank and never returned.
+ *
+ * <p>This is not an SSRF guarantee. The browser itself sends redirect hops and
+ * subresource requests, and resolves DNS on its own, so an internal redirect target
+ * has already been contacted when the final check fails, and DNS rebinding between
+ * this check and the browser's lookup cannot be ruled out. Preventing that needs
+ * request interception or a browser-level network block, which the analysis defers
+ * (route interception is measurable and depends on the event pump). Host allow/block
+ * rules for intranets belong to the shared URL policy of work package A.
  */
 public final class UrlPolicy {
     private final boolean allowPrivateNetworks;

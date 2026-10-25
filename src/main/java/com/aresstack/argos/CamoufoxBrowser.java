@@ -24,6 +24,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.microsoft.playwright.BrowserContext;
 import com.microsoft.playwright.BrowserType;
+import com.microsoft.playwright.Download;
 import com.microsoft.playwright.Locator;
 import com.microsoft.playwright.Page;
 import com.microsoft.playwright.Playwright;
@@ -266,9 +267,13 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
         documents.put(page, tab);
         // Protocol events only: observing them is invisible to the website.
         page.onRequest(request -> {
-            if (isMainDocument(page, request)) tab.activity.reset();
+            if (isMainDocument(page, request)) {
+                tab.activity.reset();
+                tab.saved = null; // the tab loads a new document
+            }
             tab.activity.started();
         });
+        page.onDownload(download -> tab.download = download);
         page.onResponse(response -> {
             if (isMainDocument(page, response.request())) {
                 MainDocument document = new MainDocument(response);
@@ -302,7 +307,13 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
         MainDocument mainDocument;
         /** Last top-level response the browser saved as a download; it never replaces the rendered page. */
         MainDocument lastDownload;
+        Download download;
+        /** A feed, XML, JSON or text document Firefox saved instead of rendering, read from the saved file. */
+        SavedDocument saved;
     }
+
+    /** A source document the browser downloaded; current for its tab until the tab loads another document. */
+    private record SavedDocument(String url, int status, String contentType, String text) { }
 
     private static boolean isMainDocument(Page owner, Request request) {
         try {
@@ -396,6 +407,11 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
                         : tab.mainDocument != previousDocument ? tab.mainDocument : null;
                 if (!isDownload(error, download)) throw error;
                 tab.mainDocument = previousDocument; // the previous page stays rendered
+                Optional<SavedDocument> saved = savedSourceDocument(p, tab, download);
+                if (saved.isPresent()) {
+                    tab.saved = saved.get();
+                    return savedResult(saved.get());
+                }
                 return downloadResult(target, download);
             }
             // Keep the listener's instance: it may already carry the requestfinished flag.
@@ -511,6 +527,9 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
     private PageCapture capture(Page p) {
         // Feeds, XML, JSON and plain text are read from the response body (protocol data, invisible to
         // the page); a binary document has no page text. Both use the classification of browser_snapshot.
+        SavedDocument saved = document(p).saved;
+        if (saved != null) return new PageCapture(saved.url(), "", sourceText(saved.contentType(), saved.url(),
+                saved.text()), "");
         MainDocument main = document(p).mainDocument;
         if (main != null && main.url().equals(p.url())) {
             DocumentType type = DocumentType.classify(main.contentType(), main.url());
@@ -519,24 +538,27 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
                         + "). It has no page text; use the document tools to download and read it.", "");
             }
             Optional<String> body = type.isSourceDocument() ? main.body() : Optional.empty();
-            if (body.isPresent()) {
-                String source = body.get();
-                String text = switch (type) {
-                    case JSON -> DocumentText.json(source);
-                    case TEXT -> source;
-                    default -> DocumentText.feed(source).orElseGet(() -> DocumentText.xml(source));
-                };
-                return new PageCapture(p.url(), "", text, "");
-            }
+            if (body.isPresent()) return new PageCapture(p.url(), "", sourceText(main.contentType(), main.url(),
+                    body.get()), "");
         }
         // Every in-page read is a protocol evaluation (with user activation, see
         // playwright4j #37), so take one content() call and avoid title()/innerText()/count().
         return PageText.capture(p.url(), p.content());
     }
 
+    private static String sourceText(String contentType, String url, String source) {
+        return switch (DocumentType.classify(contentType, url)) {
+            case JSON -> DocumentText.json(source);
+            case TEXT -> source;
+            default -> DocumentText.feed(source).orElseGet(() -> DocumentText.xml(source));
+        };
+    }
+
     public PageSnapshot snapshot(int maxCharacters) {
         return onBrowser(() -> {
             Page p = activePage();
+            SavedDocument saved = document(p).saved;
+            if (saved != null) return snapshots.read(new SavedPageSource(saved), maxCharacters);
             return snapshots.read(new PlaywrightPageSource(p, document(p).mainDocument), maxCharacters);
         });
     }
@@ -581,11 +603,15 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
     }
 
     private DocumentType documentType(Page p) {
-        DocumentType type = DocumentType.classify(contentType(p), p.url());
+        SavedDocument saved = document(p).saved;
+        DocumentType type = saved != null ? DocumentType.classify(saved.contentType(), saved.url())
+                : DocumentType.classify(contentType(p), p.url());
         return type == DocumentType.UNKNOWN ? DocumentType.HTML : type;
     }
 
     private String contentType(Page p) {
+        SavedDocument saved = document(p).saved;
+        if (saved != null) return saved.contentType();
         MainDocument main = document(p).mainDocument;
         return main == null ? null : main.contentType();
     }
@@ -602,6 +628,60 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
         if (String.valueOf(error.getMessage()).contains("Download is starting")) return true;
         return download != null && (download.attachment()
                 || DocumentType.classify(download.contentType(), download.url()) == DocumentType.BINARY);
+    }
+
+    /**
+     * Firefox saves feeds ({@code application/rss+xml}, {@code application/atom+xml}) and some other source
+     * documents as downloads instead of rendering them. Their text is read from the saved file: nothing of
+     * this reaches the page. An attachment ({@code Content-Disposition}) stays a download.
+     */
+    private Optional<SavedDocument> savedSourceDocument(Page p, TabDocument tab, MainDocument response) {
+        if (response == null || response.attachment()) return Optional.empty();
+        if (!DocumentType.classify(response.contentType(), response.url()).isSourceDocument()) return Optional.empty();
+        try {
+            if (tab.download == null || !response.url().equals(tab.download.url())) {
+                p.waitForCondition(() -> tab.download != null && response.url().equals(tab.download.url()),
+                        new Page.WaitForConditionOptions().setTimeout(5_000));
+            }
+            Download download = tab.download;
+            tab.download = null;
+            try {
+                java.nio.file.Path file = download.path();
+                if (file == null || Files.size(file) > MAX_SOURCE_BYTES) return Optional.empty();
+                String text = new String(Files.readAllBytes(file), charset(response.contentType()));
+                return Optional.of(new SavedDocument(response.url(), response.status(), response.contentType(), text));
+            } finally {
+                download.delete();
+            }
+        } catch (IOException | RuntimeException unavailable) {
+            return Optional.empty(); // reported as a download, as before
+        }
+    }
+
+    private static java.nio.charset.Charset charset(String contentType) {
+        if (contentType != null) {
+            java.util.regex.Matcher m = java.util.regex.Pattern.compile("charset=\"?([\\w.:-]+)",
+                    java.util.regex.Pattern.CASE_INSENSITIVE).matcher(contentType);
+            if (m.find()) {
+                try {
+                    return java.nio.charset.Charset.forName(m.group(1));
+                } catch (RuntimeException unknown) {
+                    // fall through
+                }
+            }
+        }
+        return java.nio.charset.StandardCharsets.UTF_8;
+    }
+
+    private static Map<String, Object> savedResult(SavedDocument saved) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("url", saved.url());
+        result.put("title", "");
+        result.put("status", saved.status());
+        result.put("documentType", DocumentType.classify(saved.contentType(), saved.url()));
+        if (saved.contentType() != null) result.put("contentType", saved.contentType());
+        result.put("readiness", ReadinessReport.staticDocument());
+        return result;
     }
 
     private static Map<String, Object> downloadResult(String target, MainDocument download) {
@@ -664,6 +744,19 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
             }
             return body;
         }
+    }
+
+    /** A downloaded source document: everything comes from the saved file, nothing from the page. */
+    private record SavedPageSource(SavedDocument saved) implements PageSource {
+        @Override public String url() { return saved.url(); }
+        @Override public String title() { return ""; }
+        @Override public int status() { return saved.status(); }
+        @Override public String contentType() { return saved.contentType(); }
+        @Override public Optional<String> responseText() { return Optional.of(saved.text()); }
+        @Override public boolean hasBody() { return false; }
+        @Override public String bodyText() { return ""; }
+        @Override public String rootText() { return saved.text(); }
+        @Override public String documentSource() { return saved.text(); }
     }
 
     /** Reads the current document via protocol data and Playwright's utility world only. */

@@ -29,7 +29,8 @@ public final class ArgosTools {
     private final WebSession web;
     /** Optional research orchestration; null unless ARGOS_RESEARCH=true. */
     private final ResearchTools research;
-    private final ObjectMapper json = new ObjectMapper();
+    private final ArgosBrowsingTools browsing;
+    private static final ObjectMapper JSON = new ObjectMapper();
 
     public ArgosTools(CamoufoxBrowser browser) {
         this(browser, new WebSession(browser, new UrlPolicy(false), null));
@@ -42,6 +43,7 @@ public final class ArgosTools {
     public ArgosTools(CamoufoxBrowser browser, WebSession web, ResearchSettings researchSettings) {
         this.browser = browser;
         this.web = web;
+        this.browsing = new ArgosBrowsingTools(browser);
         this.research = researchSettings.enabled() && web.searchPort() != null
                 ? new ResearchTools(new ResearchService(web.searchPort(), new CamoufoxResearchPageReader(browser),
                         researchSettings.budget()))
@@ -68,6 +70,9 @@ public final class ArgosTools {
             case EXPERT -> {
                 List<SyncToolSpecification> tools = new ArrayList<>(webTools());
                 tools.addAll(browserTools());
+                // Tabs, history, semantic controls, extraction. browsing.compact() (web_controls,
+                // web_click, web_fill) joins COMPACT only after it has been tested with small models.
+                tools.addAll(browsing.expert());
                 yield List.copyOf(tools);
             }
         };
@@ -147,7 +152,7 @@ public final class ArgosTools {
     }
 
     /** A tool answering in plain text, which small models read more reliably than JSON. */
-    private SyncToolSpecification text(String name, String description,
+    private static SyncToolSpecification text(String name, String description,
                                       Map<String, Object> properties, List<String> required,
                                       TextHandler handler) {
         return SyncToolSpecification.builder()
@@ -168,7 +173,7 @@ public final class ArgosTools {
         String apply(Map<String, Object> arguments) throws Exception;
     }
 
-    private SyncToolSpecification tool(String name, String description,
+    static SyncToolSpecification tool(String name, String description,
                                       Map<String, Object> properties, List<String> required,
                                       Function<Map<String, Object>, Object> handler) {
         return SyncToolSpecification.builder()
@@ -178,22 +183,39 @@ public final class ArgosTools {
                     try {
                         Object response = handler.apply(request.arguments() == null ? Map.of() : request.arguments());
                         return CallToolResult.builder()
-                                .addTextContent(json.writeValueAsString(response)).build();
+                                .addTextContent(JSON.writeValueAsString(response)).build();
                     } catch (Exception error) {
                         return failure(error);
                     }
                 }).build();
     }
 
-    private static JsonSchema schema(Map<String, Object> properties, List<String> required) {
+    /** Like {@link #tool}, but returns the handler's text unchanged: short readable lines for small models. */
+    static SyncToolSpecification textTool(String name, String description,
+                                          Map<String, Object> properties, List<String> required,
+                                          Function<Map<String, Object>, String> handler) {
+        return SyncToolSpecification.builder()
+                .tool(Tool.builder().name(name).description(description)
+                        .inputSchema(schema(properties, required)).build())
+                .callHandler((exchange, request) -> {
+                    try {
+                        String response = handler.apply(request.arguments() == null ? Map.of() : request.arguments());
+                        return CallToolResult.builder().addTextContent(response).build();
+                    } catch (Exception error) {
+                        return failure(error);
+                    }
+                }).build();
+    }
+
+    static JsonSchema schema(Map<String, Object> properties, List<String> required) {
         return new JsonSchema("object", properties, required, false, Map.of(), Map.of());
     }
 
-    private static Map<String, Object> field(String type, String description) {
+    static Map<String, Object> field(String type, String description) {
         return Map.of("type", type, "description", description);
     }
 
-    private static String string(Map<String, Object> arguments, String name) {
+    static String string(Map<String, Object> arguments, String name) {
         Object value = arguments.get(name);
         if (!(value instanceof String text)) {
             throw new IllegalArgumentException("Missing string field: " + name);
@@ -201,7 +223,7 @@ public final class ArgosTools {
         return text;
     }
 
-    private static int number(Map<String, Object> args, String field, int fallback) {
+    static int number(Map<String, Object> args, String field, int fallback) {
         Object value = args.get(field);
         if (value instanceof Number n) return n.intValue();
         // Small models often send numbers as strings ("2").
@@ -209,7 +231,12 @@ public final class ArgosTools {
         return fallback;
     }
 
-    private static CallToolResult failure(Exception error) {
+    static String optionalString(Map<String, Object> arguments, String name) {
+        Object value = arguments.get(name);
+        return value instanceof String text ? text : null;
+    }
+
+    static CallToolResult failure(Exception error) {
         String safeMessage = error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage();
         return CallToolResult.builder().isError(true).addTextContent(safeMessage).build();
     }

@@ -145,6 +145,23 @@ Der Login allein ist **keine** Discovery-Abnahme. Nach erfolgreicher OAuth-Verbi
 | `browser_screenshot` | Screenshot als MCP-Image zurückgeben |
 | `browser_network` | Letzte HTTP-Requests, Responses und Fehler untersuchen |
 
+### Tabs, Historie, Bedienelemente und Extraktion
+
+Diese Werkzeuge stehen in `ArgosBrowsingTools` als getrennte Listen `expert()` und `compact()` bereit und werden erst über die Profilauswahl veröffentlicht. Das bisherige Profil bleibt bei genau neun Werkzeugen. `web_controls`, `web_click` und `web_fill` sind für kleine Modelle vorgesehen, müssen aber vor der Aufnahme ins Kompaktprofil gegen kleine Modelle getestet werden.
+
+| Tool | Profil | Zweck |
+| --- | --- | --- |
+| `browser_tabs`, `browser_tab_new`, `browser_tab_select`, `browser_tab_close` | expert | Tabs mit kurzen Ids (`t1`, `t2`); von Webseiten geöffnete Tabs (`target=_blank`) werden übernommen und nach einem Klick aktuell |
+| `browser_back`, `browser_forward`, `browser_reload` | expert | Historie des aktuellen Tabs |
+| `browser_controls` | expert | Bedienelemente mit Nummer, Aria-Ref und semantischem Locator (`role=button name="Suchen"`) |
+| `browser_click_target`, `browser_fill_target` | expert | Klick bzw. Eingabe auf Nummer, Ref, semantischen Locator (`role=`, `label=`, `placeholder=`, `text=`) oder sichtbaren Namen |
+| `browser_extract` | expert | `overview`, `headings`, `links`, `tables`, `lists`, `metadata` (inkl. `citation_*`, Open Graph), `jsonld` |
+| `web_controls`, `web_click`, `web_fill` | compact | Dieselbe Bedienung für kleine Modelle: nummerierte Textliste, ein bis zwei Parameter |
+
+**Tarnung:** Gelesen wird nur über Aufrufe, die nachweislich keine Spuren in der Seite hinterlassen: den seitenweiten Aria-Snapshot, `aria-ref`-Locator mit `count`/`boundingBox` und `evaluateAll`. Locator-Aktionen (auch Trial-Klicks), `isEditable`, `getAttribute`, `innerHTML` und `locator.ariaSnapshot` lösen dagegen `__playwright_mark_target__`-Events aus, die eine Seite abhören kann ([playwright4j#38](https://github.com/aresstack/playwright4j/issues/38)), und werden deshalb nicht verwendet. Es gibt keine Preload- oder Init-Scripts und keine Marker-Attribute. Klicks werden als echte BiDi-Eingabe ausgeführt: Bounding Box messen, bei Bedarf mit echtem Mausrad statt `scrollIntoView` scrollen, einen zufälligen Punkt in der inneren Hälfte per `elementFromPoint` auf Verdeckung prüfen, Maus in mehreren Schritten dorthin bewegen, drücken, loslassen. Tippen erfolgt Taste für Taste mit unregelmäßigen Pausen. Die Webseite sieht `isTrusted=true`. Der echte Browsertest prüft, dass keine Marker-Events und keine neuen globalen Namen entstehen. Passwortwerte werden in Bedienelement-Listen nie ausgegeben.
+
+**Bekannte Grenzen aus Playwright Core 1.62 (Playwright4J):** Der BiDi-Layer legt auf jedem Dokument `window.__pw_bidiInsertText` an, unabhängig von Argos. Zeichen außerhalb des US-Tastaturlayouts (z. B. Umlaute) tippt Playwright über diese Funktion mit einem nicht vertrauenswürdigen `InputEvent`. Beides sollte in Playwright4J behoben werden (BiDi `input.performActions` akzeptiert beliebige Unicode-Tastenwerte). Für zuverlässige Historie setzt Argos `browser.sessionhistory.max_total_viewers=0`, weil Playwright Rücksprünge aus dem Back-Forward-Cache sonst nicht bemerkt; die offizielle `launch.json` kann den Wert überschreiben.
+
 `browser_network` entfernt Query-Parameter und Benutzerinformationen aus den protokollierten URLs. Bis zu 200 Ereignisse bleiben im Speicher. `browser_evaluate` kann Webseiten verändern und ist deshalb nur für ausdrücklich autorisierte Nutzer über das gesicherte MCP-Plugin bestimmt.
 
 ### Werkzeugprofile

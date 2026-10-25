@@ -156,7 +156,7 @@ Legende Spalten: **A** = in Argos vorhanden, **K** = in AskAI (`arch`), **E** = 
 | Funktion | A | K | E | Entscheidung | Belege und Begründung |
 |---|---|---|---|---|---|
 | Navigation http(s) | ✔ `CamoufoxBrowser.navigate` | ✔ `Playwright4jDriver.open` | ✔ `BidiBrowserConnection.navigate` | behalten | – |
-| URL-Richtlinie vor und nach Redirect | ✘ | ✔ `UrlSafetyPolicy.check`, `PlaywrightBrowserSession.checkedSnapshot` | ✔ `BrowserAccessPolicy`, `ChatBrowserRuntime.checkFinal` | **AN** | AskAI-Policy blockiert privat pauschal; Auftrag verlangt Intranet per Richtlinie → Enterprise-Regelsyntax (`example.org`, `*.example.org`, Blockliste gewinnt) mit AskAI-Prüfpunkten kombinieren. Dialog „Benutzer fragen“ (Enterprise `UNKNOWN`) entfällt, Server-Konfiguration statt Rückfrage. |
+| URL-Richtlinie vor und nach Redirect | ✘ | ✔ `UrlSafetyPolicy.check`, `PlaywrightBrowserSession.checkedSnapshot` | ✔ `BrowserAccessPolicy`, `ChatBrowserRuntime.checkFinal` | **AN** | **Nur Bedienkomfort, keine Zugriffskontrolle** (Abschnitt 5.4): Der Nachcheck läuft erst, nachdem der Browser die Redirect-Ziele schon angefragt hat, und keiner der beiden Checks sieht Subrequests oder die DNS-Auflösung des Browsers. Regelsyntax aus Enterprise (`example.org`, `*.example.org`, Blockliste gewinnt) plus IP-/CIDR-Regeln; dieselbe `NetworkPolicy` wird von der Netzwerkgrenze (5.4) durchgesetzt. Dialog „Benutzer fragen“ (Enterprise `UNKNOWN`) entfällt. |
 | Dokumenttyp-abhängige Textgewinnung (HTML/XML/RSS/JSON/text/binär) | ✘ (nur `body.innerText`) | ✘ (`page.innerText("body")` in `Playwright4jDriver.state`) | teilweise (`isDocumentPath` per Dateiendung) | **NEU** | Content-Type aus `Response.headerValue("content-type")` der Navigation (Stufe 0), Body aus `response.body()`; HTML über `page.content()` + jsoup bzw. `locator("body").innerText()` nur wenn `body` existiert (`locator("body").count()`). XML/RSS: Java-seitige Text-/Item-Darstellung; JSON: Pretty-Print begrenzt; Binär → Verweis auf Dokumentwerkzeug. |
 | Konfigurierbare Seitenbereitschaft | ✘ (DOMContentLoaded) | ✔ teilweise: `BrowserPageReadiness`, `HeuristicPageReadinessJudge`, `RenderedPageDocumentCapture` (Fingerprint vorher/nachher, `MAX_RECAPTURES`, `SETTLE_MILLIS`) | ✔ `BidiBrowserConnection.isLoadSettled`, `QUIET_MILLIS`, `settleRedirect` | **AN** | Konzept „Dokument geladen → ruhig für X ms → Inhalt vorhanden → Ladeindikator weg → Deadline“ aus beiden. Ruhe-Messung **ohne** MutationObserver: Hash von `page.content()` bzw. Textlänge in Intervallen (Stufe 1) plus Netzwerk-Ruhe aus den Request-Events (Stufe 0). |
 | `browser_wait(selector,state,timeoutMs)` | ✘ | ✘ | ✘ | **NEU** (expert) | `locator.waitFor(state)`; Utility-Welt. |
@@ -218,7 +218,7 @@ Legende Spalten: **A** = in Argos vorhanden, **K** = in AskAI (`arch`), **E** = 
 | Reranking BM25 | ✘ | ✔ `Bm25CandidateReranker` | ✘ | **W** (optional) | Klein, modellfrei; nützlich für `web_search`-Sortierung oder `web_links`-Filter. |
 | Readiness-Urteil, Ähnlichkeit Seite ↔ Snippet | ✘ | ✔ `HeuristicPageReadinessJudge`, `PageContentSimilarity` (NaN = keine Meinung) | ✘ | **W** (Heuristik) | Modellvariante nur als Port. |
 | Research-HUD in der Seite | ✘ | ✔ `ResearchHudOverlay` + `exposeBinding("__askaiHudCommand")` | ✘ | **NICHT** | Verletzt Stufe „verboten“. Ersatz: Add-on (Stufe 2). |
-| Request-Interception gegen SSRF | ✘ | ✔ `context.route("**/*")` in `Playwright4jDriver.launch` | ✘ | **NICHT** (vorerst) | Route-Interception verzögert jeden Request messbar und hängt am Event-Pump. Für Argos genügt die Richtlinie vor/nach Navigation; Subrequests der Seite nicht filtern. |
+| Request-Interception gegen SSRF | ✘ | ✔ `context.route("**/*")` in `Playwright4jDriver.launch` | ✘ | **NICHT** | `route()` prüft URLs, nicht die vom Browser aufgelöste IP → schützt nicht gegen DNS-Rebinding oder Hostnamen mit privater Adresse; verzögert jeden Request, hängt am Event-Pump. Stattdessen Netzwerkgrenze per lokalem Proxy (Abschnitt 5.4). |
 | Low-Level-BiDi (WD4J, `de.bund.zrb.*`) | ✘ | ✘ | ✔ `browser-firefox` | **NICHT** | Auftrag; Argos bleibt bei Playwright4J. |
 | Capability-Probe mit spezifischem Status | teilweise (`--verify-runtime`) | ✔ `PlaywrightCapabilityProbe`, `PlaywrightReadiness.Status` | ✘ | **AN** | `browser_status` um Status (READY/BROWSER_NOT_CONFIGURED/START_FAILED) erweitern. |
 | Parent-Death-Watchdog | ✘ | ✔ `ParentDeathWatchdog` | ✘ | **NICHT** | Argos wird vom Webserver verwaltet, nicht per stdin. |
@@ -287,14 +287,77 @@ Fehlern immer `<OUTCOME>: <kurzer Satz mit nächstem Schritt>`, z. B.
 
 ### 5.3 Ablauf `web_open` (Referenz für AP A/C)
 
-1. `UrlPolicy.check(url)` → `BLOCKED`/`INVALID_REQUEST`.
+1. `UrlPolicy.check(url)` → `BLOCKED`/`INVALID_REQUEST` (früher, verständlicher Fehler; die Durchsetzung
+   macht die Netzwerkgrenze aus 5.4).
 2. `page.navigate(url, waitUntil=COMMIT)` → `Response` (Status, Content-Type).
-3. `UrlPolicy.check(page.url())` nach Redirect; sonst `about:blank` und `BLOCKED`.
+3. `UrlPolicy.check(page.url())` nach Redirect; sonst `about:blank` und `BLOCKED`. Dieser Nachcheck ist
+   **keine** Schutzmaßnahme (die Anfrage ist schon passiert), sondern verhindert nur, dass Argos eine
+   Seite liefert, die die Richtlinie nicht erlaubt. Ein vom Proxy abgewiesener Redirect erscheint hier als
+   Navigationsfehler und wird als `BLOCKED` gemeldet.
 4. Nicht-HTML: `response.body()` begrenzt lesen → `ContentReader` je Typ (XML/RSS/JSON/Text/Binär).
 5. HTML: `PageReadiness.await(profile)` (load-Event, Netzwerk-Ruhe, Inhalts-Ruhe über `page.content()`-Hash,
    optional Ladeindikator weg, Deadline). Keine festen Sleeps.
 6. Challenge/Consent prüfen (Java-seitig über HTML); Consent nur nach konfigurierter Regel per echter Maus.
 7. `PageSnapshot` aus HTML (Text, Links mit IDs), Ausgabe `URL/TITLE/TYPE/STATUS` + Text.
+
+### 5.4 Netzwerkgrenze und SSRF (nach Review vom 2026-10-25)
+
+**Bedrohungsmodell.** Argos läuft auf einem Rechner mit Diensten nur an Loopback (AresStack-Webserver,
+Argos selbst, der Remote-Agent-Port von Camoufox, Playwright4J-Treiber), im LAN (Router, NAS, Intranet)
+und ggf. mit Cloud-Metadaten (`169.254.169.254`). Angreifer sind (a) ein Modell, das durch Seiteninhalt
+manipuliert wurde (Prompt Injection) und interne URLs öffnen lässt, und (b) die Webseite selbst, die per
+Redirect, Subrequest (`<img>`, `fetch`, Formular) oder **DNS-Rebinding** interne Adressen ansteuert. Ziel
+des Angreifers: interne Dienste auslösen (CSRF) oder lesen und über das Modell nach außen bringen.
+
+**Warum URL-Checks nicht reichen.** Der Vorab-Check sieht nur die erste URL. Redirects, Subrequests und
+Folge-Navigationen fordert der Browser selbst an, bevor Argos davon erfährt; der Nachcheck kommt zu spät.
+Beide Checks lösen DNS, wenn überhaupt, in Java auf, der Browser löst unabhängig davon auf (eigener Cache,
+DoH/TRR, Rebinding zwischen beiden Auflösungen). `context.route()` sähe zwar jede Anfrage vor dem Senden,
+aber ebenfalls nur URLs, nicht die Ziel-IP.
+
+**Entscheidung: Durchsetzung an der Verbindungsgrenze.** Argos startet einen eigenen, in-process
+SOCKS5-Proxy (nur `127.0.0.1`, zufälliger Port), und Camoufox wird per `firefoxUserPrefs` beim Start
+gezwungen, **jede** Verbindung darüber aufzubauen und **DNS nicht selbst** aufzulösen:
+
+| Pref | Wert | Zweck |
+|---|---|---|
+| `network.proxy.type` | `1` | manueller Proxy |
+| `network.proxy.socks` / `network.proxy.socks_port` / `network.proxy.socks_version` | `127.0.0.1` / Port / `5` | Argos-Proxy |
+| `network.proxy.socks_remote_dns` | `true` | Hostname geht an den Proxy, Browser löst nicht auf |
+| `network.proxy.no_proxies_on` | `""` | keine Ausnahmen |
+| `network.proxy.allow_hijacking_localhost` | `true` | sonst umgeht Firefox den Proxy für `localhost`/`127.0.0.1` |
+| `network.trr.mode` | `5` | kein DoH am Proxy vorbei |
+| `network.dns.disablePrefetch`, `network.predictor.enabled` | `true` / `false` | keine spekulativen Auflösungen |
+| `media.peerconnection.ice.proxy_only` | `true` | WebRTC/UDP nicht am Proxy vorbei (Wirkung auf Camoufox-WebRTC-Spoofing im Signaltest prüfen) |
+
+Der Proxy löst den Hostnamen **einmal** auf, prüft **jede** resultierende IP gegen die `NetworkPolicy`
+(Loopback, RFC 1918, Link-Local, ULA, Metadaten, CGNAT; Ausnahmen nur über konfigurierte Intranet-Regeln
+nach Host und CIDR) und verbindet sich mit genau der geprüften IP. Damit gilt die Kontrolle präventiv für
+Navigation, Redirects, Subrequests, Formulare, Prefetch und Service-Worker, und DNS-Rebinding greift nicht,
+weil der Browser nie selbst auflöst. HTTPS bleibt ein unveränderter `CONNECT`-Tunnel: **kein MITM**, TLS
+und Header sind die des Browsers, für Seitenskripte ist der Proxy unsichtbar (Stufe 0). Abgewiesene
+Verbindungen werden mit Host, Grund und Zeit protokolliert und erscheinen in `browser_network` als
+`BLOCKED`.
+
+**Fail closed.** Der Proxy startet vor dem Browser; startet er nicht, startet auch der Browser nicht. Fällt
+er aus, kann der Browser nichts mehr erreichen. Die Prefs werden bei jedem Start gesetzt (der persistente
+Profilinhalt kann sie nicht überstimmen); ein Start-Selbsttest prüft, dass eine Navigation zu einem
+lokalen Testport vom Proxy abgewiesen wird.
+
+**Dokumentierte Grenzen.**
+- Regeln wirken auf Host und IP, **nicht auf Pfade** von HTTPS-Zielen (ohne MITM unsichtbar).
+- Ein upstream-Proxy, den Camoufox für Geo/IP-Konsistenz verwendet, muss im Argos-Proxy verkettet werden;
+  die Policy prüft dann den Zielhost, die Ziel-IP sieht nur der Upstream (Grenze dokumentieren oder
+  Upstream-DNS verbieten).
+- Browser-interne Verbindungen (Updates, Safe Browsing, Telemetrie) laufen ebenfalls durch den Proxy und
+  unterliegen derselben Policy.
+- Die Verbindung zum BiDi-Remote-Agent läuft nicht über den Proxy (Argos → Browser, nicht Browser → Netz).
+- Pref-Namen und -Wirkung sind gegen die Firefox-Version von Camoufox zu verifizieren (Testfall:
+  Redirect öffentliche → private Adresse, `<img>` auf `127.0.0.1`, Rebinding-Host mit TTL 0, WebRTC).
+- Falls die Messung zeigt, dass ein Pref ignoriert wird, ist das ein Blocker für den Start mit
+  `ARGOS_NETWORK_POLICY=strict`, keine stille Degradation.
+
+Die Vorher-/Nachher-URL-Checks aus 5.3 bleiben, aber nur für verständliche Fehlermeldungen.
 
 ---
 
@@ -333,6 +396,7 @@ genug für `argos.jar`.
 | R10 | Google-SERP reagiert empfindlich (CAPTCHA, Consent `consent.google.com`) | Suchausfälle | Google nicht an erste Stelle der Standardreihenfolge (DDG html → Bing → Google), Pausen pro Engine (`delayMillisFor`), `CHALLENGE_REQUIRED` statt Wiederholung | AP B |
 | R11 | Mehrere Threads arbeiten parallel an `ArgosTools`/`CamoufoxBrowser` | Merge-Konflikte | Profil-Thread führt `mcp/`-Pakete ein; andere Pakete ergänzen nur Methoden in `CamoufoxBrowser` mit fachlichen Namen und eigene Klassen; `legacy` nicht anfassen | alle |
 | R12 | `argos.jar`-Größe durch Parser | langsamer Start, große Releases | kein Tika-Standardpaket; PDFBox reicht zunächst | AP E |
+| R14 | Redirect-/Subrequest-SSRF und DNS-Rebinding auf Loopback, LAN, Metadaten | Zugriff auf interne Dienste über den Browser | Netzwerkgrenze per lokalem SOCKS5-Proxy mit Remote-DNS und IP-Policy, fail closed (5.4); URL-Checks nur für Fehlermeldungen | AP A (vor Freigabe nach außen) |
 | R13 | Playwright4J-Issue #34 (zwei Fenster bei persistentem BiDi-Start unter Windows) | sichtbares Fremdfenster, Tab-Liste unvollständig | bei Tab-Verwaltung nur `context.pages()` als Wahrheit; Fix aus Playwright4J abwarten | AP C |
 
 ---
@@ -343,7 +407,8 @@ genug für `argos.jar`.
 |---|---|---|---|
 | 0a | Stealth-Regressionstest (R1, R3) als opt-in Test | – | Bericht mit `navigator.webdriver`, Globals, `userActivation`, `TestUtils`; Basiswert für alle Pakete |
 | 0b | `ToolProfile` + `mcp/`-Gerüst, `legacy` = heutige Liste | – | `ArgosToolsTest` grün, neuer Test je Profil |
-| 1 | **AP A**: `PageSnapshot`, Content-Type-abhängiges Lesen, `PageReadiness`, Redirect-Policy, `ErrorText` | 0b | Fixtures HTML/XML/RSS/JSON/text/SPA ohne Timeout |
+| 0c | Netzwerkgrenze: `NetworkPolicy`, SOCKS5-Proxy, Firefox-Prefs, Start-Selbsttest (5.4) | – | lokale Tests: Redirect auf `127.0.0.1`, `<img>` auf LAN, Rebinding-Host, WebRTC – alle abgewiesen; öffentliche Seite unverändert, Signaltest unverändert |
+| 1 | **AP A**: `PageSnapshot`, Content-Type-abhängiges Lesen, `PageReadiness`, Redirect-Check (nur Fehlermeldung), `ErrorText` | 0b, 0c | Fixtures HTML/XML/RSS/JSON/text/SPA ohne Timeout |
 | 2 | **compact**: `web_open/read/links/follow/back` über AP A | 1 | MCP-Test über lokalen Server |
 | 3 | **AP B**: Analyse-Quelltext übernehmen, `HtmlRenderedPageBuilder`, Engine-Navigation DDG/Bing/Google, Consent/Challenge, `web_search` | 1, (0a) | Fixtures je Engine + unbekanntes Layout → `EXTRACTION_FAILED` |
 | 4 | **AP C/D**: Tabs, ARIA-Controls + `ControlLocator`, `browser_act`, `browser_wait`, `browser_extract`, Historie | 1 | 3 Tabs unabhängig; Mehrdeutigkeit → Fehler |

@@ -34,7 +34,7 @@ class Socks5ProxyTest {
     }
 
     /** Fake DNS: *.public.test is public, everything else answers from the map. */
-    private Socks5Proxy.Resolver dns(Map<String, List<String>> records) {
+    private HostResolver dns(Map<String, List<String>> records) {
         return host -> {
             resolved.add(host);
             List<String> answer = records.get(host);
@@ -45,11 +45,11 @@ class Socks5ProxyTest {
         };
     }
 
-    private Socks5Proxy proxy(String rules, Socks5Proxy.Resolver resolver) throws IOException {
+    private Socks5Proxy proxy(String rules, HostResolver resolver) throws IOException {
         return proxy(new NetworkSettings(NetworkSettings.Mode.STRICT, NetworkPolicy.parse(rules), null, null), resolver);
     }
 
-    private Socks5Proxy proxy(NetworkSettings settings, Socks5Proxy.Resolver resolver) throws IOException {
+    private Socks5Proxy proxy(NetworkSettings settings, HostResolver resolver) throws IOException {
         Socks5Proxy proxy = Socks5Proxy.start(settings, resolver);
         resources.add(proxy);
         return proxy;
@@ -237,7 +237,7 @@ class Socks5ProxyTest {
             return List.of(InetAddress.getByName("127.0.0.1"));
         });
         UpstreamProxy chained = UpstreamProxy.parse("socks5://127.0.0.1:" + upstream.port(), null, null);
-        Socks5Proxy.Resolver local = dns(Map.of("site.test", List.of("127.0.0.1")));
+        HostResolver local = dns(Map.of("site.test", List.of("127.0.0.1")));
 
         Socks5Proxy checkedIp = proxy(new NetworkSettings(NetworkSettings.Mode.STRICT,
                 NetworkPolicy.parse("127.0.0.1"), chained, NetworkSettings.UpstreamDns.LOCAL), local);

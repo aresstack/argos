@@ -1,6 +1,7 @@
 package com.aresstack.argos;
 
 import com.aresstack.argos.network.FirefoxNetworkPrefs;
+import com.aresstack.argos.network.HostResolver;
 import com.aresstack.argos.network.NetworkSettings;
 import com.aresstack.argos.network.Socks5Proxy;
 import com.aresstack.argos.network.UpstreamProxy;
@@ -108,7 +109,7 @@ public final class CamoufoxBrowser implements AutoCloseable {
                     }
                 }
                 // Fail closed: no proxy, no browser.
-                proxy = Socks5Proxy.start(network, Socks5Proxy.SYSTEM_DNS);
+                proxy = Socks5Proxy.start(network, HostResolver.SYSTEM);
                 proxy.protectLoopbackPort(config.port());
                 prefs.putAll(FirefoxNetworkPrefs.forLocalSocks(proxy.port()));
             } else {

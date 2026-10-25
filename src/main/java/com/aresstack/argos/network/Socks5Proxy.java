@@ -11,7 +11,6 @@ import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
-import java.net.UnknownHostException;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.ArrayDeque;
@@ -33,14 +32,6 @@ import java.util.concurrent.Semaphore;
  * browser has no route at all.
  */
 public final class Socks5Proxy implements AutoCloseable {
-    /** Host name resolution, replaceable in tests. */
-    @FunctionalInterface
-    public interface Resolver {
-        List<InetAddress> resolve(String host) throws UnknownHostException;
-    }
-
-    public static final Resolver SYSTEM_DNS = host -> List.of(InetAddress.getAllByName(host));
-
     private static final int MAX_BLOCKED_EVENTS = 200;
     private static final int MAX_CONNECTIONS = 512;
     private static final int HANDSHAKE_TIMEOUT_MS = 10_000;
@@ -49,7 +40,7 @@ public final class Socks5Proxy implements AutoCloseable {
             REPLY_HOST_UNREACHABLE = 4, REPLY_REFUSED = 5, REPLY_COMMAND = 7, REPLY_ADDRESS_TYPE = 8;
 
     private final NetworkSettings settings;
-    private final Resolver resolver;
+    private final HostResolver resolver;
     private final ServerSocket server;
     private final Thread acceptor;
     private final Set<Integer> protectedLoopbackPorts = ConcurrentHashMap.newKeySet();
@@ -58,7 +49,7 @@ public final class Socks5Proxy implements AutoCloseable {
     private final Semaphore slots = new Semaphore(MAX_CONNECTIONS);
     private volatile boolean closed;
 
-    private Socks5Proxy(NetworkSettings settings, Resolver resolver) throws IOException {
+    private Socks5Proxy(NetworkSettings settings, HostResolver resolver) throws IOException {
         this.settings = settings;
         this.resolver = resolver;
         this.server = new ServerSocket(0, 128, InetAddress.getByName("127.0.0.1"));
@@ -66,7 +57,7 @@ public final class Socks5Proxy implements AutoCloseable {
         this.acceptor = Thread.ofPlatform().daemon().name("argos-network-proxy").start(this::acceptLoop);
     }
 
-    public static Socks5Proxy start(NetworkSettings settings, Resolver resolver) throws IOException {
+    public static Socks5Proxy start(NetworkSettings settings, HostResolver resolver) throws IOException {
         return new Socks5Proxy(settings, resolver);
     }
 
@@ -186,25 +177,20 @@ public final class Socks5Proxy implements AutoCloseable {
     /** Resolves, checks and connects; on refusal sends the SOCKS error and returns null. */
     private Socket open(OutputStream out, String requestedHost, int port, InetAddress literal) throws IOException {
         String host = NetworkPolicy.normalizeHost(requestedHost);
-        List<InetAddress> addresses;
-        if (literal != null) {
-            addresses = List.of(literal);
-        } else if (host.equals("invalid") || host.endsWith(".invalid")) {
-            // RFC 6761: never resolved. Also the self-test's proof that the browser left DNS to the proxy.
-            return refuse(out, host, port, "reserved name, not resolved", REPLY_HOST_UNREACHABLE);
-        } else {
-            try {
-                addresses = resolver.resolve(host);
-            } catch (UnknownHostException unknown) {
-                return refuse(out, host, port, "DNS resolution failed", REPLY_HOST_UNREACHABLE);
-            }
+        NetworkPolicy.Resolution resolution = literal != null
+                ? new NetworkPolicy.Resolution(settings.policy().check(host, List.of(literal)), List.of(literal))
+                : settings.policy().resolve(host, resolver);
+        List<InetAddress> addresses = resolution.addresses();
+        if (addresses.isEmpty()) {
+            // Unresolvable or a reserved .invalid name (the self-test's proof of remote DNS).
+            return refuse(out, host, port, resolution.decision().reason(), REPLY_HOST_UNREACHABLE);
         }
         for (InetAddress address : addresses) {
             if (AddressClass.of(address) == AddressClass.LOOPBACK && protectedLoopbackPorts.contains(port)) {
                 return refuse(out, host, port, "Argos-internal port " + port, REPLY_NOT_ALLOWED);
             }
         }
-        NetworkPolicy.Decision decision = settings.policy().check(host, addresses);
+        NetworkPolicy.Decision decision = resolution.decision();
         if (!decision.allowed()) return refuse(out, host, port, decision.reason(), REPLY_NOT_ALLOWED);
 
         Socket remote;

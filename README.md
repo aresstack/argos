@@ -137,7 +137,8 @@ Der Login allein ist **keine** Discovery-Abnahme. Nach erfolgreicher OAuth-Verbi
 | --- | --- |
 | `browser_status` | Browserstatus und Profil |
 | `browser_navigate` | HTTP(S)-Seiten aufrufen |
-| `browser_snapshot` | Sichtbaren Text und Seitentitel lesen |
+| `browser_snapshot` | Seitentext abhängig vom Dokumenttyp lesen (HTML, XML/RSS/Atom, JSON, Text; Binärdokumente nur erkennen) |
+| `browser_wait` | (nur Profil `expert`) Auf Seitenbereitschaft warten, optional auf sichtbares Element (`selector`) oder sichtbaren Text (`text`) |
 | `browser_inspect` | DOM-Elemente anhand CSS-Selektoren untersuchen |
 | `browser_click` | Elemente anklicken |
 | `browser_fill` | Eingabefelder ausfüllen |
@@ -179,6 +180,41 @@ Jede Maus- und Tastatureingabe geht als vertrauenswürdiges Ereignis über WebDr
 | `ARGOS_INPUT_UNICODE` | `input.unicode` | `strict`: Zeichen, die Playwright nicht als echte Taste sendet, werden abgelehnt und schon Getipptes wieder gelöscht; `transliterate`: ä → ae, ß → ss, „“ → " usw., Rest wie `strict`; `insert`: Playwright-Fallback über ein Seitenskript (für die Seite sichtbar) | `strict` |
 
 Sobald Playwright4J Unicode-Tasten über `performActions` unterstützt, nutzt Argos sie automatisch als echte Tasten.
+
+### Dokumenttypen und Seitenbereitschaft
+
+`browser_snapshot` setzt kein HTML-`body` mehr voraus. Der Dokumenttyp wird aus dem `Content-Type` der Hauptdokument-Antwort bestimmt (Dateiendung nur als Rückfall) und als `documentType` zurückgegeben:
+
+| `documentType` | Text |
+| --- | --- |
+| `html` | Sichtbarer Text des `body` |
+| `feed` | RSS 2.0, RSS 1.0 (RDF) und Atom als nummerierte Einträge mit Titel, Link, Datum und Kurztext |
+| `xml` | XML-Quelltext |
+| `json` | Formatiertes JSON |
+| `text` | Inhalt unverändert |
+| `binary` | Kein Text, stattdessen `hint` mit Verweis auf die Dokumentverarbeitung (z. B. PDF) |
+
+Die bisherigen Schlüssel `url`, `title` und `text` bleiben erhalten; neu sind `status`, `documentType`, `contentType`, `truncated`, `characters`, `source` (`dom` oder `response`) und `hint`. Die Ausgabegrenze bleibt 1 000–60 000 Zeichen (Standard 16 000). Externe XML-Entitäten und DTDs werden beim Feed-Parsen nie geladen.
+
+`browser_navigate` wartet nach dem Ladeereignis zusätzlich auf eine konfigurierbare **Seitenbereitschaft** und meldet sie als `readiness` (`state` = `ready`, `timeout`, `skipped` oder `static-document`, dazu `met` und `pending`). Ein Zeitlimit ist kein Fehler. Mögliche Bedingungen: Netzwerk ruhig, DOM stabil (Elementanzahl und Textlänge unverändert), kein sichtbarer Ladeindikator, sichtbarer Text vorhanden. Es gibt keine pauschalen Sleeps; abgetastet wird im Poll-Intervall und sofort zurückgekehrt, sobald alle Bedingungen gelten.
+
+**Tarnung:** Für Bereitschaft und Textgewinnung wird kein Skript in die JavaScript-Welt der Seite injiziert (kein `addInitScript`, kein `page.evaluate`, kein MutationObserver). Netzwerkruhe stammt aus Protokollereignissen (`request`, `requestfinished`, `requestfailed`), DOM- und Sichtbarkeitsprüfungen aus Playwright-Locatoren in der isolierten Utility-Welt, XML/JSON/Text bevorzugt aus dem Antwort-Body über das Protokoll. `route()` wird nicht verwendet, die Viewport-Emulation bleibt abgeschaltet (`setViewportSize(null)`).
+
+**Achtung, Nutzeraktivierung:** Unter Firefox BiDi gewährt derzeit jede Leseabfrage in der Utility-Welt (Locator, `page.content()`) der Seite eine kurzzeitige Nutzeraktivierung ([playwright4j#37](https://github.com/aresstack/playwright4j/issues/37)). Ständiges Abfragen würde die Seite dauerhaft aktiviert halten. Darum nutzt die Standardeinstellung `balanced` **nur Protokollereignisse** (Netzwerkruhe) und liest den DOM beim Warten gar nicht. Die DOM-Bedingungen (Stabilität, Text, Ladeindikatoren) sind nur in `thorough` aktiv oder wenn sie einzeln gesetzt werden. `browser_wait` mit `selector`/`text` fragt nur dieses Ziel ab. Nach dem Fix in Playwright4J kann `balanced` die DOM-Bedingungen wieder einschalten.
+
+| Variable / Property | Bedeutung | Standard (`balanced`) |
+| --- | --- | --- |
+| `ARGOS_PAGE_READINESS` / `page.readiness` | Voreinstellung `fast` (bisheriges Verhalten: nur `DOMContentLoaded`), `balanced` (nur Netzwerkruhe), `thorough` (`load`, Netzwerkruhe 1 s, DOM stabil 1,5 s, Text, keine Ladeindikatoren, 15 s) | `balanced` |
+| `ARGOS_READY_WAIT_UNTIL` / `ready.wait.until` | `commit`, `domcontentloaded`, `load` | `domcontentloaded` |
+| `ARGOS_READY_TIMEOUT_MS` / `ready.timeout.ms` | Maximale Wartezeit nach dem Ladeereignis, `0` schaltet ab | `8000` |
+| `ARGOS_READY_DOM_STABLE_MS` / `ready.dom.stable.ms` | Dauer ohne DOM-Änderung, `0` schaltet ab | `0` (aus) |
+| `ARGOS_READY_NETWORK_QUIET_MS` / `ready.network.quiet.ms` | Dauer ohne Request-Start/-Ende, `0` schaltet ab | `750` |
+| `ARGOS_READY_MAX_INFLIGHT` / `ready.max.inflight` | Offene Requests, die als ruhig gelten (Long-Polling, Beacons) | `2` |
+| `ARGOS_READY_MIN_TEXT` / `ready.min.text` | Mindestlänge des sichtbaren Texts, `0` schaltet ab | `0` (aus) |
+| `ARGOS_READY_LOADING_SELECTORS` / `ready.loading.selectors` | Ladeindikatoren, getrennt durch `\|`; `none` schaltet ab | aus; `thorough`: `[aria-busy='true']`, `[role='progressbar']`, `.spinner`, `.loader`, `.skeleton` u. a. |
+| `ARGOS_READY_POLL_MS` / `ready.poll.ms` | Abtastintervall | `250` |
+
+`browser_wait` verwendet dieselben Bedingungen (bei `fast` die von `balanced`) mit eigenem `timeoutMs` (500–60 000, Standard 10 000).
 
 `browser_network` entfernt Query-Parameter und Benutzerinformationen aus den protokollierten URLs. Bis zu 200 Ereignisse bleiben im Speicher. `browser_evaluate` kann Webseiten verändern und ist deshalb nur für ausdrücklich autorisierte Nutzer über das gesicherte MCP-Plugin bestimmt.
 
@@ -232,7 +268,7 @@ Im GitHub Release liegen die **direkt ausführbare `argos.jar`** und optional `a
 .\gradlew.bat test --tests com.aresstack.argos.CamoufoxBrowserTest -PtestCamoufox=true
 ```
 
-Der zweite Befehl verwendet eine **separate temporäre Headless-Camoufox-Instanz** und einen lokalen HTTP-Testserver. Er überprüft Navigation, Seitentext, DOM-Inspektion, Eingaben, Klicks, JavaScript, Screenshots und Netzwerkereignisse. Bereits laufende GPT-Desktop-Sitzungen werden nicht verwendet oder beendet.
+Der zweite Befehl verwendet eine **separate temporäre Headless-Camoufox-Instanz** und einen lokalen HTTP-Testserver. Er überprüft Navigation, Seitentext, DOM-Inspektion, Eingaben, Klicks, JavaScript, Screenshots und Netzwerkereignisse sowie mit den Fixtures aus `src/test/resources/fixtures` alle Dokumenttypen (RSS, XML, JSON, Text, PDF) und die Seitenbereitschaft einer verzögert rendernden Single-Page-Anwendung. Die Dokumenttyp- und Bereitschaftslogik ist zusätzlich ohne Browser gegen einen lokalen HTTP-Testserver getestet und läuft in der CI. Bereits laufende GPT-Desktop-Sitzungen werden nicht verwendet oder beendet.
 
 Streamable-HTTP-MCP wurde zusätzlich mit `initialize`, `notifications/initialized`, `tools/list` und `tools/call(browser_status)` über HTTP geprüft. Das eigenständige Windows-Smoketestskript `scripts/smoke-standalone.ps1 -WithCamoufox` kopiert **nur `argos.jar`** in ein temporäres Verzeichnis und prüft zusätzlich einen echten Camoufox-Start, Navigation und Interaktion über MCP.
 

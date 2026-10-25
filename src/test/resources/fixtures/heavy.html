@@ -1,0 +1,16 @@
+<!doctype html>
+<html><head><title>Heavy DOM fixture</title></head>
+<body>
+<main id="list"></main>
+<script>
+  // The site's own script: builds a large DOM in chunks, like an infinite list.
+  var list = document.getElementById('list'), batch = 0;
+  function addBatch() {
+    var html = '';
+    for (var i = 0; i < 2000; i++) html += '<article><h2>Result ' + (batch * 2000 + i) + '</h2><p>Text</p></article>';
+    list.insertAdjacentHTML('beforeend', html);
+    if (++batch < 10) setTimeout(addBatch, 100); else list.setAttribute('data-done', 'true');
+  }
+  addBatch();
+</script>
+</body></html>

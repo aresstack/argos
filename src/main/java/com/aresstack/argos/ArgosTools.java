@@ -73,6 +73,7 @@ public final class ArgosTools {
                 // Tabs, history, semantic controls, extraction. browsing.compact() (web_controls,
                 // web_click, web_fill) joins COMPACT only after it has been tested with small models.
                 tools.addAll(browsing.expert());
+                tools.addAll(expertTools());
                 yield List.copyOf(tools);
             }
         };
@@ -108,6 +109,21 @@ public final class ArgosTools {
         return List.copyOf(tools);
     }
 
+    /** Browser tools added after the original nine; the legacy profile keeps its exact list. */
+    public List<SyncToolSpecification> expertTools() {
+        List<SyncToolSpecification> tools = new ArrayList<>();
+        tools.add(tool("browser_wait", "Wait until the page has finished loading (network quiet; stricter checks "
+                        + "if configured). Optionally also wait for a visible element or text. "
+                        + "Never fails on timeout; check readiness.state ('ready' or 'timeout') and readiness.pending. "
+                        + "Example: {\"text\": \"Search results\", \"timeoutMs\": 10000}",
+                Map.of("selector", field("string", "Optional CSS selector that must become visible, e.g. '#results'"),
+                        "text", field("string", "Optional text that must become visible on the page"),
+                        "timeoutMs", field("integer", "Maximum wait in milliseconds (500–60000, default 10000)")),
+                List.of(), args -> browser.waitFor(optionalString(args, "selector"), optionalString(args, "text"),
+                        number(args, "timeoutMs", 10_000))));
+        return List.copyOf(tools);
+    }
+
     /** The original browser_* tools. */
     public List<SyncToolSpecification> browserTools() {
         List<SyncToolSpecification> tools = new ArrayList<>();
@@ -116,7 +132,9 @@ public final class ArgosTools {
         tools.add(tool("browser_navigate", "Navigate the current Camoufox page to an http(s) URL.",
                 Map.of("url", field("string", "Full http(s) website URL")), List.of("url"),
                 args -> browser.navigate(string(args, "url"))));
-        tools.add(tool("browser_snapshot", "Read current page title, URL and visible DOM text.",
+        tools.add(tool("browser_snapshot", "Read the current page as text. Works for HTML (visible text), "
+                        + "XML/RSS/Atom feeds (numbered entries), JSON and plain text; binary documents such as "
+                        + "PDF are reported with documentType 'binary' and a hint instead of text.",
                 Map.of("maxCharacters", field("integer", "Maximum characters (1000–60000, default 16000)")),
                 List.of(), args -> browser.snapshot(number(args, "maxCharacters", 16_000))));
         tools.add(tool("browser_inspect", "Inspect DOM elements matching a CSS selector, including text, links and attributes.",
@@ -232,8 +250,7 @@ public final class ArgosTools {
     }
 
     static String optionalString(Map<String, Object> arguments, String name) {
-        Object value = arguments.get(name);
-        return value instanceof String text ? text : null;
+        return arguments.get(name) instanceof String text && !text.isBlank() ? text : null;
     }
 
     static CallToolResult failure(Exception error) {

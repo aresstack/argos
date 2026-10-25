@@ -27,6 +27,7 @@ class ArgosToolsTest {
             assertTrue(names.contains("browser_navigate"));
             assertTrue(names.contains("browser_screenshot"));
             assertTrue(names.contains("browser_network"));
+            assertFalse(names.contains("browser_wait"), "new tools go to the expert profile");
             assertEquals("browser_status", tools.get(0).tool().name());
             assertFalse(names.stream().anyMatch(name -> name.contains("chromium")));
             assertEquals(names, names(new ArgosTools(browser).forProfile(ToolProfile.LEGACY)));

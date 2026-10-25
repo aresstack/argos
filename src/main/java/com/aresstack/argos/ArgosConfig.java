@@ -1,5 +1,7 @@
 package com.aresstack.argos;
 
+import com.aresstack.argos.page.ReadinessPolicy;
+
 import java.io.IOException;
 import java.io.Reader;
 import java.net.URI;
@@ -13,24 +15,25 @@ import java.util.Properties;
 public record ArgosConfig(
         String host, int port, Path executable, Path launchOptions, Path profile, boolean headless,
         String publicOrigin, String securityMode, String centralOauthIssuer, String requiredScope,
-        ToolProfile toolProfile, boolean allowPrivateNetworks) {
+        ToolProfile toolProfile, boolean allowPrivateNetworks, ReadinessPolicy readiness) {
 
     public ArgosConfig {
         toolProfile = toolProfile == null ? ToolProfile.LEGACY : toolProfile;
+        if (readiness == null) readiness = ReadinessPolicy.balanced();
     }
 
     // Direct browser-test construction remains independent of server configuration.
     public ArgosConfig(String host, int port, Path executable, Path launchOptions,
                        Path profile, boolean headless) {
         this(host, port, executable, launchOptions, profile, headless,
-                null, "central-oauth", null, "argos", ToolProfile.LEGACY, false);
+                null, "central-oauth", null, "argos", ToolProfile.LEGACY, false, ReadinessPolicy.balanced());
     }
 
     public ArgosConfig(String host, int port, Path executable, Path launchOptions, Path profile,
                        boolean headless, String publicOrigin, String securityMode,
                        String centralOauthIssuer, String requiredScope) {
         this(host, port, executable, launchOptions, profile, headless, publicOrigin, securityMode,
-                centralOauthIssuer, requiredScope, ToolProfile.LEGACY, false);
+                centralOauthIssuer, requiredScope, ToolProfile.LEGACY, false, ReadinessPolicy.balanced());
     }
 
     public static ArgosConfig fromEnvironment() throws IOException {
@@ -91,7 +94,8 @@ public record ArgosConfig(
                 ToolProfile.parse(setting("ARGOS_TOOL_PROFILE", application, "tools.profile", null)),
                 // web_* tools refuse loopback/private targets unless explicitly allowed (local tests).
                 Boolean.parseBoolean(setting("ARGOS_ALLOW_PRIVATE_NETWORKS", application,
-                        "browser.allow-private-networks", "false")));
+                        "browser.allow-private-networks", "false")),
+                ReadinessPolicy.from(name -> setting(name, application, propertyKey(name), null)));
     }
 
     private static Properties readProperties(Path path) throws IOException {
@@ -109,6 +113,11 @@ public record ArgosConfig(
         if (env != null && !env.isBlank()) return env.trim();
         String property = properties.getProperty(key);
         return property != null && !property.isBlank() ? property.trim() : fallback;
+    }
+
+    /** ARGOS_READY_DOM_STABLE_MS → ready.dom.stable.ms in argos.properties. */
+    private static String propertyKey(String environment) {
+        return environment.replaceFirst("^ARGOS_", "").toLowerCase(Locale.ROOT).replace('_', '.');
     }
 
     private static String normalizeOrigin(String value) {

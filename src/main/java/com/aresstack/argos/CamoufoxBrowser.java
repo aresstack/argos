@@ -3,6 +3,16 @@ package com.aresstack.argos;
 import com.aresstack.argos.web.BrowserPagePort;
 import com.aresstack.argos.web.PageCapture;
 import com.aresstack.argos.web.PageText;
+import com.aresstack.argos.page.DocumentText;
+import com.aresstack.argos.page.DocumentType;
+import com.aresstack.argos.page.NetworkActivity;
+import com.aresstack.argos.page.PageSample;
+import com.aresstack.argos.page.PageSnapshot;
+import com.aresstack.argos.page.PageSource;
+import com.aresstack.argos.page.ReadinessPolicy;
+import com.aresstack.argos.page.ReadinessReport;
+import com.aresstack.argos.page.ReadinessWaiter;
+import com.aresstack.argos.page.SnapshotReader;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.microsoft.playwright.BrowserContext;
@@ -12,6 +22,7 @@ import com.microsoft.playwright.Mouse;
 import com.microsoft.playwright.Page;
 import com.microsoft.playwright.Playwright;
 import com.microsoft.playwright.PlaywrightException;
+import com.microsoft.playwright.Request;
 import com.microsoft.playwright.Response;
 import com.microsoft.playwright.options.BoundingBox;
 import com.microsoft.playwright.TimeoutError;
@@ -45,6 +56,9 @@ import java.util.concurrent.TimeUnit;
  */
 public final class CamoufoxBrowser implements BrowserPagePort, AutoCloseable {
     private static final int MAX_NETWORK_EVENTS = 200;
+    /** Source documents above this size are not pulled through the protocol for a snapshot. */
+    private static final long MAX_SOURCE_BYTES = 8_000_000;
+    private static final int PROBE_TIMEOUT_MS = 2_000;
     private final ArgosConfig config;
     private final ExecutorService driver = Executors.newSingleThreadExecutor(
             runnable -> Thread.ofPlatform().name("argos-camoufox-driver").unstarted(runnable));
@@ -53,6 +67,9 @@ public final class CamoufoxBrowser implements BrowserPagePort, AutoCloseable {
     private final BrowserTabs tabs = new BrowserTabs();
     private final Map<Page, PageControls> controlSnapshots = new IdentityHashMap<>();
     private final RealInput input;
+    private final SnapshotReader snapshots = new SnapshotReader();
+    /** Per-tab protocol observations: in-flight requests and the top-level document of each tab. */
+    private final Map<Page, TabDocument> documents = new IdentityHashMap<>();
     private Playwright playwright;
     private BrowserContext context;
 
@@ -175,14 +192,53 @@ public final class CamoufoxBrowser implements BrowserPagePort, AutoCloseable {
         Optional<String> known = tabs.idOf(page);
         if (known.isPresent()) return known.get();
         String id = tabs.adopt(page);
-        page.onRequest(request -> record("request", request.method(), request.url(), 0));
-        page.onResponse(response -> record("response", response.request().method(), response.url(), response.status()));
-        page.onRequestFailed(request -> record("failed", request.method(), request.url(), 0));
+        TabDocument tab = new TabDocument();
+        documents.put(page, tab);
+        // Protocol events only: observing them is invisible to the website.
+        page.onRequest(request -> {
+            if (isMainDocument(page, request)) tab.activity.reset();
+            tab.activity.started();
+            record("request", request.method(), request.url(), 0);
+        });
+        page.onResponse(response -> {
+            if (isMainDocument(page, response.request())) {
+                MainDocument document = new MainDocument(response);
+                if (document.attachment()) tab.lastDownload = document;
+                else tab.mainDocument = document;
+            }
+            record("response", response.request().method(), response.url(), response.status());
+        });
+        page.onRequestFinished(request -> tab.activity.ended());
+        page.onRequestFailed(request -> {
+            tab.activity.ended();
+            record("failed", request.method(), request.url(), 0);
+        });
         page.onClose(closed -> {
             tabs.forget(closed);
             controlSnapshots.remove(closed);
+            documents.remove(closed);
         });
         return id;
+    }
+
+    private TabDocument document(Page page) {
+        return documents.computeIfAbsent(page, unknown -> new TabDocument());
+    }
+
+    /** What the protocol told us about one tab: request activity and its top-level document response. */
+    private static final class TabDocument {
+        final NetworkActivity activity = new NetworkActivity(System::currentTimeMillis);
+        MainDocument mainDocument;
+        /** Last top-level response the browser saved as a download; it never replaces the rendered page. */
+        MainDocument lastDownload;
+    }
+
+    private static boolean isMainDocument(Page owner, Request request) {
+        try {
+            return request.isNavigationRequest() && request.frame() == owner.mainFrame();
+        } catch (RuntimeException workerOrDetachedFrame) {
+            return false;
+        }
     }
 
     private void record(String kind, String method, String originalUrl, int status) {
@@ -205,10 +261,32 @@ public final class CamoufoxBrowser implements BrowserPagePort, AutoCloseable {
         return onBrowser(() -> {
             requireWebUrl(target);
             Page p = activePage();
-            Response response = p.navigate(target, new Page.NavigateOptions()
-                    .setWaitUntil(WaitUntilState.DOMCONTENTLOADED).setTimeout(45_000));
-            return Map.of("url", p.url(), "title", p.title(),
-                    "status", response == null ? 0 : response.status());
+            ReadinessPolicy policy = config.readiness();
+            TabDocument tab = document(p);
+            MainDocument previousDocument = tab.mainDocument;
+            MainDocument previousDownload = tab.lastDownload;
+            Response response;
+            try {
+                response = p.navigate(target, new Page.NavigateOptions()
+                        .setWaitUntil(waitUntil(policy)).setTimeout(45_000));
+            } catch (PlaywrightException error) {
+                // Only a response of this navigation may turn the failure into a download.
+                MainDocument download = tab.lastDownload != previousDownload ? tab.lastDownload
+                        : tab.mainDocument != previousDocument ? tab.mainDocument : null;
+                if (!isDownload(error, download)) throw error;
+                tab.mainDocument = previousDocument; // the previous page stays rendered
+                return downloadResult(target, download);
+            }
+            if (response != null && isMainDocument(p, response.request())) tab.mainDocument = new MainDocument(response);
+            ReadinessReport readiness = settle(p, policy, null);
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("url", p.url());
+            result.put("title", p.title());
+            result.put("status", response == null ? 0 : response.status());
+            result.put("documentType", documentType(p));
+            result.put("contentType", contentType(p));
+            result.put("readiness", readiness);
+            return result;
         });
     }
 
@@ -222,13 +300,30 @@ public final class CamoufoxBrowser implements BrowserPagePort, AutoCloseable {
         }
     }
 
-    public Map<String, Object> snapshot(int maxCharacters) {
+    /**
+     * Waits until the configured readiness conditions hold, optionally also for a
+     * visible element ({@code selector}) and/or visible {@code text}.
+     */
+    public Map<String, Object> waitFor(String selector, String text, int timeoutMillis) {
         return onBrowser(() -> {
             Page p = activePage();
-            int limit = Math.min(60_000, Math.max(1_000, maxCharacters));
-            String text = p.locator("body").innerText();
-            if (text.length() > limit) text = text.substring(0, limit) + "\n[TRUNCATED]";
-            return Map.of("url", p.url(), "title", p.title(), "text", text);
+            ReadinessPolicy configured = config.readiness().settles() ? config.readiness() : ReadinessPolicy.balanced();
+            ReadinessPolicy policy = configured.withTimeout(Math.max(500, Math.min(60_000, timeoutMillis)));
+            Locator target = null;
+            if (selector != null && !selector.isBlank()) {
+                target = p.locator(selector);
+                if (text != null && !text.isBlank()) target = target.filter(new Locator.FilterOptions().setHasText(text));
+            } else if (text != null && !text.isBlank()) {
+                target = p.getByText(text);
+            }
+            ReadinessReport readiness = target == null ? settle(p, policy, null)
+                    : awaitConditions(p, policy, target);
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("url", p.url());
+            result.put("title", p.title());
+            result.put("documentType", documentType(p));
+            result.put("readiness", readiness);
+            return result;
         });
     }
 
@@ -269,10 +364,197 @@ public final class CamoufoxBrowser implements BrowserPagePort, AutoCloseable {
         });
     }
 
-    private static PageCapture capture(Page p) {
+    private PageCapture capture(Page p) {
+        // Feeds, XML, JSON and plain text are read from the response body (protocol data, invisible to
+        // the page); a binary document has no page text. Both use the classification of browser_snapshot.
+        MainDocument main = document(p).mainDocument;
+        if (main != null && main.url().equals(p.url())) {
+            DocumentType type = DocumentType.classify(main.contentType(), main.url());
+            if (type == DocumentType.BINARY) {
+                return new PageCapture(p.url(), "", "Binary document (" + DocumentType.mimeType(main.contentType())
+                        + "). It has no page text; use the document tools to download and read it.", "");
+            }
+            Optional<String> body = type.isSourceDocument() ? main.body() : Optional.empty();
+            if (body.isPresent()) {
+                String source = body.get();
+                String text = switch (type) {
+                    case JSON -> DocumentText.json(source);
+                    case TEXT -> source;
+                    default -> DocumentText.feed(source).orElseGet(() -> DocumentText.xml(source));
+                };
+                return new PageCapture(p.url(), "", text, "");
+            }
+        }
         // Every in-page read is a protocol evaluation (with user activation, see
         // playwright4j #37), so take one content() call and avoid title()/innerText()/count().
         return PageText.capture(p.url(), p.content());
+    }
+
+    public PageSnapshot snapshot(int maxCharacters) {
+        return onBrowser(() -> {
+            Page p = activePage();
+            return snapshots.read(new PlaywrightPageSource(p, document(p).mainDocument), maxCharacters);
+        });
+    }
+
+    private ReadinessReport settle(Page p, ReadinessPolicy policy, Locator target) throws Exception {
+        if (!policy.settles()) return ReadinessReport.skipped();
+        DocumentType type = documentType(p);
+        if (type.isSourceDocument() || type == DocumentType.BINARY) return ReadinessReport.staticDocument();
+        return awaitConditions(p, policy, target);
+    }
+
+    private ReadinessReport awaitConditions(Page p, ReadinessPolicy policy, Locator target) throws Exception {
+        ReadinessWaiter waiter = new ReadinessWaiter(System::currentTimeMillis, p::waitForTimeout);
+        return waiter.await(policy, target != null, () -> sample(p, policy, target));
+    }
+
+    /**
+     * Observes the page through Playwright's isolated utility world (CSS locators,
+     * text queries) and protocol events. Nothing runs in the page's own world.
+     */
+    private PageSample sample(Page p, ReadinessPolicy policy, Locator target) {
+        Locator.FilterOptions visible = new Locator.FilterOptions().setVisible(true);
+        boolean targetVisible = target == null || target.filter(visible).count() > 0;
+        if (!policy.needsDomReads()) {
+            // Each utility-world read grants user activation on BiDi (playwright4j#37): read nothing else.
+            return new PageSample(0, 0, false, targetVisible, document(p).activity.inflight(), document(p).activity.quietMillis());
+        }
+        int elements = p.locator("*").count();
+        int textLength = visibleText(p).length();
+        boolean loading = !policy.loadingSelectors().isEmpty()
+                && p.locator(String.join(", ", policy.loadingSelectors())).filter(visible).count() > 0;
+        return new PageSample(elements, textLength, loading, targetVisible, document(p).activity.inflight(), document(p).activity.quietMillis());
+    }
+
+    private static String visibleText(Page p) {
+        Locator body = p.locator("body");
+        if (body.count() > 0) return body.first().innerText(new Locator.InnerTextOptions().setTimeout(PROBE_TIMEOUT_MS));
+        Locator root = p.locator(":root");
+        if (root.count() == 0) return "";
+        String text = root.first().textContent(new Locator.TextContentOptions().setTimeout(PROBE_TIMEOUT_MS));
+        return text == null ? "" : text;
+    }
+
+    private DocumentType documentType(Page p) {
+        DocumentType type = DocumentType.classify(contentType(p), p.url());
+        return type == DocumentType.UNKNOWN ? DocumentType.HTML : type;
+    }
+
+    private String contentType(Page p) {
+        MainDocument main = document(p).mainDocument;
+        return main == null ? null : main.contentType();
+    }
+
+    private static WaitUntilState waitUntil(ReadinessPolicy policy) {
+        return switch (policy.waitUntil()) {
+            case "commit" -> WaitUntilState.COMMIT;
+            case "load" -> WaitUntilState.LOAD;
+            default -> WaitUntilState.DOMCONTENTLOADED;
+        };
+    }
+
+    private static boolean isDownload(PlaywrightException error, MainDocument download) {
+        if (String.valueOf(error.getMessage()).contains("Download is starting")) return true;
+        return download != null && (download.attachment()
+                || DocumentType.classify(download.contentType(), download.url()) == DocumentType.BINARY);
+    }
+
+    private static Map<String, Object> downloadResult(String target, MainDocument download) {
+        String type = download == null ? null : download.contentType();
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("url", download == null ? target : download.url());
+        result.put("title", "");
+        result.put("status", download == null ? 0 : download.status());
+        result.put("documentType", DocumentType.BINARY);
+        if (type != null) result.put("contentType", type);
+        result.put("hint", "The browser treated this URL as a download, so no page was rendered. "
+                + "Use document processing (download and extract) to read it.");
+        return result;
+    }
+
+    /** The top-level document response; its body is fetched lazily and only once. */
+    private static final class MainDocument {
+        private final Response response;
+        private final String url;
+        private final int status;
+        private final String contentType;
+        private final boolean attachment;
+        private Optional<String> body;
+
+        MainDocument(Response response) {
+            this.response = response;
+            this.url = response.url();
+            this.status = response.status();
+            this.contentType = response.headerValue("content-type");
+            String disposition = response.headerValue("content-disposition");
+            this.attachment = disposition != null && disposition.toLowerCase(java.util.Locale.ROOT).startsWith("attachment");
+        }
+
+        String url() { return url; }
+        int status() { return status; }
+        String contentType() { return contentType; }
+        boolean attachment() { return attachment; }
+
+        /** Response bodies travel over the protocol; the page cannot observe this read. */
+        Optional<String> body() {
+            if (body != null) return body;
+            try {
+                String length = response.headerValue("content-length");
+                if (length != null && Long.parseLong(length.trim()) > MAX_SOURCE_BYTES) return body = Optional.empty();
+                body = Optional.ofNullable(response.text());
+            } catch (RuntimeException unavailable) {
+                // Some protocol versions do not retain navigation bodies; fall back to the DOM.
+                body = Optional.empty();
+            }
+            return body;
+        }
+    }
+
+    /** Reads the current document via protocol data and Playwright's utility world only. */
+    private static final class PlaywrightPageSource implements PageSource {
+        private final Page page;
+        private final MainDocument document;
+        private Boolean hasBody;
+
+        PlaywrightPageSource(Page page, MainDocument document) {
+            this.page = page;
+            this.document = document;
+        }
+
+        @Override public String url() { return page.url(); }
+        @Override public String title() { return page.title(); }
+        @Override public int status() { return document == null ? 0 : document.status(); }
+        @Override public String contentType() { return document == null ? null : document.contentType(); }
+
+        @Override
+        public Optional<String> responseText() {
+            return document == null ? Optional.empty() : document.body();
+        }
+
+        @Override
+        public boolean hasBody() {
+            if (hasBody == null) hasBody = page.locator("body").count() > 0;
+            return hasBody;
+        }
+
+        @Override
+        public String bodyText() {
+            return page.locator("body").first().innerText(new Locator.InnerTextOptions().setTimeout(PROBE_TIMEOUT_MS));
+        }
+
+        @Override
+        public String rootText() {
+            Locator root = page.locator(":root");
+            if (root.count() == 0) return "";
+            String text = root.first().textContent(new Locator.TextContentOptions().setTimeout(PROBE_TIMEOUT_MS));
+            return text == null ? "" : text;
+        }
+
+        @Override
+        public String documentSource() {
+            return page.content();
+        }
     }
 
     public Map<String, Object> inspect(String selector, int limit) {

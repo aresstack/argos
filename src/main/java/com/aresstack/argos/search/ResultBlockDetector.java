@@ -46,6 +46,10 @@ final class ResultBlockDetector {
         while (container != null && container.childIds().size() == 1) {
             container = byId.get(container.childIds().get(0));
         }
+        if (container != null && ResultRegionAnalyzer.withinExcludedRegion(container, byId)) {
+            reasons.add(container.id() + ": result region lies inside an excluded region (ads, navigation, ...)");
+            return new Detection(List.of(), reasons);
+        }
         if (container == null || container.childIds().isEmpty()) {
             reasons.add("organic container has no child blocks");
             return new Detection(List.of(), reasons);

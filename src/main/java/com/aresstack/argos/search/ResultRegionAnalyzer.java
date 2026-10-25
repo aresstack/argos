@@ -56,7 +56,7 @@ final class ResultRegionAnalyzer {
         Map<String, SerpContainer> byId = document.containersById();
         List<ScoredContainer> scored = new ArrayList<>();
         for (SerpContainer container : document.containers()) {
-            if (classify(container) == Region.UNKNOWN && container.visible() && container.linkCount() > 0
+            if (!withinExcludedRegion(container, byId) && container.visible() && container.linkCount() > 0
                     && container.textLength() >= settings.minimumContainerTextCharacters()) {
                 scored.add(score(container, byId));
             }
@@ -79,6 +79,14 @@ final class ResultRegionAnalyzer {
         double strong = settings.repeatedBlockWeight() + settings.titleLinkWeight() + settings.snippetPresenceWeight()
                 + settings.nonLinkTextWeight() + settings.externalLinkWeight() + settings.semanticMainWeight();
         return strong <= 0 ? 0 : Math.max(0, Math.min(1, scored.totalScore() / strong));
+    }
+
+    /** True when the container or any ancestor is navigation, footer, ads, filters, pagination, ... */
+    static boolean withinExcludedRegion(SerpContainer container, Map<String, SerpContainer> byId) {
+        for (SerpContainer current = container; current != null; current = byId.get(current.parentId())) {
+            if (classify(current) != Region.UNKNOWN) return true;
+        }
+        return false;
     }
 
     /** Only unambiguous markers classify; everything else stays UNKNOWN and competes. */

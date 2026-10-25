@@ -101,6 +101,19 @@ class SearchResultExtractorTest {
     }
 
     @Test
+    void resultShapedCardsInsideAnAdRegionAreNeverOrganic() {
+        String card = "<article><h3><a href='https://advertiser%d.example/'>Sponsored offer number %d here</a></h3>"
+                + "<p>Buy our product today, it is the best offer you will find anywhere at all.</p></article>";
+        String html = "<html><body><main><div class='ads'>" + card.formatted(1, 1) + card.formatted(2, 2)
+                + card.formatted(3, 3) + "</div></main></body></html>";
+        SerpDocument document = new SerpDocumentParser(SearchAnalysisSettings.defaults()).parse(html, LOCAL, "", "", 1);
+
+        var result = extractor.extract(document, "query", SearchEngine.custom(LOCAL).endpoints().get(0), Set.of());
+
+        assertEquals(SearchOutcome.EXTRACTION_FAILED, result.outcome());
+    }
+
+    @Test
     void explicitNoResultsIsNotAnExtractionFailure() {
         var endpoint = SearchEngine.DUCKDUCKGO.endpoints().get(0);
         var result = extract("no-results.html", DDG_HTML, endpoint, SearchEngine.DUCKDUCKGO);

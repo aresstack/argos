@@ -200,10 +200,8 @@ final class SearchResultExtractor {
     }
 
     private boolean insideClassifiedRegion(String containerId, Map<String, SerpContainer> byId) {
-        for (SerpContainer current = byId.get(containerId); current != null; current = byId.get(current.parentId())) {
-            if (ResultRegionAnalyzer.classify(current) != ResultRegionAnalyzer.Region.UNKNOWN) return true;
-        }
-        return false;
+        SerpContainer container = byId.get(containerId);
+        return container != null && ResultRegionAnalyzer.withinExcludedRegion(container, byId);
     }
 
     private boolean showsExplicitNoResults(SerpDocument document) {

@@ -4,9 +4,14 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.microsoft.playwright.BrowserContext;
 import com.microsoft.playwright.BrowserType;
+import com.microsoft.playwright.Locator;
+import com.microsoft.playwright.Mouse;
 import com.microsoft.playwright.Page;
 import com.microsoft.playwright.Playwright;
+import com.microsoft.playwright.PlaywrightException;
 import com.microsoft.playwright.Response;
+import com.microsoft.playwright.options.BoundingBox;
+import com.microsoft.playwright.options.LoadState;
 import com.microsoft.playwright.options.WaitUntilState;
 
 import java.nio.file.Files;
@@ -212,6 +217,65 @@ public final class CamoufoxBrowser implements AutoCloseable {
     public Map<String, Object> status() {
         return onBrowser(() -> Map.of("started", context != null, "profile", config.profile().toString(),
                 "url", page == null || page.isClosed() ? "" : page.url()));
+    }
+
+    /** Serialized page HTML, read through Playwright's isolated utility world: the page sees no script. */
+    public record HtmlPage(String url, String title, int status, String html) {
+    }
+
+    public HtmlPage loadHtml(String target) {
+        return onBrowser(() -> {
+            java.net.URI destination = java.net.URI.create(target);
+            if (destination.getScheme() == null || destination.getHost() == null
+                    || !(destination.getScheme().equalsIgnoreCase("http")
+                    || destination.getScheme().equalsIgnoreCase("https"))) {
+                throw new IllegalArgumentException("Navigation requires an absolute http(s) URL");
+            }
+            Page p = activePage();
+            Response response = p.navigate(target, new Page.NavigateOptions()
+                    .setWaitUntil(WaitUntilState.DOMCONTENTLOADED).setTimeout(45_000));
+            settle(p);
+            return new HtmlPage(p.url(), p.title(), response == null ? 0 : response.status(), p.content());
+        });
+    }
+
+    public HtmlPage currentHtml() {
+        return onBrowser(() -> {
+            Page p = activePage();
+            settle(p);
+            return new HtmlPage(p.url(), p.title(), 0, p.content());
+        });
+    }
+
+    /**
+     * Clicks the element's bounding-box centre with real pointer input (WebDriver BiDi input actions),
+     * never with a page-visible element.click(). Returns false when the element has no box.
+     */
+    public boolean clickWithTrustedInput(String selector) {
+        return onBrowser(() -> {
+            Page p = activePage();
+            Locator target = p.locator(selector).first();
+            if (target.count() == 0) return false;
+            target.scrollIntoViewIfNeeded(new Locator.ScrollIntoViewIfNeededOptions().setTimeout(5_000));
+            BoundingBox box = target.boundingBox();
+            if (box == null || box.width < 1 || box.height < 1) return false;
+            double x = box.x + box.width / 2;
+            double y = box.y + box.height / 2;
+            p.mouse().move(x, y, new Mouse.MoveOptions().setSteps(12));
+            p.mouse().click(x, y);
+            p.waitForTimeout(800);
+            settle(p);
+            return true;
+        });
+    }
+
+    /** DOMContentLoaded is enough to read; give late resources a bounded chance, never a long sleep. */
+    private static void settle(Page p) {
+        try {
+            p.waitForLoadState(LoadState.LOAD, new Page.WaitForLoadStateOptions().setTimeout(5_000));
+        } catch (PlaywrightException slowSubresources) {
+            // Reading proceeds with the DOM that is there.
+        }
     }
 
     @Override

@@ -1,5 +1,7 @@
 package com.aresstack.argos;
 
+import com.aresstack.argos.search.BrowserWebSearch;
+import com.aresstack.argos.web.WebSearchPort;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.modelcontextprotocol.server.McpServerFeatures.SyncToolSpecification;
 import io.modelcontextprotocol.spec.McpSchema.CallToolResult;
@@ -16,10 +18,16 @@ import java.util.function.Function;
 /** MCP definitions and small adapters; browser operations live in CamoufoxBrowser. */
 public final class ArgosTools {
     private final CamoufoxBrowser browser;
+    private final WebSearchPort webSearch;
     private final ObjectMapper json = new ObjectMapper();
 
     public ArgosTools(CamoufoxBrowser browser) {
+        this(browser, new BrowserWebSearch(browser));
+    }
+
+    public ArgosTools(CamoufoxBrowser browser, WebSearchPort webSearch) {
         this.browser = browser;
+        this.webSearch = webSearch;
     }
 
     public List<SyncToolSpecification> all() {
@@ -47,6 +55,21 @@ public final class ArgosTools {
                 List.of("expression"), args -> browser.evaluate(string(args, "expression"))));
         tools.add(tool("browser_network", "List recent page requests and responses (URLs have query parameters redacted).",
                 Map.of(), List.of(), args -> browser.networkEvents()));
+        tools.add(SyncToolSpecification.builder()
+                .tool(Tool.builder().name("web_search")
+                        .description("Search the web; returns numbered results with title, url and snippet. "
+                                + "Example: {\"query\": \"camoufox webdriver bidi\"}")
+                        .inputSchema(schema(Map.of("query", field("string", "The search query")), List.of("query")))
+                        .build())
+                .callHandler((exchange, request) -> {
+                    try {
+                        Map<String, Object> args = request.arguments() == null ? Map.of() : request.arguments();
+                        String text = BrowserWebSearch.format(webSearch.search(string(args, "query")));
+                        return CallToolResult.builder().addTextContent(text).build();
+                    } catch (Exception error) {
+                        return failure(error);
+                    }
+                }).build());
         tools.add(SyncToolSpecification.builder()
                 .tool(Tool.builder().name("browser_screenshot")
                         .description("Take a PNG screenshot of the current Camoufox page.")

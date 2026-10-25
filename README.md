@@ -144,8 +144,11 @@ Der Login allein ist **keine** Discovery-Abnahme. Nach erfolgreicher OAuth-Verbi
 | `browser_evaluate` | JavaScript in der Webseite ausführen |
 | `browser_screenshot` | Screenshot als MCP-Image zurückgeben |
 | `browser_network` | Letzte HTTP-Requests, Responses und Fehler untersuchen |
+| `web_search` | Websuche (DuckDuckGo → Bing → Google), nummerierte Treffer mit Titel, URL und Snippet |
 
 `browser_network` entfernt Query-Parameter und Benutzerinformationen aus den protokollierten URLs. Bis zu 200 Ereignisse bleiben im Speicher. `browser_evaluate` kann Webseiten verändern und ist deshalb nur für ausdrücklich autorisierte Nutzer über das gesicherte MCP-Plugin bestimmt.
+
+`web_search` liest Suchergebnisseiten ausschließlich über `page.content()` (isolierte Playwright-Welt) und analysiert sie in der JVM; Consent-Banner werden per echter Mausbewegung über WebDriver BiDi angeklickt. Konfiguration: `ARGOS_SEARCH_ENGINES` (Reihenfolge, Standard `duckduckgo,bing,google`) und `ARGOS_SEARCH_MAX_RESULTS` (Standard 10). Details: [docs/web-search.md](docs/web-search.md).
 
 ## GitHub Actions und Releases
 

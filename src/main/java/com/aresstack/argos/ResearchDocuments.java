@@ -24,6 +24,7 @@ public final class ResearchDocuments implements AutoCloseable {
     private static final int DOWNLOAD_TIMEOUT_SECONDS = 120;
     private static final int BATCH_TIMEOUT_SECONDS = 240;
     private static final double COMMIT_TIMEOUT_MILLIS = 30_000;
+    private static final double CONTENT_TIMEOUT_MILLIS = 75_000;
 
     private final BrowserContextAccess browser;
     private final DocumentStore store;
@@ -41,7 +42,7 @@ public final class ResearchDocuments implements AutoCloseable {
         long limit = store.maxDocumentBytes();
         FetchedResource resource = unwrapping(() -> browser.inBrowserContext(context -> {
             try (BackgroundTab tab = BackgroundTab.open(context, target, COMMIT_TIMEOUT_MILLIS)) {
-                return tab.content(limit);
+                return tab.content(limit, CONTENT_TIMEOUT_MILLIS);
             }
         }, DOWNLOAD_TIMEOUT_SECONDS));
         return store.store(resource);

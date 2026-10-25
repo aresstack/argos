@@ -46,7 +46,7 @@ aber die Seite; das ist bewusst nicht der Standardweg.
 | PDF | Apache PDFBox 3 (`PDFTextStripper`), höchstens 500 Seiten; ohne Textebene (Scan) → `readable=false` mit Hinweis, kein OCR |
 | HTML | jsoup, Titel + Text, ohne Skripte |
 | XML/RSS/Atom, JSON, CSV, TXT | Text mit deklariertem Zeichensatz bzw. BOM, begrenzt |
-| DOCX, XLSX, PPTX, ODT, ODS, ODP | ZIP + StAX aus dem JDK (DTD/externe Entitäten aus, max. 64 MB entpackt, max. 2000 Einträge) |
+| DOCX, XLSX, PPTX, ODT, ODS, ODP | ZIP + StAX aus dem JDK (DTD/externe Entitäten aus, max. 64 MB entpackt einschließlich ignorierter Einträge, max. 2000 Einträge); XLSX-Zellen bleiben über ihre Zellreferenz in der richtigen Spalte |
 | DOC, XLS, PPT, Binärdaten | `readable=false`, „Unsupported document type“ |
 
 Apache POI und Tika (Enterprise `document-tika`) wurden nicht übernommen: Sie würden `argos.jar` um ein
@@ -70,9 +70,13 @@ danach Dateiendung, danach die ersten Bytes. Binärdaten werden nie als Base64 z
 Auf der Platte heißen Dateien nach ihrer ID (`doc-1.pdf`), nie nach dem Server-Dateinamen. Der Pfad erscheint
 in keinem Toolergebnis. Benutzerinformationen in URLs werden aus den Metadaten entfernt.
 
-Einschränkung: Bei echten Browser-Downloads (Attachment) ist die Größe erst nach Abschluss bekannt; Playwright
-bietet keinen Fortschritt. Zu große Dateien werden danach verworfen. Begrenzt wird die Dauer durch den
-Executor-Timeout (120 s).
+Bei echten Browser-Downloads (Attachment) ist die Größe erst nach Abschluss bekannt; Playwright bietet keinen
+Fortschritt. Zu große Dateien werden danach verworfen. Damit ein hängender Server den einzigen Browser-Thread
+nicht blockiert, haben Download-Abschluss und `Response.body()` eine eigene Frist (Einzeldownload 75 s, Batch
+15 s): Ein Hilfstab mit `about:blank` (nie eine Website) erzeugt per Laufzeit-`evaluate` alle 250 ms eine
+Konsolenmeldung. Playwright Java verarbeitet Ereignisse auch während der blockierenden Wartezeit, und nach Ablauf
+der Frist bricht der Handler den Download ab (`Download.cancel()`) bzw. schließt den Tab. Ergebnis ist `TIMEOUT`.
+Getestet mit einem Server, der nach dem ersten Block nichts mehr sendet (`BackgroundTabDeadlineTest`).
 
 ## Parallelität: Messung und Grenze des Single-Thread-Executors
 

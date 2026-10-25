@@ -134,7 +134,7 @@ public final class BatchOpener {
                         tab.status(), tab.contentType(), tab.title(), text, truncated, complete, "",
                         open.elapsed(), null);
             }
-            FetchedResource document = tab.content(options.maxDocumentBytes());
+            FetchedResource document = tab.content(options.maxDocumentBytes(), options.loadTimeoutMillis());
             return new BatchEntry(url, BatchEntry.Status.SUCCESS, WebAddress.withoutUserInfo(document.finalUrl()),
                     tab.status(), tab.contentType(), "", "", false, true, "", open.elapsed(), document);
         } catch (FetchFailure known) {

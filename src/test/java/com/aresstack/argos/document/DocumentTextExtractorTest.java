@@ -60,6 +60,35 @@ class DocumentTextExtractorTest {
     }
 
     @Test
+    void keepsSparseSpreadsheetCellsInTheirColumns() throws Exception {
+        byte[] xlsx = TestDocuments.zip(Map.of(
+                "xl/sharedStrings.xml", "<sst><si><t>Name</t></si><si><t>Revenue</t></si></sst>",
+                "xl/worksheets/sheet1.xml", "<worksheet><sheetData>"
+                        + "<row r=\"1\"><c r=\"A1\" t=\"s\"><v>0</v></c><c r=\"B1\"><v>2025</v></c>"
+                        + "<c r=\"C1\"><v>2026</v></c></row>"
+                        + "<row r=\"2\"><c r=\"A2\" t=\"s\"><v>1</v></c><c r=\"C2\"><v>42</v></c></row>"
+                        + "<row r=\"3\"><c r=\"B3\"><v>7</v></c></row></sheetData></worksheet>"));
+        assertEquals("--- Sheet 1 ---\nName\t2025\t2026\nRevenue\t\t42\n\t7",
+                extractor.extract(xlsx, "", "t.xlsx", 10_000).text());
+    }
+
+    @Test
+    void countsIgnoredArchiveEntriesAgainstTheUnpackLimit() throws Exception {
+        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+        try (java.util.zip.ZipOutputStream zip = new java.util.zip.ZipOutputStream(out)) {
+            zip.putNextEntry(new java.util.zip.ZipEntry("word/media/padding.bin"));
+            byte[] zeros = new byte[1024 * 1024];
+            for (int i = 0; i < 65; i++) zip.write(zeros);
+            zip.closeEntry();
+            zip.putNextEntry(new java.util.zip.ZipEntry("word/document.xml"));
+            zip.write("<w:document xmlns:w=\"w\"><w:p><w:t>x</w:t></w:p></w:document>".getBytes(StandardCharsets.UTF_8));
+            zip.closeEntry();
+        }
+        DocumentText text = extractor.extract(out.toByteArray(), "", "bomb.docx", 10_000);
+        assertFalse(text.readable());
+    }
+
+    @Test
     void readsPptxSlidesInOrder() throws Exception {
         String ns = "xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"";
         byte[] pptx = TestDocuments.zip(Map.of(

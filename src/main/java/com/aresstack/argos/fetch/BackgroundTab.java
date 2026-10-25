@@ -27,6 +27,7 @@ import java.util.concurrent.atomic.AtomicReference;
  */
 public final class BackgroundTab implements AutoCloseable {
     private static final int DOWNLOAD_GRACE_MILLIS = 3_000;
+    private static final String DEADLINE_TICK = "argos-deadline-tick";
 
     private final Page tab;
     private final String requestedUrl;
@@ -139,11 +140,17 @@ public final class BackgroundTab implements AutoCloseable {
         return text == null ? "" : text;
     }
 
-    /** The raw bytes of the loaded resource, refusing anything larger than {@code maxBytes}. */
-    public FetchedResource content(long maxBytes) {
+    /**
+     * The raw bytes of the loaded resource, refusing anything larger than {@code maxBytes}. A body or download
+     * that is not complete within {@code timeoutMillis} is cancelled, so a stalling server cannot hold the
+     * single browser thread.
+     */
+    public FetchedResource content(long maxBytes, double timeoutMillis) {
         if (failure != null) throw failure;
         Download file = download.get();
-        if (file != null) return downloaded(file, maxBytes);
+        if (file != null) {
+            return beforeDeadline(timeoutMillis, file::cancel, () -> downloaded(file, maxBytes));
+        }
         if (response == null) throw new FetchFailure(FetchFailure.Kind.FAILED, "The browser delivered no response");
         String length = response.headers().get("content-length");
         if (length != null && length.matches("\\d{1,18}") && Long.parseLong(length) > maxBytes) {
@@ -151,7 +158,9 @@ public final class BackgroundTab implements AutoCloseable {
         }
         byte[] body;
         try {
-            body = response.body();
+            body = beforeDeadline(timeoutMillis, tab::close, response::body);
+        } catch (FetchFailure known) {
+            throw known;
         } catch (PlaywrightException error) {
             throw new FetchFailure(FetchFailure.Kind.FAILED,
                     "The browser did not keep the response body (larger than its collector limit?)", error);
@@ -169,6 +178,7 @@ public final class BackgroundTab implements AutoCloseable {
     private FetchedResource downloaded(Download file, long maxBytes) {
         try {
             String problem = file.failure();
+            if ("canceled".equals(problem)) throw new FetchFailure(FetchFailure.Kind.TIMEOUT, "Download canceled");
             if (problem != null) throw new FetchFailure(FetchFailure.Kind.FAILED, "Download failed: " + problem);
             Path path = file.path();
             long size = Files.size(path);
@@ -180,6 +190,46 @@ public final class BackgroundTab implements AutoCloseable {
         } catch (Exception error) {
             throw new FetchFailure(FetchFailure.Kind.FAILED, "Download could not be read", error);
         }
+    }
+
+    /**
+     * Runs a Playwright call that has no timeout of its own (download completion, response body). Playwright
+     * Java dispatches events while the driver thread waits, so a console tick from a separate, blank helper tab
+     * (about:blank, never a website) lets a handler run {@code onExpiry} once the deadline has passed.
+     */
+    private <T> T beforeDeadline(double timeoutMillis, Runnable onExpiry, java.util.function.Supplier<T> call) {
+        long deadline = System.nanoTime() + (long) (timeoutMillis * 1_000_000);
+        java.util.concurrent.atomic.AtomicBoolean expired = new java.util.concurrent.atomic.AtomicBoolean();
+        Page ticker = tab.context().newPage();
+        try {
+            ticker.onConsoleMessage(message -> {
+                if (DEADLINE_TICK.equals(message.text()) && System.nanoTime() >= deadline
+                        && expired.compareAndSet(false, true)) {
+                    onExpiry.run();
+                }
+            });
+            ticker.evaluate("tick => setInterval(() => console.debug(tick), 250)", DEADLINE_TICK);
+            T result = call.get();
+            if (expired.get()) throw timedOut(timeoutMillis);
+            return result;
+        } catch (PlaywrightException error) {
+            if (expired.get()) throw timedOut(timeoutMillis);
+            throw error;
+        } catch (FetchFailure failed) {
+            if (expired.get()) throw timedOut(timeoutMillis);
+            throw failed;
+        } finally {
+            try {
+                ticker.close();
+            } catch (PlaywrightException ignored) {
+                // Browser gone; nothing left to stop.
+            }
+        }
+    }
+
+    private static FetchFailure timedOut(double timeoutMillis) {
+        return new FetchFailure(FetchFailure.Kind.TIMEOUT,
+                "Content not complete within " + Math.round(timeoutMillis / 1000) + " s; canceled");
     }
 
     private static boolean startsWithPdfSignature(byte[] body) {

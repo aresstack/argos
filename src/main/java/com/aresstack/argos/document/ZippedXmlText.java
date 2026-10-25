@@ -25,6 +25,7 @@ import java.util.zip.ZipInputStream;
 final class ZippedXmlText {
     private static final long MAX_UNPACKED_BYTES = 64L * 1024 * 1024;
     private static final int MAX_ENTRIES = 2_000;
+    private static final int MAX_COLUMNS = 1_000;
     private static final Pattern NUMBERED_PART = Pattern.compile(".*?(\\d+)\\.xml$");
 
     private ZippedXmlText() { }
@@ -58,15 +59,17 @@ final class ZippedXmlText {
             ZipEntry entry;
             while ((entry = zip.getNextEntry()) != null) {
                 if (++entries > MAX_ENTRIES) throw new IOException("Too many archive entries");
-                if (entry.isDirectory() || !wanted(format, entry.getName())) continue;
+                // Ignored entries are decompressed too when the stream skips them, so they count as well.
+                boolean keep = !entry.isDirectory() && wanted(format, entry.getName());
                 ByteArrayOutputStream part = new ByteArrayOutputStream();
                 byte[] buffer = new byte[16 * 1024];
                 int read;
                 while ((read = zip.read(buffer)) > 0) {
                     unpacked += read;
                     if (unpacked > MAX_UNPACKED_BYTES) throw new IOException("Archive unpacks too large");
-                    part.write(buffer, 0, read);
+                    if (keep) part.write(buffer, 0, read);
                 }
+                if (!keep) continue;
                 parts.put(entry.getName(), part.toByteArray());
             }
         }
@@ -133,16 +136,19 @@ final class ZippedXmlText {
             XMLStreamReader reader = reader(parts.get(sheets.get(i)));
             String cellType = "";
             boolean inValue = false;
-            boolean firstInRow = true;
+            int nextColumn = 0;
+            int cellColumn = 0;
             StringBuilder value = new StringBuilder();
             while (reader.hasNext()) {
                 int event = reader.next();
                 if (event == XMLStreamConstants.START_ELEMENT) {
                     switch (reader.getLocalName()) {
-                        case "row" -> firstInRow = true;
+                        case "row" -> nextColumn = 0;
                         case "c" -> {
                             cellType = reader.getAttributeValue(null, "t");
                             cellType = cellType == null ? "" : cellType;
+                            int referenced = columnOf(reader.getAttributeValue(null, "r"));
+                            cellColumn = referenced >= 0 ? referenced : nextColumn;
                         }
                         case "v", "t" -> {
                             inValue = true;
@@ -161,9 +167,11 @@ final class ZippedXmlText {
                                 int index = Integer.parseInt(cell);
                                 cell = index < shared.size() ? shared.get(index) : "";
                             }
-                            if (!firstInRow) text.append('\t');
+                            // Empty cells are not stored; keep the following values in their columns.
+                            text.append("\t".repeat(Math.max(0, Math.min(cellColumn, MAX_COLUMNS)
+                                    - nextColumn + (nextColumn > 0 ? 1 : 0))));
                             text.append(cell);
-                            firstInRow = false;
+                            nextColumn = Math.min(cellColumn, MAX_COLUMNS) + 1;
                         }
                         case "row" -> text.append('\n');
                         default -> { }
@@ -173,6 +181,19 @@ final class ZippedXmlText {
             text.append('\n');
         }
         return text.toString().strip();
+    }
+
+    /** Zero-based column of a cell reference such as {@code C2}, or -1 when absent. */
+    static int columnOf(String reference) {
+        if (reference == null) return -1;
+        int column = 0;
+        int letters = 0;
+        for (char c : reference.toCharArray()) {
+            if (c < 'A' || c > 'Z') break;
+            column = column * 26 + (c - 'A' + 1);
+            if (++letters > 3) return -1;
+        }
+        return letters == 0 ? -1 : column - 1;
     }
 
     private static List<String> sharedStrings(byte[] xml) throws Exception {

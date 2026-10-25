@@ -65,6 +65,8 @@ public final class FixtureSite implements AutoCloseable {
                     send(exchange, 200, "text/html; charset=utf-8", html("Slow head", "<p>late headers</p>"));
                 }
                 case "/slow-body" -> slowBody(exchange, delay);
+                case "/stalled-attachment" -> stall(exchange, "application/octet-stream", true);
+                case "/stalled.pdf" -> stall(exchange, "application/pdf", false);
                 default -> send(exchange, 404, "text/html", html("Not found", "<p>missing</p>"));
             }
         } catch (InterruptedException interrupted) {
@@ -86,6 +88,18 @@ public final class FixtureSite implements AutoCloseable {
             Thread.sleep(delay);
             out.write("<p>end of slow body</p></body></html>".getBytes(StandardCharsets.UTF_8));
         }
+    }
+
+    /** Sends headers and a first chunk, then stops sending without closing (until the server stops). */
+    private static void stall(HttpExchange exchange, String type, boolean attachment)
+            throws IOException, InterruptedException {
+        if (attachment) exchange.getResponseHeaders().add("Content-Disposition", "attachment; filename=\"big.bin\"");
+        exchange.getResponseHeaders().add("Content-Type", type);
+        exchange.sendResponseHeaders(200, 0);
+        OutputStream out = exchange.getResponseBody();
+        out.write(("%PDF-1.7\n" + "x".repeat(8192)).getBytes(StandardCharsets.US_ASCII));
+        out.flush();
+        Thread.sleep(120_000);
     }
 
     private static int delayOf(String query) {

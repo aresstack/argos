@@ -852,8 +852,8 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
     }
 
     /**
-     * Text of a saved source document: the charset of the Content-Type header, else for XML a byte order mark or
-     * the encoding of the XML declaration, else UTF-8.
+     * Text of a saved source document: the charset of the Content-Type header, else a byte order mark, else for
+     * XML the encoding of the XML declaration, else UTF-8.
      */
     static String decode(byte[] bytes, String contentType, DocumentType type) {
         java.nio.charset.Charset declared = charset(contentType);

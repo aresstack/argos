@@ -58,7 +58,8 @@ class CamoufoxResearchTest {
             ResearchReport report = research.research("perovskite solar cell efficiency", null);
 
             assertEquals(ResearchStopReason.SUFFICIENT_EVIDENCE, report.stopReason(), report.format());
-            assertEquals(List.of(other + "/perovskite", other + "/stability", "http://localhost:" + port + "/review"),
+            // Breadth first: every search hit is read before the links found on the pages (frontier.addLast).
+            assertEquals(List.of(other + "/perovskite", "http://localhost:" + port + "/review", other + "/stability"),
                     report.sources().stream().map(ResearchSource::url).toList());
         } finally {
             site.stop(0);

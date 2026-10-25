@@ -106,6 +106,27 @@ AskAI und Enterprise verletzen das an vielen Stellen (Abschnitt 4, Spalte „Bew
 | **3 – flüchtige Laufzeit-Auswertung in der Hauptwelt** | `page.evaluate`, `locator.evaluate*` mit reinen Lesefunktionen, die nichts in Seite, `window` oder DOM zurücklassen und keine Prototypen ändern; kein `waitForFunction`-Polling | In der Praxis bisher unproblematisch. Erlaubt, wenn Stufe 0/1 das Ergebnis nicht oder nur mit unverhältnismäßigem Aufwand liefert (z. B. Geometrie/Farben für die SERP-Analyse, Sichtbarkeit vieler Elemente in einem Durchgang). Jede Verwendung im Code begründen; `browser_evaluate` bleibt frei für `expert`/`legacy`. |
 | **verboten** | **Preload-/Init-Scripts** (`addInitScript`, `script.addPreloadScript` – hat in Argos bereits zu Blockierungen geführt), `exposeBinding`/`exposeFunction`, DOM-Overlays, `data-*`-Markierungen, `window.__*`-Globals, `route()`-basiertes Umschreiben von Antworten, Requests aus einem anderen TLS-Stack (`context.request()`) an Zielseiten | nirgends |
 
+**Regeln für Stufe 3 (flüchtige Auswertung).** Ein `page.evaluate` ist nur zulässig, wenn nach seinem Ende
+nichts davon in der Seite übrig ist:
+
+- keine neuen oder geänderten Globals (`window.__…`, `document.__…`), keine neuen Funktionen, Klassen oder
+  Symbole, die die Seite erreichen kann;
+- keine geänderten Prototypen oder überschriebenen nativen Funktionen (`Function.prototype.toString`,
+  `Element.prototype.*`, `fetch`, `XMLHttpRequest`, `console` …);
+- keine Event-Listener, `MutationObserver`, `IntersectionObserver`, Timer (`setTimeout`/`setInterval`),
+  `requestAnimationFrame`-Schleifen, Promises, die nach Rückgabe weiterlaufen;
+- keine DOM-Änderungen: keine Attribute (`data-*`), Klassen, Elemente, Styles, kein `scrollIntoView`
+  (Scrollen nur über echte Mausrad-Eingaben), kein `focus()`/`click()`/`dispatchEvent`;
+- keine Netzwerkanfragen (`fetch`, `sendBeacon`, Bilder);
+- eine einzige, in sich geschlossene Funktion, die Werte liest und als einfache Daten (Strings, Zahlen,
+  Arrays) zurückgibt; kein Zustand zwischen zwei Aufrufen in der Seite.
+
+Neue oder bisher ungetestete Mechanismen gelten als riskant, auch wenn sie flüchtig wirken. Sie werden
+erst nach dem Signal-Regressionstest (R1) eingesetzt. Jede Stufe-3-Stelle im Code bekommt einen
+Kommentar mit Begründung, und ein Unit-Test prüft das Skript mindestens auf verbotene Muster
+(`window.`-Zuweisungen, `addEventListener`, `Observer`, `setAttribute`, `dataset`, `prototype`,
+`scrollIntoView`, `fetch`).
+
 Konsequenzen für typische Aufgaben:
 
 - **Klicken:** Element über Utility-Welt finden (`locator`/`getByRole`), `boundingBox()`, sichtbaren Mittelpunkt
@@ -149,7 +170,7 @@ Legende Spalten: **A** = in Argos vorhanden, **K** = in AskAI (`arch`), **E** = 
 |---|---|---|---|---|---|
 | `web_search(query)` mit nummerierter Textausgabe | ✘ | ✔ `BrowserMcpSidecarMain.registerTools` (`PROVIDER:`, `id: title — url`, Snippet, `CHALLENGE:`, `ATTEMPT:`-Zeilen) | ✘ | **W** (Format) | Format beibehalten, für kleine Modelle getestet. Auftrag wünscht `1. Titel\n   URL\n   Snippet` – kompatibel machen, `ATTEMPT:` nur bei Fehlern ausgeben. |
 | Suchmaschinen-Navigation mit Endpunkt-Alternativen, Seitenzahl, Pausen, Familien-Sperre | ✘ | ✔ `PlaywrightBrowserSession.navigateAndCaptureSearchEngines`, `BrowserSearchEngineCatalog` (DuckDuckGo html/lite, Bing), `EngineAcquisitionMode.FIRST_USABLE`, `paceBeforeRepeatRequest` | ✘ | **AN** | Algorithmus übernehmen, gegen `CamoufoxBrowser`-Port statt `PlaywrightDriver`. **Google fehlt in AskAI → NEU** als eigener Engine-Eintrag (`/search?q=`, Redirect `/url?q=` kennt `SearchRedirectResolver` bereits). |
-| Strukturierte Seitenerfassung | ✘ | ✔ `RenderedPageDocumentCapture` (ein `page.evaluate` misst Container, Geometrie, Farben) | ✘ | **AN** | Das Skript ist eine flüchtige Lesefunktion (laut Javadoc „writes nothing into the page“) → Stufe 3, zulässig. Bevorzugt: Struktur **Java-seitig aus `page.content()` mit jsoup**, Geometrie/Farbe nur für die Top-N-Container per `boundingBox()` oder, falls das zu langsam/ungenau ist, mit dem übernommenen AskAI-Messskript in einem einzigen `page.evaluate`. Vor der Übernahme prüfen, dass es keine Globals oder Attribute setzt. |
+| Strukturierte Seitenerfassung | ✘ | ✔ `RenderedPageDocumentCapture` (ein `page.evaluate` misst Container, Geometrie, Farben) | ✘ | **AN** | Das Skript ist eine flüchtige Lesefunktion (laut Javadoc „writes nothing into the page“) → Stufe 3, zulässig. Bevorzugt: Struktur **Java-seitig aus `page.content()` mit jsoup**, Geometrie/Farbe nur für die Top-N-Container per `boundingBox()` oder, falls das zu langsam/ungenau ist, mit dem übernommenen AskAI-Messskript in einem einzigen `page.evaluate`. Vor der Übernahme gegen die Stufe-3-Regeln prüfen (Abschnitt 3). |
 | Ergebnisbereich, wiederholte Container, Primärlink, Snippet, Dedup | ✘ | ✔ `SearchPageMechanicalAnalyzer.analyze`, `SearchPageContainerScorer.score`, `DomStructureClusterer.cluster`, `SearchResultBlockDetector.detect/detectExplicit`, `PrimaryResultLinkResolver.resolve`, `SnippetExtractor.extract`, `LegacySearchResultExtractor.extract` | ✘ | **W** | Framework-freies Java 8 (`browser-search-analysis/build.gradle`: nur `:browser-api`). Quelltext + Tests nach `com.aresstack.argos.search.analysis` übernehmen; JUnit4-Tests auf JUnit 5 heben. |
 | Ehrliche Ergebnisarten `ORGANIC_RESULTS` / `NO_ORGANIC_RESULTS` / `EXTRACTION_FAILED` | ✘ | ✔ `SearchResultExtractionResult`, `PlaywrightBrowserSession.CapturedPageVerdict` | ✘ | **W** | Kerninvariante „kein rohes Anker-Dumping“ (`search`: „HARD INVARIANT“). |
 | Redirect-Auflösung Bing/Google/DDG | ✘ | ✔ `SearchRedirectResolver.resolve` | ✘ | **W** | Rein statisch. |

@@ -37,6 +37,11 @@ public final class DocumentText {
         return feed(trimmed).orElse(trimmed);
     }
 
+    /** Plain text as delivered, with Windows (CRLF) and old Mac (CR) line ends as {@code \n}. */
+    public static String plainText(String source) {
+        return source.replace("\r\n", "\n").replace('\r', '\n');
+    }
+
     /** Pretty-printed JSON when parseable, otherwise the unchanged text. */
     public static String json(String source) {
         String trimmed = stripByteOrderMark(source).trim();

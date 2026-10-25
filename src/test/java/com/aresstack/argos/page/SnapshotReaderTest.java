@@ -131,6 +131,15 @@ class SnapshotReaderTest {
     }
 
     @Test
+    void plainTextWithWindowsLineEndsKeepsItsLines() {
+        // A Windows checkout (core.autocrlf) or server delivers CRLF; no extra blank lines may appear.
+        PageSnapshot snapshot = reader.read(new FakePage("http://example.org/notes.txt", "", 200,
+                "text/plain; charset=utf-8", "Plain text line one\r\n  indented line two\r\n", true,
+                "Plain text line one indented line two", "", ""), 16_000);
+        assertEquals("Plain text line one\n  indented line two\n", snapshot.text());
+    }
+
+    @Test
     void reportsBinaryDocumentsWithoutReadingThem() throws Exception {
         HttpResponse<String> response = fetch("/paper.pdf");
         PageSource pdf = new FakePage(server.url("/paper.pdf"), "paper.pdf", 200,

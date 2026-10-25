@@ -552,7 +552,7 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
     private static String sourceText(String contentType, String url, String source) {
         return switch (DocumentType.classify(contentType, url)) {
             case JSON -> DocumentText.json(source);
-            case TEXT -> source;
+            case TEXT -> DocumentText.plainText(source);
             default -> DocumentText.feed(source).orElseGet(() -> DocumentText.xml(source));
         };
     }

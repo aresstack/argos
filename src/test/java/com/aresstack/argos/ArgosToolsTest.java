@@ -14,7 +14,9 @@ class ArgosToolsTest {
         try (CamoufoxBrowser browser = new CamoufoxBrowser(config)) {
             var tools = new ArgosTools(browser).all();
             Set<String> names = tools.stream().map(spec -> spec.tool().name()).collect(Collectors.toSet());
-            assertEquals(9, tools.size());
+            assertEquals(23, tools.size());
+            assertTrue(names.containsAll(Set.of("browser_tabs", "browser_back", "browser_extract",
+                    "browser_controls", "web_controls", "web_click", "web_fill")));
             assertTrue(names.contains("browser_navigate"));
             assertTrue(names.contains("browser_screenshot"));
             assertTrue(names.contains("browser_network"));

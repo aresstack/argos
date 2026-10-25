@@ -16,7 +16,7 @@ import java.util.function.Function;
 /** MCP definitions and small adapters; browser operations live in CamoufoxBrowser. */
 public final class ArgosTools {
     private final CamoufoxBrowser browser;
-    private final ObjectMapper json = new ObjectMapper();
+    private static final ObjectMapper JSON = new ObjectMapper();
 
     public ArgosTools(CamoufoxBrowser browser) {
         this.browser = browser;
@@ -61,10 +61,13 @@ public final class ArgosTools {
                         return failure(error);
                     }
                 }).build());
+        ArgosBrowsingTools browsing = new ArgosBrowsingTools(browser);
+        tools.addAll(browsing.expert());
+        tools.addAll(browsing.compact());
         return List.copyOf(tools);
     }
 
-    private SyncToolSpecification tool(String name, String description,
+    static SyncToolSpecification tool(String name, String description,
                                       Map<String, Object> properties, List<String> required,
                                       Function<Map<String, Object>, Object> handler) {
         return SyncToolSpecification.builder()
@@ -74,22 +77,39 @@ public final class ArgosTools {
                     try {
                         Object response = handler.apply(request.arguments() == null ? Map.of() : request.arguments());
                         return CallToolResult.builder()
-                                .addTextContent(json.writeValueAsString(response)).build();
+                                .addTextContent(JSON.writeValueAsString(response)).build();
                     } catch (Exception error) {
                         return failure(error);
                     }
                 }).build();
     }
 
-    private static JsonSchema schema(Map<String, Object> properties, List<String> required) {
+    /** Like {@link #tool}, but returns the handler's text unchanged: short readable lines for small models. */
+    static SyncToolSpecification textTool(String name, String description,
+                                          Map<String, Object> properties, List<String> required,
+                                          Function<Map<String, Object>, String> handler) {
+        return SyncToolSpecification.builder()
+                .tool(Tool.builder().name(name).description(description)
+                        .inputSchema(schema(properties, required)).build())
+                .callHandler((exchange, request) -> {
+                    try {
+                        String response = handler.apply(request.arguments() == null ? Map.of() : request.arguments());
+                        return CallToolResult.builder().addTextContent(response).build();
+                    } catch (Exception error) {
+                        return failure(error);
+                    }
+                }).build();
+    }
+
+    static JsonSchema schema(Map<String, Object> properties, List<String> required) {
         return new JsonSchema("object", properties, required, false, Map.of(), Map.of());
     }
 
-    private static Map<String, Object> field(String type, String description) {
+    static Map<String, Object> field(String type, String description) {
         return Map.of("type", type, "description", description);
     }
 
-    private static String string(Map<String, Object> arguments, String name) {
+    static String string(Map<String, Object> arguments, String name) {
         Object value = arguments.get(name);
         if (!(value instanceof String text)) {
             throw new IllegalArgumentException("Missing string field: " + name);
@@ -97,12 +117,17 @@ public final class ArgosTools {
         return text;
     }
 
-    private static int number(Map<String, Object> args, String field, int fallback) {
+    static int number(Map<String, Object> args, String field, int fallback) {
         Object value = args.get(field);
         return value instanceof Number n ? n.intValue() : fallback;
     }
 
-    private static CallToolResult failure(Exception error) {
+    static String optionalString(Map<String, Object> arguments, String name) {
+        Object value = arguments.get(name);
+        return value instanceof String text ? text : null;
+    }
+
+    static CallToolResult failure(Exception error) {
         String safeMessage = error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage();
         return CallToolResult.builder().isError(true).addTextContent(safeMessage).build();
     }

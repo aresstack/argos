@@ -393,6 +393,7 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
                 tab.mainDocument = previousDocument; // the previous page stays rendered
                 return downloadResult(target, download);
             }
+            // Keep the listener's instance: it may already carry the requestfinished flag.
             if (response != null && isMainDocument(p, response.request())
                     && (tab.mainDocument == null || !tab.mainDocument.isFor(response.request()))) {
                 tab.mainDocument = new MainDocument(response);
@@ -642,7 +643,8 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
 
         /**
          * Response bodies travel over the protocol; the page cannot observe this read. Only a finished
-         * response is read: asking for an unfinished body would block the single driver thread.
+         * response is read: asking for an unfinished (streaming or stalled) body would block the single
+         * driver thread.
          */
         Optional<String> body() {
             if (body != null) return body;

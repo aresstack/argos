@@ -75,6 +75,14 @@ class AriaTreeTest {
         assertEquals("/x?y=1", tree.roots().get(3).property("url"));
     }
 
+    @Test void narrowsToALandmarkByRoleOrName() {
+        AriaTree tree = AriaTree.parse(SNAPSHOT);
+        assertEquals(List.of("main"), tree.within("MAIN").roots().stream().map(AriaTree.Node::role).toList());
+        assertTrue(tree.within("navigation").findAll(n -> n.role().equals("heading")).isEmpty());
+        assertSame(tree, tree.within("nonexistent"));
+        assertSame(tree, tree.within(null));
+    }
+
     @Test void emptySnapshotHasNoNodes() {
         assertTrue(AriaTree.parse("").roots().isEmpty());
         assertTrue(AriaTree.parse(null).roots().isEmpty());

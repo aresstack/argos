@@ -79,6 +79,17 @@ public final class AriaTree {
         node.children.forEach(child -> visit(child, visitor));
     }
 
+    /**
+     * The subtrees of the first landmark whose role or accessible name equals {@code scope} (ignoring case),
+     * e.g. {@code main}, {@code article}, {@code navigation}; the whole tree when nothing matches.
+     */
+    public AriaTree within(String scope) {
+        if (scope == null || scope.isBlank()) return this;
+        String wanted = scope.trim().toLowerCase(Locale.ROOT);
+        List<Node> matches = findAll(node -> node.role.equals(wanted) || node.name.toLowerCase(Locale.ROOT).equals(wanted));
+        return matches.isEmpty() ? this : new AriaTree(List.of(matches.get(0)));
+    }
+
     public List<Node> findAll(java.util.function.Predicate<Node> condition) {
         List<Node> found = new ArrayList<>();
         visit(node -> { if (condition.test(node)) found.add(node); });

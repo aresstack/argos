@@ -72,9 +72,9 @@ public final class ArgosBrowsingTools {
                 "Extract structure from the current HTML page. kind: overview (default), headings, links, tables, "
                         + "lists, metadata (description, Open Graph, citation_* tags), jsonld.",
                 Map.of("kind", field("string", "overview | headings | links | tables | lists | metadata | jsonld"),
-                        "selector", field("string", "Optional CSS selector limiting headings/links/tables/lists, "
-                                + "e.g. main")),
-                List.of(), args -> browser.extract(optionalString(args, "kind"), optionalString(args, "selector"))));
+                        "scope", field("string", "Optional landmark role or name limiting headings/links/tables/"
+                                + "lists, e.g. main, article, navigation")),
+                List.of(), args -> browser.extract(optionalString(args, "kind"), optionalString(args, "scope"))));
         return List.copyOf(tools);
     }
 

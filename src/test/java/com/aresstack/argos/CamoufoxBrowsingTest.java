@@ -40,6 +40,10 @@ class CamoufoxBrowsingTest {
             <ul><li>eins</li><li>zwei</li></ul>
             </main>
             <script>
+              // What a bot detector could listen for: Playwright's target-marking events and scripted scrolling.
+              window.traces = [];
+              for (const type of ['__playwright_mark_target__', '__playwright_reset_targets__'])
+                document.addEventListener(type, () => traces.push(type), true);
               const log = document.getElementById('log');
               document.getElementById('go').addEventListener('click', e =>
                 log.textContent = 'clicked trusted=' + e.isTrusted + ' value=' + document.getElementById('q').value);
@@ -91,6 +95,11 @@ class CamoufoxBrowsingTest {
             // An element taller than the viewport is still hit by the verified random point.
             browser.clickTarget("Hoch");
             assertEquals("tall clicked", browser.evaluate("() => document.getElementById('tall').textContent"));
+            browser.extract("overview", null);
+            browser.extract("metadata", null);
+            browser.extract("links", "main");
+            assertEquals(List.of(), browser.evaluate("() => window.traces"),
+                    "controls, real input and extraction must not dispatch Playwright marker events");
             // Nothing of the automation leaks into the page's own realm.
             assertEquals(baseline, browser.evaluate(globals));
 

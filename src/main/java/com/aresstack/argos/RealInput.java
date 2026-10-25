@@ -4,16 +4,33 @@ import com.microsoft.playwright.Locator;
 import com.microsoft.playwright.Page;
 import com.microsoft.playwright.options.BoundingBox;
 
+import java.util.List;
 import java.util.random.RandomGenerator;
 
 /**
- * Clicks and typing as genuine browser input: the element's bounding box is measured, the mouse is moved there
- * and pressed through WebDriver BiDi {@code input.performActions}. The page receives trusted events only; no
- * script runs in the page's own JavaScript realm and no synthetic {@code element.click()} is dispatched.
+ * Clicks and typing as genuine browser input: the element's bounding box is measured, the page is scrolled with
+ * real mouse-wheel input until a random point of the element is visible and not covered, and the mouse is moved
+ * there and pressed through WebDriver BiDi {@code input.performActions}. The page receives trusted events only.
+ *
+ * <p>Playwright's own actions (also trial clicks), {@code isEditable}, {@code getAttribute} and
+ * {@code scrollIntoView} dispatch {@code __playwright_mark_target__} events or scroll by script, which pages can
+ * observe (playwright4j #38, #42). This class therefore uses only {@code boundingBox}, element handles and raw
+ * mouse and keyboard input, which leave no such trace.
  */
 final class RealInput {
     private static final double ACTION_TIMEOUT_MS = 10_000;
-    private static final double HIT_CHECK_TIMEOUT_MS = 2_000;
+    private static final double MARGIN = 4;
+    private static final int MAX_SCROLL_STEPS = 15;
+    private static final String HITS = """
+            ([element, x, y]) => {
+              if (element.ownerDocument.defaultView !== window.top) return true;
+              const hit = document.elementFromPoint(x, y);
+              return !!hit && (hit === element || element.contains(hit) || hit.control === element);
+            }""";
+    private static final String EDITABLE = """
+            element => element.isContentEditable
+              || (/^(INPUT|TEXTAREA)$/.test(element.tagName) && !element.disabled && !element.readOnly
+                  && !/^(button|checkbox|radio|submit|reset|file|image|range|color|hidden)$/i.test(element.type || ''))""";
     private final RandomGenerator random;
 
     RealInput(RandomGenerator random) {
@@ -22,10 +39,7 @@ final class RealInput {
 
     /** Clicks a point inside the visible element, like a person would. */
     void click(Page page, Locator target) {
-        // Trial run: Playwright's actionability checks (attached, visible, stable, enabled, not covered) and
-        // scroll into view, evaluated in its isolated utility world. It does not click.
-        target.click(new Locator.ClickOptions().setTrial(true).setTimeout(ACTION_TIMEOUT_MS));
-        double[] point = verifiedPoint(target);
+        double[] point = reachablePoint(page, target);
         page.mouse().move(point[0], point[1], new com.microsoft.playwright.Mouse.MoveOptions()
                 .setSteps(6 + random.nextInt(10)));
         pause(page, 30, 140);
@@ -35,28 +49,73 @@ final class RealInput {
     }
 
     /**
-     * A random point inside the element that Playwright's hit-target check confirms: scrolled into the viewport
-     * and not covered by another element. Falls back to the element's center, which the first trial validated.
+     * A point inside the element, scrolled into the viewport by wheel input and confirmed with
+     * {@code elementFromPoint}: three random points in the inner half, then the center.
      */
-    private double[] verifiedPoint(Locator target) {
-        for (int attempt = 0; attempt < 3; attempt++) {
+    private double[] reachablePoint(Page page, Locator target) {
+        for (int attempt = 0; attempt < 4; attempt++) {
             BoundingBox box = visibleBox(target);
-            double[] point = pointInside(box);
-            double offsetX = point[0] - box.x;
-            double offsetY = point[1] - box.y;
-            try {
-                target.click(new Locator.ClickOptions().setTrial(true).setTimeout(HIT_CHECK_TIMEOUT_MS)
-                        .setPosition(offsetX, offsetY));
-            } catch (com.microsoft.playwright.PlaywrightException missed) {
-                continue;
-            }
-            // The trial may have scrolled; the offset inside the element stays valid.
-            BoundingBox now = visibleBox(target);
-            return new double[] {now.x + offsetX, now.y + offsetY};
+            double[] point = attempt < 3 ? pointInside(box) : new double[] {box.x + box.width / 2, box.y + box.height / 2};
+            double[] reached = scrollTo(page, target, point[0] - box.x, point[1] - box.y);
+            if (reached != null) return reached;
         }
-        target.click(new Locator.ClickOptions().setTrial(true).setTimeout(ACTION_TIMEOUT_MS));
-        BoundingBox box = visibleBox(target);
-        return new double[] {box.x + box.width / 2, box.y + box.height / 2};
+        throw new IllegalStateException("Element is covered by another element (for example a cookie banner) "
+                + "or cannot be scrolled into view");
+    }
+
+    /** Wheels until {@code box + offset} lies inside the viewport; null if it stays covered or unreachable. */
+    private double[] scrollTo(Page page, Locator target, double offsetX, double offsetY) {
+        double[] lastPosition = null;
+        for (int step = 0; step < MAX_SCROLL_STEPS; step++) {
+            BoundingBox box = visibleBox(target);
+            double x = box.x + offsetX;
+            double y = box.y + offsetY;
+            double[] viewport = viewport(page);
+            double dx = x < MARGIN ? x - viewport[0] * 0.4 : x > viewport[0] - MARGIN ? x - viewport[0] * 0.6 : 0;
+            double dy = y < MARGIN ? y - viewport[1] * 0.4 : y > viewport[1] - MARGIN ? y - viewport[1] * 0.6 : 0;
+            if (dx == 0 && dy == 0) {
+                return hits(target, x, y) ? new double[] {x, y} : null;
+            }
+            if (lastPosition != null && lastPosition[0] == x && lastPosition[1] == y) return null;
+            lastPosition = new double[] {x, y};
+            // Wheel over the element's projection so its own scroll container scrolls, like a person would.
+            page.mouse().move(clamp(x, 10, viewport[0] - 10), clamp(y, 10, viewport[1] - 10),
+                    new com.microsoft.playwright.Mouse.MoveOptions().setSteps(3 + random.nextInt(4)));
+            // BiDi wheel deltas must be integers.
+            page.mouse().wheel(Math.round(clamp(dx, -700, 700)), Math.round(clamp(dy, -700, 700)));
+            pause(page, 120, 260);
+        }
+        return null;
+    }
+
+    private static boolean hits(Locator target, double x, double y) {
+        return Boolean.TRUE.equals(onElement(target, HITS, List.of(x, y)));
+    }
+
+    /**
+     * Runs {@code function} on the element in the page's realm. An element handle is used because aria refs exist
+     * only in Playwright's isolated world ({@code evaluateAll} would match nothing); creating and evaluating a
+     * handle dispatches no marker events. With {@code extra}, the function receives {@code [element, ...extra]}.
+     */
+    static Object onElement(Locator target, String function, List<?> extra) {
+        com.microsoft.playwright.ElementHandle handle = target.elementHandle(
+                new Locator.ElementHandleOptions().setTimeout(ACTION_TIMEOUT_MS));
+        try {
+            if (extra == null) return handle.evaluate(function);
+            List<Object> arguments = new java.util.ArrayList<>();
+            arguments.add(handle);
+            arguments.addAll(extra);
+            return target.page().evaluate(function, arguments);
+        } finally {
+            handle.dispose();
+        }
+    }
+
+    private static double[] viewport(Page page) {
+        // Camoufox runs without viewport emulation (setViewportSize(null)), so ask the window itself.
+        Object size = page.evaluate("() => [innerWidth, innerHeight]");
+        List<?> values = (List<?>) size;
+        return new double[] {((Number) values.get(0)).doubleValue(), ((Number) values.get(1)).doubleValue()};
     }
 
     private static BoundingBox visibleBox(Locator target) {
@@ -67,9 +126,13 @@ final class RealInput {
         return box;
     }
 
+    private static double clamp(double value, double min, double max) {
+        return Math.max(min, Math.min(max, value));
+    }
+
     /** Focuses the field by a real click, replaces its content and types {@code text} key by key. */
     void replaceText(Page page, Locator target, String text) {
-        if (!target.isEditable(new Locator.IsEditableOptions().setTimeout(ACTION_TIMEOUT_MS))) {
+        if (!Boolean.TRUE.equals(onElement(target, EDITABLE, null))) {
             throw new IllegalStateException("Element is not an editable field");
         }
         click(page, target);

@@ -370,8 +370,9 @@ public final class CamoufoxBrowser implements AutoCloseable {
         Set<String> secrets = new HashSet<>();
         for (PageControls.Control control : snapshot.all()) {
             if (!control.value().isEmpty() && PageControls.EDITABLE_ROLES.contains(control.role())
-                    && "password".equalsIgnoreCase(refLocator(p, control.ref()).getAttribute("type",
-                    new Locator.GetAttributeOptions().setTimeout(2_000)))) {
+                    // An element handle, unlike getAttribute, dispatches no __playwright_mark_target__ event.
+                    && Boolean.TRUE.equals(RealInput.onElement(refLocator(p, control.ref()),
+                    "element => element.type === 'password'", null))) {
                 secrets.add(control.ref());
             }
         }
@@ -496,9 +497,10 @@ public final class CamoufoxBrowser implements AutoCloseable {
 
     /**
      * Extracts headings, links, tables, lists, metadata or JSON-LD from the current tab. Only Playwright's
-     * isolated-world queries are used (aria snapshot, innerHTML, textContent, getAttribute).
+     * page-level aria snapshot and {@code evaluateAll} reads are used; locator-level ariaSnapshot, innerHTML and
+     * getAttribute would dispatch {@code __playwright_mark_target__} events into the page (playwright4j #38).
      */
-    public Map<String, Object> extract(String kind, String selector) {
+    public Map<String, Object> extract(String kind, String scope) {
         String what = kind == null || kind.isBlank() ? "overview" : kind.trim().toLowerCase(java.util.Locale.ROOT);
         if (!PageExtractor.KINDS.contains(what)) {
             throw new IllegalArgumentException("kind must be one of " + PageExtractor.KINDS);
@@ -513,11 +515,10 @@ public final class CamoufoxBrowser implements AutoCloseable {
             result.put("url", p.url());
             result.put("title", safeTitle(p));
             result.put("kind", what);
-            String scope = selector == null || selector.isBlank() ? "body" : selector;
             AriaTree tree = switch (what) {
                 case "metadata", "jsonld" -> null;
-                default -> AriaTree.parse(p.locator(scope).first().ariaSnapshot(
-                        new Locator.AriaSnapshotOptions().setTimeout(15_000)));
+                default -> AriaTree.parse(p.ariaSnapshot(new Page.AriaSnapshotOptions().setTimeout(15_000)))
+                        .within(scope);
             };
             switch (what) {
                 case "headings" -> result.put("headings", PageExtractor.headings(tree, 200));
@@ -547,12 +548,10 @@ public final class CamoufoxBrowser implements AutoCloseable {
 
     private static Map<String, Object> metadataOf(Page p) {
         Map<String, Object> metadata = new LinkedHashMap<>();
-        String lang = p.locator("html").first().getAttribute("lang",
-                new Locator.GetAttributeOptions().setTimeout(2_000));
-        metadata.put("lang", lang == null ? "" : lang);
-        Locator head = p.locator("head");
-        String headHtml = head.count() == 0 ? "" : head.first().innerHTML(
-                new Locator.InnerHTMLOptions().setTimeout(5_000));
+        List<?> lang = (List<?>) p.locator("html").evaluateAll("els => els.map(e => e.getAttribute('lang') || '')");
+        metadata.put("lang", lang.isEmpty() ? "" : String.valueOf(lang.get(0)));
+        List<?> heads = (List<?>) p.locator("head").evaluateAll("els => els.map(e => e.innerHTML)");
+        String headHtml = heads.isEmpty() ? "" : String.valueOf(heads.get(0));
         metadata.put("meta", PageExtractor.metadata(headHtml, p.url()));
         return metadata;
     }

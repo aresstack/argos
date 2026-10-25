@@ -33,7 +33,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
-import java.util.SplittableRandom;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -53,12 +52,17 @@ public final class CamoufoxBrowser implements BrowserPagePort, AutoCloseable {
     private final Deque<Map<String, Object>> network = new ArrayDeque<>();
     private final BrowserTabs tabs = new BrowserTabs();
     private final Map<Page, PageControls> controlSnapshots = new IdentityHashMap<>();
-    private final RealInput input = new RealInput(new SplittableRandom());
+    private final RealInput input;
     private Playwright playwright;
     private BrowserContext context;
 
     public CamoufoxBrowser(ArgosConfig config) {
+        this(config, HumanInputSettings.fromEnvironment());
+    }
+
+    CamoufoxBrowser(ArgosConfig config, HumanInputSettings humanInput) {
         this.config = config;
+        this.input = new RealInput(humanInput);
     }
 
     public <T> T onBrowser(Callable<T> action) {
@@ -105,6 +109,7 @@ public final class CamoufoxBrowser implements BrowserPagePort, AutoCloseable {
                 }
                 environment.put(entry.getKey(), entry.getValue().asText());
             });
+            fingerprintWindow(variables);
             Map<String, Object> prefs = new LinkedHashMap<>();
             JsonNode preferences = launch.has("firefoxUserPrefs") ? launch.get("firefoxUserPrefs")
                     : launch.path("firefox_user_prefs");
@@ -143,6 +148,25 @@ public final class CamoufoxBrowser implements BrowserPagePort, AutoCloseable {
             }
             // Tabs opened by websites (target=_blank, window.open) are adopted like our own.
             context.onPage(this::adopt);
+        }
+    }
+
+    /**
+     * The inner window size Camoufox gives the page ({@code window.innerWidth/innerHeight} of the fingerprint, which
+     * is split over {@code CAMOU_CONFIG_1..n}). Real input scrolls and moves inside it without asking the page.
+     */
+    private void fingerprintWindow(JsonNode variables) {
+        StringBuilder json = new StringBuilder();
+        for (int part = 1; variables.has("CAMOU_CONFIG_" + part); part++) {
+            json.append(variables.get("CAMOU_CONFIG_" + part).asText());
+        }
+        try {
+            JsonNode fingerprint = mapper.readTree(json.toString());
+            double width = fingerprint.path("window.innerWidth").asDouble(0);
+            double height = fingerprint.path("window.innerHeight").asDouble(0);
+            if (width > 0 && height > 0) input.viewport(width, height);
+        } catch (Exception unreadable) {
+            // Without it the viewport is read once from the page when the first click needs it.
         }
     }
 

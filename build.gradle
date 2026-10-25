@@ -51,6 +51,7 @@ tasks.withType(JavaCompile).configureEach { options.encoding = 'UTF-8' }
 tasks.named('test') {
     useJUnitPlatform()
     systemProperty 'argos.testCamoufox', providers.gradleProperty('testCamoufox').orElse('false').get()
+    systemProperty 'argos.testHumanBrowser', providers.gradleProperty('testHumanBrowser').orElse('').get()
     // Test-only environment. Production must receive SERVER_PORT from the managed service.
     environment 'SERVER_PORT', '18098'
     environment 'SECURITY_MODE', 'none'

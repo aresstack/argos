@@ -13,7 +13,12 @@ import org.eclipse.jetty.ee10.servlet.FilterHolder;
 import jakarta.servlet.DispatcherType;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import com.aresstack.argos.document.DocumentStore;
+import io.modelcontextprotocol.server.McpServerFeatures.SyncToolSpecification;
+
+import java.util.ArrayList;
 import java.util.EnumSet;
+import java.util.List;
 import java.util.Map;
 import org.eclipse.jetty.server.Server;
 
@@ -39,13 +44,19 @@ public final class ArgosApplication {
         }
         ArgosConfig config = ArgosConfig.fromEnvironment();
         CamoufoxBrowser browser = new CamoufoxBrowser(config);
+        ResearchDocuments documents = new ResearchDocuments(browser, new DocumentStore());
+        List<SyncToolSpecification> tools = new ArrayList<>(new ArgosTools(browser).all());
+        // Documents and batches belong to the expert profile only; the legacy tool list stays unchanged.
+        if ("expert".equalsIgnoreCase(System.getenv("ARGOS_TOOL_PROFILE"))) {
+            tools.addAll(new DocumentAndBatchTools(documents).all());
+        }
         HttpServletStreamableServerTransportProvider transport =
                 HttpServletStreamableServerTransportProvider.builder()
                         .mcpEndpoint("/").build();
         McpSyncServer mcp = McpServer.sync(transport)
                 .serverInfo("argos", "0.1.0")
                 .capabilities(ServerCapabilities.builder().tools(true).build())
-                .tools(new ArgosTools(browser).all()).build();
+                .tools(tools).build();
 
         Server server = new Server(new InetSocketAddress(config.host(), config.port()));
         ServletContextHandler context = new ServletContextHandler();
@@ -68,6 +79,7 @@ public final class ArgosApplication {
             }
             mcp.close();
             browser.close();
+            documents.close();
         }));
 
         server.start();

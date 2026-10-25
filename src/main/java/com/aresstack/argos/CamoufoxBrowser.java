@@ -1,5 +1,6 @@
 package com.aresstack.argos;
 
+import com.aresstack.argos.fetch.BrowserContextAccess;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.microsoft.playwright.BrowserContext;
@@ -24,12 +25,13 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Function;
 
 /**
  * Owns one persistent Camoufox browser and serializes every Playwright API call
  * onto a single driver thread. Never attaches to an existing user's browser.
  */
-public final class CamoufoxBrowser implements AutoCloseable {
+public final class CamoufoxBrowser implements AutoCloseable, BrowserContextAccess {
     private static final int MAX_NETWORK_EVENTS = 200;
     private final ArgosConfig config;
     private final ExecutorService driver = Executors.newSingleThreadExecutor(
@@ -45,9 +47,14 @@ public final class CamoufoxBrowser implements AutoCloseable {
     }
 
     public <T> T onBrowser(Callable<T> action) {
+        return onBrowser(action, 90);
+    }
+
+    /** Like {@link #onBrowser(Callable)} with a longer budget for multi-tab work such as batches. */
+    public <T> T onBrowser(Callable<T> action, int timeoutSeconds) {
         try {
             Future<T> result = driver.submit(action);
-            return result.get(90, TimeUnit.SECONDS);
+            return result.get(timeoutSeconds, TimeUnit.SECONDS);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new IllegalStateException("Browser task interrupted", e);
@@ -148,6 +155,19 @@ public final class CamoufoxBrowser implements AutoCloseable {
             return Map.of("url", p.url(), "title", p.title(),
                     "status", response == null ? 0 : response.status());
         });
+    }
+
+    @Override
+    public <T> T inBrowserContext(Function<BrowserContext, T> task, int timeoutSeconds) {
+        return onBrowser(() -> {
+            activePage();
+            return task.apply(context);
+        }, timeoutSeconds);
+    }
+
+    @Override
+    public String currentUrl() {
+        return onBrowser(() -> page == null || page.isClosed() ? "" : page.url());
     }
 
     public Map<String, Object> snapshot(int maxCharacters) {

@@ -145,6 +145,8 @@ Der Login allein ist **keine** Discovery-Abnahme. Nach erfolgreicher OAuth-Verbi
 | `browser_screenshot` | Screenshot als MCP-Image zurückgeben |
 | `browser_network` | Letzte HTTP-Requests, Responses und Fehler untersuchen |
 
+Mit `ARGOS_TOOL_PROFILE=expert` kommen `browser_download`, `browser_document` und `browser_open_many` hinzu (Dokumente und mehrere Seiten über Hintergrund-Tabs derselben Session, ohne Skript-Injektion); Details und Parallelitätsmessung in [`docs/batch-and-documents.md`](docs/batch-and-documents.md).
+
 `browser_network` entfernt Query-Parameter und Benutzerinformationen aus den protokollierten URLs. Bis zu 200 Ereignisse bleiben im Speicher. `browser_evaluate` kann Webseiten verändern und ist deshalb nur für ausdrücklich autorisierte Nutzer über das gesicherte MCP-Plugin bestimmt.
 
 ## GitHub Actions und Releases

@@ -67,4 +67,24 @@ class SecretMaskerTest {
         assertEquals(text, masker.text(text));
         assertEquals("{\"title\":\"Paper\",\"year\":2024}", masker.body("{\"title\":\"Paper\",\"year\":2024}", "application/json"));
     }
+
+    @Test void masksReviewedEdgeCases() {
+        assertEquals("/next?code=" + MASK + "&step=2", masker.header("Location", "/next?code=supersecret&step=2"));
+        String reversed = masker.body("<input type=\"hidden\" value=\"supersecret\" name=\"csrf_token\">", "text/html");
+        assertFalse(reversed.contains("supersecret"), reversed);
+        assertTrue(reversed.contains("name=\"csrf_token\""));
+        String nested = masker.body("{\"access_token\":[\"supersecret\"],\"session\":{\"id\":\"s1\"}}", "application/json");
+        assertEquals("{\"access_token\":\"" + MASK + "\",\"session\":\"" + MASK + "\"}", nested);
+    }
+
+    @Test void keepsResearchFieldsThatOnlyResembleSecretNames() {
+        assertFalse(SecretMasker.isSecretName("authors"));
+        assertFalse(SecretMasker.isSecretName("passage"));
+        assertFalse(SecretMasker.isSecretName("keywords"));
+        assertTrue(SecretMasker.isSecretName("auth"));
+        assertTrue(SecretMasker.isSecretName("x-auth-key"));
+        assertTrue(SecretMasker.isSecretName("apiKey"));
+        assertTrue(SecretMasker.isSecretName("sessionid"));
+        assertTrue(SecretMasker.isSecretName("PASSWORD"));
+    }
 }

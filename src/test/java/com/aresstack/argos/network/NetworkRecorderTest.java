@@ -99,6 +99,22 @@ class NetworkRecorderTest {
         verify(response, times(1)).body();
     }
 
+    @Test void masksLargeBodiesBeforeTruncating() {
+        NetworkRecorder recorder = recorder(false);
+        String padding = "x".repeat(NetworkRecorder.MAX_BODY_CHARACTERS - 20);
+        String secret = "s".repeat(100);
+        Request request = request("GET", "https://example.org/big", "fetch", null);
+        Response response = response(request, 200, "application/json",
+                "{\"filler\":\"" + padding + "\",\"password\":\"" + secret + "\"}");
+        recorder.requestStarted(request);
+        recorder.responseReceived(response);
+        recorder.requestFinished(request);
+
+        Map<String, Object> detail = recorder.detail("n1", true);
+        assertEquals(true, detail.get("bodyTruncated"));
+        assertFalse(detail.get("body").toString().contains("sssss"));
+    }
+
     @Test void neverFetchesBinaryBodiesAndReportsWhy() {
         NetworkRecorder recorder = recorder(false);
         Request request = request("GET", "https://example.org/paper.pdf", "document", null);

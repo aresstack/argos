@@ -31,6 +31,7 @@ public final class NetworkRecorder {
     public static final int MAX_ENTRIES = 200;
     public static final int MAX_BODY_CHARACTERS = 32_000;
     private static final int MAX_POST_DATA_CHARACTERS = 8_000;
+    private static final int MASKING_INPUT_LIMIT = 2_000_000;
     // Eager body capture is limited to the exchanges that carry page data.
     private static final Set<String> EAGER_BODY_TYPES = Set.of("document", "xhr", "fetch");
 
@@ -236,9 +237,12 @@ public final class NetworkRecorder {
             byte[] bytes = entry.response.body();
             String decoded = new String(bytes, charset(header(entry.responseHeaders, "content-type")));
             entry.bodyBytes = bytes.length;
-            entry.bodyTruncated = decoded.length() > MAX_BODY_CHARACTERS;
-            String limited = entry.bodyTruncated ? decoded.substring(0, MAX_BODY_CHARACTERS) : decoded;
-            entry.body = masker.body(limited, entry.mimeType);
+            // Mask the whole body first: a cut inside a secret would defeat the masking patterns.
+            // Only absurdly large bodies are pre-cut, far beyond the visible output limit.
+            String bounded = decoded.length() > MASKING_INPUT_LIMIT ? decoded.substring(0, MASKING_INPUT_LIMIT) : decoded;
+            String masked = masker.body(bounded, entry.mimeType);
+            entry.bodyTruncated = masked.length() > MAX_BODY_CHARACTERS;
+            entry.body = entry.bodyTruncated ? masked.substring(0, MAX_BODY_CHARACTERS) : masked;
         } catch (RuntimeException unavailable) {
             // Bodies of evicted or redirected responses are gone from the browser cache.
             entry.bodyUnavailable = "body no longer available";

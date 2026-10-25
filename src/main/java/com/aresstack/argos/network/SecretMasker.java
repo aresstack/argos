@@ -26,11 +26,13 @@ public final class SecretMasker {
 
     private static final Set<String> SECRET_HEADERS = Set.of(
             "authorization", "proxy-authorization", "cookie", "set-cookie");
+    // Unambiguous fragments: any name containing one is secret (sessionid, x-api-key, csrfToken).
     private static final List<String> SECRET_NAME_PARTS = List.of(
-            "pass", "pwd", "secret", "token", "auth", "session", "cookie", "apikey", "api_key",
-            "api-key", "signature", "credential", "jwt", "csrf", "xsrf", "private");
-    private static final Set<String> SECRET_NAMES = Set.of(
-            "key", "sig", "sid", "code", "otp", "pin", "ticket", "nonce");
+            "passw", "pwd", "secret", "token", "authoriz", "authent", "session", "cookie", "apikey",
+            "api_key", "api-key", "signature", "credential", "jwt", "csrf", "xsrf", "private");
+    // Short words only count as a whole name part, so "author", "passage" or "keyword" stay visible.
+    private static final Set<String> SECRET_NAME_WORDS = Set.of(
+            "auth", "pass", "key", "sig", "sid", "code", "otp", "pin", "ticket", "nonce");
     private static final Set<String> COOKIE_ATTRIBUTES = Set.of(
             "path", "domain", "expires", "max-age", "secure", "httponly", "samesite", "partitioned", "priority");
 
@@ -41,18 +43,23 @@ public final class SecretMasker {
     // "token": "value" inside scripts, HTML-embedded JSON or JSON that failed to parse.
     private static final Pattern QUOTED_PAIR = Pattern.compile(
             "([\"']?)([A-Za-z0-9_.-]{2,64})\\1(\\s*[:=]\\s*)([\"'])([^\"'\\r\\n]{1,4096})\\4");
-    // <input name="csrf_token" value="..."> in either attribute order.
+    // <input name="csrf_token" value="..."> and <input value="..." name="csrf_token">.
     private static final Pattern INPUT_VALUE = Pattern.compile(
             "(?i)(name\\s*=\\s*[\"']([^\"']{1,64})[\"'][^>]{0,200}?value\\s*=\\s*)([\"'])([^\"']*)\\3");
+    private static final Pattern VALUE_BEFORE_NAME = Pattern.compile(
+            "(?i)(value\\s*=\\s*)([\"'])([^\"']*)\\2([^>]{0,200}?name\\s*=\\s*[\"']([^\"']{1,64})[\"'])");
+    private static final Pattern NAME_PARTS = Pattern.compile("[^A-Za-z0-9]+|(?<=[a-z0-9])(?=[A-Z])");
 
     private final ObjectMapper json = new ObjectMapper();
 
     public static boolean isSecretName(String name) {
         if (name == null) return false;
         String lower = name.trim().toLowerCase(Locale.ROOT);
-        if (SECRET_NAMES.contains(lower)) return true;
         for (String part : SECRET_NAME_PARTS) {
             if (lower.contains(part)) return true;
+        }
+        for (String word : NAME_PARTS.split(name.trim())) {
+            if (SECRET_NAME_WORDS.contains(word.toLowerCase(Locale.ROOT))) return true;
         }
         return false;
     }
@@ -73,6 +80,12 @@ public final class SecretMasker {
     public String url(String url) {
         try {
             URI uri = URI.create(url);
+            if (uri.getScheme() == null && uri.getHost() == null) {
+                // Relative reference, e.g. a redirect "Location: /next?code=...".
+                String query = uri.getRawQuery();
+                String path = uri.getRawPath() == null ? "" : uri.getRawPath();
+                return query == null || query.isEmpty() ? path : path + "?" + formEncoded(query);
+            }
             if (uri.getHost() == null) return schemeOnly(url);
             String base = new URI(uri.getScheme(), null, uri.getHost(), uri.getPort(),
                     uri.getPath(), null, null).toString();
@@ -145,7 +158,8 @@ public final class SecretMasker {
             object.fieldNames().forEachRemaining(names::add);
             for (String name : names) {
                 JsonNode child = object.get(name);
-                if (isSecretName(name) && (child.isValueNode() && !child.isNull())) {
+                // A secret key hides its whole value, including nested arrays or objects.
+                if (isSecretName(name) && !child.isNull()) {
                     object.put(name, MASK);
                 } else {
                     maskJson(child);
@@ -219,7 +233,16 @@ public final class SecretMasker {
     }
 
     private static String replaceSecretInputs(String value) {
-        Matcher matcher = INPUT_VALUE.matcher(value);
+        Matcher before = VALUE_BEFORE_NAME.matcher(value);
+        StringBuilder reordered = new StringBuilder();
+        while (before.find()) {
+            String replacement = isSecretName(before.group(5))
+                    ? before.group(1) + before.group(2) + MASK + before.group(2) + before.group(4)
+                    : before.group();
+            before.appendReplacement(reordered, Matcher.quoteReplacement(replacement));
+        }
+        before.appendTail(reordered);
+        Matcher matcher = INPUT_VALUE.matcher(reordered.toString());
         StringBuilder out = new StringBuilder();
         while (matcher.find()) {
             String replacement = isSecretName(matcher.group(2))

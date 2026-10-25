@@ -68,6 +68,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
+import java.util.regex.Pattern;
 
 /**
  * Owns one persistent Camoufox browser and serializes every Playwright API call
@@ -669,13 +670,35 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
                     .setWaitUntil(WaitUntilState.DOMCONTENTLOADED).setTimeout(45_000);
             if (referer != null && !referer.isBlank()) options.setReferer(referer);
             p.navigate(url, options);
-            return capture(p);
+            return captureWhenLoaded(p);
         });
     }
 
     @Override
     public PageCapture current() {
-        return onBrowser(() -> capture(activePage()));
+        return onBrowser(() -> captureWhenLoaded(activePage()));
+    }
+
+    private static final long LOADING_GRACE_MILLIS = 8_000;
+    private static final Pattern LOADING_HINT = Pattern.compile(
+            "(?iu)\\b(loading|wird geladen|lädt|bitte warten|please wait)\\b");
+
+    /**
+     * A page that still says it is loading while its own requests are in flight (a single-page app waiting
+     * for its data) is read again once those requests finished, at most {@link #LOADING_GRACE_MILLIS} later.
+     * Only protocol events are watched; the second read happens only for such pages. Small models otherwise
+     * read "Loading…" and give up (Phase 7 evaluation, task dynamic-page; ported from #13 commit 3701fd0).
+     */
+    private PageCapture captureWhenLoaded(Page p) {
+        PageCapture capture = capture(p);
+        if (!LOADING_HINT.matcher(capture.text()).find()) return capture;
+        NetworkActivity activity = document(p).activity;
+        if (activity.inflight() == 0) return capture;
+        long deadline = System.currentTimeMillis() + LOADING_GRACE_MILLIS;
+        while (activity.inflight() > 0 && System.currentTimeMillis() < deadline) p.waitForTimeout(150);
+        // Rendering the arrived data takes a moment after the response.
+        p.waitForTimeout(200);
+        return capture(p);
     }
 
     @Override

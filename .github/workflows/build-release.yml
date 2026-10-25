@@ -62,14 +62,14 @@ jobs:
           chmod +x gradlew
           ./gradlew clean test argosZip -PreleaseVersion="${{ steps.version.outputs.value }}" --no-daemon --console=plain
 
-      - name: Verify packaged JAR and MCP health on Linux
+      - name: Verify standalone JAR, Playwright4J driver and MCP health on Linux
         shell: bash
         run: |
           test -s build/distributions/argos-package.zip
           test -s build/package/argos.jar
-          test -d build/package/lib
-          test "$(find build/package/lib -maxdepth 1 -name '*.jar' | wc -l)" -gt 10
+          test ! -e build/package/lib
           unzip -l build/distributions/argos-package.zip | grep -q 'argos.jar'
+          java -jar build/package/argos.jar --verify-runtime | grep -F ARGOS_RUNTIME_OK
           ARGOS_PORT=18082 java -jar build/package/argos.jar > "$RUNNER_TEMP/argos.log" 2>&1 &
           ARGOS_PID=$!
           trap 'kill "$ARGOS_PID" 2>/dev/null || true' EXIT
@@ -88,6 +88,14 @@ jobs:
         with:
           name: argos-distribution
           path: build/distributions/argos-package.zip
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload standalone Argos JAR
+        uses: actions/upload-artifact@v4
+        with:
+          name: argos-standalone-jar
+          path: build/package/argos.jar
           if-no-files-found: error
           retention-days: 14
 
@@ -114,7 +122,9 @@ jobs:
           $ProgressPreference = 'SilentlyContinue'
           Expand-Archive -LiteralPath 'argos-package.zip' -DestinationPath 'argos' -Force
           if (-not (Test-Path 'argos/argos.jar')) { throw 'argos.jar missing' }
-          if (-not (Test-Path 'argos/lib')) { throw 'Runtime libraries missing' }
+          if (Test-Path 'argos/lib') { throw 'Standalone JAR must not need an external lib directory' }
+          & java -jar 'argos/argos.jar' --verify-runtime
+          if ($LASTEXITCODE -ne 0) { throw 'Playwright4J driver subprocess failed from standalone JAR' }
           $env:ARGOS_PORT = '18082'
           $workdir = (Resolve-Path 'argos').Path
           $proc = Start-Process -FilePath 'java' -ArgumentList @('-jar', 'argos.jar') -WorkingDirectory $workdir -PassThru -RedirectStandardOutput 'argos.stdout.log' -RedirectStandardError 'argos.stderr.log'
@@ -165,9 +175,16 @@ jobs:
         with:
           name: argos-distribution
 
+      - name: Download verified standalone JAR
+        uses: actions/download-artifact@v4
+        with:
+          name: argos-standalone-jar
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: argos-package.zip
+          files: |
+            argos.jar
+            argos-package.zip
           fail_on_unmatched_files: true
           generate_release_notes: true

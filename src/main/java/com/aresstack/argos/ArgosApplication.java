@@ -20,6 +20,17 @@ public final class ArgosApplication {
     private ArgosApplication() { }
 
     public static void main(String[] args) throws Exception {
+        if (args.length == 1 && "--verify-runtime".equals(args[0])) {
+            // Verify the real Playwright4J subprocess from the *packaged* JAR.
+            // /health alone would miss missing driver classes and nested-classpath errors.
+            try (com.microsoft.playwright.Playwright playwright = com.microsoft.playwright.Playwright.create()) {
+                if (playwright.firefox() == null) {
+                    throw new IllegalStateException("Playwright4J Firefox/BiDi browser type is unavailable");
+                }
+            }
+            System.out.println("ARGOS_RUNTIME_OK");
+            return;
+        }
         ArgosConfig config = ArgosConfig.fromEnvironment();
         CamoufoxBrowser browser = new CamoufoxBrowser(config);
         HttpServletStreamableServerTransportProvider transport =

@@ -1,6 +1,7 @@
 plugins {
     id 'java'
     id 'application'
+    id 'org.springframework.boot' version '3.5.7'
 }
 
 group = 'com.aresstack'
@@ -11,6 +12,9 @@ java {
 }
 
 repositories {
+    // A project-local build of the pinned Playwright4J commit takes precedence over
+    // unrelated (possibly stale) snapshots published by other IntelliJ projects.
+    maven { url = uri('.argos-build/maven') }
     mavenLocal()
     mavenCentral()
 }
@@ -42,26 +46,38 @@ tasks.named('test') {
     useJUnitPlatform()
     systemProperty 'argos.testCamoufox', providers.gradleProperty('testCamoufox').orElse('false').get()
 }
-// Keep original GraalJS / Truffle multi-release JARs intact, as Playwright4J requires.
-def runtimeJars = providers.provider {
-    configurations.runtimeClasspath.files
-        .findAll { it.name.endsWith('.jar') }
-        .sort { a, b -> a.name <=> b.name }
+// The managed webserver starts one executable JAR, never an external lib/ tree.
+// Spring Boot's nested-JAR launcher preserves GraalJS and Playwright4J JAR
+// boundaries, including META-INF/services and multi-release class files.
+tasks.named('bootJar') {
+    archiveFileName = 'argos.jar'
+    mainClass = application.mainClass.get()
+    layered { enabled = false }
 }
 
 tasks.named('jar') {
-    archiveFileName = 'argos.jar'
-    manifest {
-        attributes('Main-Class': application.mainClass.get(),
-                   'Class-Path': runtimeJars.get().collect { 'lib/' + it.name }.join(' '))
+    enabled = false
+}
+
+// Compatibility with the existing AresStack managed JAR path.
+// A packaged Argos JAR is invalid if the embedded Playwright4J driver JVM
+// cannot start. Fail the build immediately, not after the webserver restarts it.
+tasks.register('verifyStandaloneRuntime', Exec) {
+    group = 'verification'
+    description = 'Verify the Playwright4J driver subprocess from the standalone JAR'
+    dependsOn tasks.named('bootJar')
+    def java21 = javaToolchains.launcherFor {
+        languageVersion = JavaLanguageVersion.of(21)
     }
+    executable = java21.get().executablePath.asFile.absolutePath
+    args '-jar', tasks.named('bootJar').get().archiveFile.get().asFile.absolutePath, '--verify-runtime'
 }
 
 tasks.register('packageArgos', Sync) {
-    dependsOn tasks.named('jar')
+    dependsOn tasks.named('bootJar')
+    dependsOn tasks.named('verifyStandaloneRuntime')
     into layout.buildDirectory.dir('package')
-    from(tasks.named('jar'))
-    from(runtimeJars) { into 'lib' }
+    from(tasks.named('bootJar'))
 }
 
 tasks.register('argosZip', Zip) {

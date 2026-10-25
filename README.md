@@ -28,7 +28,7 @@ Die MCP-Implementierung nutzt `io.modelcontextprotocol.sdk:mcp:0.18.4` und einge
 
 ## Bauen (Windows)
 
-Voraussetzung: Java 21 und die Playwright4J-Version `0.2.2-SNAPSHOT` aus dem Projekt `aresstack/playwright4j` im lokalen Maven-Repository.
+Voraussetzung: Java 21 sowie **Playwright4J-Commit `1c11fe9c2eb39eca1ca6abbc4ce0ffe3f183aa8c` oder neuer mit Fix #32**. Die alte, lokal veröffentlichte `0.2.2-SNAPSHOT` ohne Fix #32 startet den Treiber aus einer ausführbaren JAR nicht. Die CI baut die geprüfte Revision selbst; lokal kann sie in `.argos-build/maven/` veröffentlicht werden (das Verzeichnis ist Git-ignoriert).
 
 ```powershell
 .\gradlew.bat test packageArgos argosZip
@@ -38,12 +38,11 @@ Erzeugt:
 
 ```text
 build/package/
-  argos.jar        ← ausführbare Haupt-JAR
-  lib/             ← alle Laufzeitbibliotheken (unverändert)
-build/distributions/argos-package.zip
+  argos.jar        ← einzige, vollständig ausführbare JAR
+build/distributions/argos-package.zip  ← enthält nur argos.jar
 ```
 
-**Wichtig:** `argos.jar` benötigt das mitgelieferte Verzeichnis `lib/` neben der JAR. GraalJS/Truffle sind Multi-Release-Bibliotheken und dürfen nicht blind zu einer Fat-JAR zusammengeführt werden. Der Webserver startet dennoch ganz normal `java -jar argos.jar`.
+**Wichtig:** `argos.jar` ist eine eigenständig startbare Spring-Boot-Executable-JAR (nur der Launcher; Argos bleibt eine gewöhnliche Java-Anwendung). Playwright4J, MCP SDK und GraalJS liegen als unveränderte verschachtelte Bibliotheken in `BOOT-INF/lib/`. Ein externes `lib/`-Verzeichnis ist **nicht** erforderlich. Gradles `bootJar` erhält Multi-Release- und Service-Loader-Metadaten. **Nur die JAR** muss im Webserver hinterlegt werden. Mit `java -jar argos.jar --verify-runtime` lässt sich der komplette Playwright4J-Treiber ohne Browser prüfen; bei Erfolg erscheint `ARGOS_RUNTIME_OK`. Dieser Selbsttest läuft zusätzlich **bei jedem `packageArgos`-Build automatisch** und lässt den Build scheitern, wenn das Paket zwar startet, aber der Treiber nicht geladen werden kann.
 
 ## Lokaler Start
 
@@ -75,7 +74,7 @@ Prüfen: `http://127.0.0.1:8082/health`, MCP: `http://127.0.0.1:8082/mcp`.
 ## AresStack Webserver – Managed JAR
 
 - **JAR:** Pfad zur entpackten `argos.jar`.
-- **Working directory:** Verzeichnis mit `argos.jar` und `lib/`.
+- **Working directory:** Beliebiges Arbeitsverzeichnis für Argos; `argos.jar` benötigt kein externes `lib/`.
 - **Java executable:** Java 21.
 - **Start automatically / Restart automatically:** optional einschalten.
 - **Health check:** `http://127.0.0.1:8082/health`.
@@ -101,7 +100,7 @@ Die öffentliche Adresse wird ausschließlich im AresStack Webserver konfigurier
 
 ## GitHub Actions und Releases
 
-Der Workflow [Build and Release Argos](.github/workflows/build-release.yml) läuft bei jedem Push auf `main`, bei Pull Requests und manuell über **Actions → Build and Release Argos → Run workflow**. Er baut Playwright4J aus einem **festgepinnten Commit** selbst in Maven Local, führt die Java-Tests aus und erstellt das plattformübergreifende `argos-package.zip`. Anschließend prüft ein separater Windows-Job, dass die entpackte JAR startet und der MCP-Handshake sowie die Browserwerkzeugliste funktionieren. Die Browser-Funktionstests mit echter Camoufox-Binärdatei bleiben lokal, da der Runner diese nicht mitbringt.
+Der Workflow [Build and Release Argos](.github/workflows/build-release.yml) läuft bei jedem Push auf `main`, bei Pull Requests und manuell über **Actions → Build and Release Argos → Run workflow**. Er baut Playwright4J aus einem **festgepinnten Commit** selbst in Maven Local, führt die Java-Tests aus und erstellt das plattformübergreifende `argos-package.zip`. Anschließend prüft ein separater Windows-Job sowohl den **echten Playwright4J-Treiberstart aus der einzelnen JAR** (`--verify-runtime`) als auch den MCP-Handshake und die Browserwerkzeugliste, ohne dass ein externes `lib/`-Verzeichnis existiert. Die Browser-Funktionstests mit echter Camoufox-Binärdatei bleiben lokal, da der Runner diese nicht mitbringt.
 
 **Ein GitHub Release wird ausschließlich beim Push eines Versionstags veröffentlicht**, und nur wenn Linux- und Windows-Jobs erfolgreich waren. Ein Push auf `main` oder ein manueller Workflow-Lauf veröffentlicht **kein** Release.
 
@@ -112,7 +111,7 @@ git tag v0.1.0
 git push origin v0.1.0
 ```
 
-Im GitHub Release liegt `argos-package.zip` mit `argos.jar` und `lib/`. Das ZIP enthält **keine Camoufox-Binärdatei, Fingerprint-Konfiguration oder Benutzerprofile**; diese werden auf dem Zielrechner gesondert eingerichtet. Für den Betrieb als Managed JAR ist das ZIP zu entpacken.
+Im GitHub Release liegen die **direkt ausführbare `argos.jar`** und optional `argos-package.zip` (enthält nur dieselbe JAR). Beide enthalten **keine Camoufox-Binärdatei, Fingerprint-Konfiguration oder Benutzerprofile**; diese werden auf dem Zielrechner gesondert eingerichtet. Der Webserver benötigt nur die einzelne JAR.
 
 ## Tests und Stand
 
@@ -123,7 +122,7 @@ Im GitHub Release liegt `argos-package.zip` mit `argos.jar` und `lib/`. Das ZIP 
 
 Der zweite Befehl verwendet eine **separate temporäre Headless-Camoufox-Instanz** und einen lokalen HTTP-Testserver. Er überprüft Navigation, Seitentext, DOM-Inspektion, Eingaben, Klicks, JavaScript, Screenshots und Netzwerkereignisse. Bereits laufende GPT-Desktop-Sitzungen werden nicht verwendet oder beendet.
 
-Streamable-HTTP-MCP wurde zusätzlich mit `initialize`, `notifications/initialized`, `tools/list` und `tools/call(browser_status)` über HTTP geprüft.
+Streamable-HTTP-MCP wurde zusätzlich mit `initialize`, `notifications/initialized`, `tools/list` und `tools/call(browser_status)` über HTTP geprüft. Das eigenständige Windows-Smoketestskript `scripts/smoke-standalone.ps1 -WithCamoufox` kopiert **nur `argos.jar`** in ein temporäres Verzeichnis und prüft zusätzlich einen echten Camoufox-Start, Navigation und Interaktion über MCP.
 
 **Bekanntes externes Problem:** In Playwright4J/Core 1.62 kann ein persistenter Firefox-BiDi-Start unter Windows zwei sichtbare Fenster erzeugen, obwohl nur eines unter `context.pages()` auftaucht: [playwright4j#34](https://github.com/aresstack/playwright4j/issues/34). Argos implementiert keinen unsicheren Fensterschließ-Hack. Bei `ARGOS_HEADLESS=true` ist die Oberfläche nicht sichtbar. Die Korrektur soll aus Playwright4J übernommen werden.
 

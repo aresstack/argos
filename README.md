@@ -147,6 +147,27 @@ Der Login allein ist **keine** Discovery-Abnahme. Nach erfolgreicher OAuth-Verbi
 
 `browser_network` entfernt Query-Parameter und Benutzerinformationen aus den protokollierten URLs. Bis zu 200 Ereignisse bleiben im Speicher. `browser_evaluate` kann Webseiten verändern und ist deshalb nur für ausdrücklich autorisierte Nutzer über das gesicherte MCP-Plugin bestimmt.
 
+## Netzwerkgrenze (SSRF-Schutz)
+
+Camoufox erreicht das Netz **nur über einen in Argos eingebauten SOCKS5-Proxy** auf `127.0.0.1` (zufälliger Port). Der Browser löst DNS nicht selbst auf, sondern übergibt den Hostnamen an den Proxy. Der Proxy löst **einmal** auf, prüft **jede** Adresse und verbindet sich mit genau der geprüften Adresse. Das gilt für Navigation, Redirects, Bilder, Skripte, Formulare, WebSockets, Service-Worker und browserinterne Verbindungen. DNS-Rebinding hat dadurch keinen zweiten Auflösungszeitpunkt, den es ausnutzen könnte.
+
+Ohne Regel blockiert sind Loopback (`127.0.0.0/8`, `::1`), `0.0.0.0`, private Netze (RFC 1918), Link-Local (`169.254.0.0/16`, `fe80::/10`), Cloud-Metadaten (`169.254.169.254`, `fd00:ec2::254`, `100.100.100.200`), Unique-Local (`fc00::/7`), CGNAT (`100.64.0.0/10`), reservierte Bereiche und Multicast, auch in IPv6-Schreibweisen (IPv4-mapped, NAT64, 6to4). Abgewiesene Verbindungen erscheinen in `browser_network` mit `"kind":"blocked"` und Grund, `browser_status` zeigt unter `network` den Zustand des Proxys.
+
+HTTPS bleibt ein unveränderter Tunnel: **kein MITM**, TLS, Header und Fingerprint sind die des Browsers, und für Webseiten ist der Proxy unsichtbar. Dadurch prüft die Richtlinie **Host und IP, keine Pfade**.
+
+**Fail closed:** Der Proxy startet vor dem Browser; ohne Proxy startet kein Browser, und fällt er aus, erreicht der Browser nichts mehr. Nach jedem Browserstart prüft ein Selbsttest in einem kurzlebigen Tab, dass `127.0.0.1` über den Proxy läuft und abgewiesen wird, dass der Hostname beim Proxy ankommt (Remote-DNS) und dass Firefox nach Abweisungen nicht direkt verbindet. Schlägt er fehl, wird der Browser beendet.
+
+| Variable | Property | Wirkung |
+| --- | --- | --- |
+| `ARGOS_NETWORK_POLICY` | `network.policy` | `strict` (Standard) oder `off` (kein Proxy, direkte Verbindungen; nur zur Fehlersuche) |
+| `ARGOS_INTRANET_ALLOW` | `network.intranet-allow` | Kommagetrennte Ausnahmen, gleiche Syntax wie für die `web_*`-Werkzeuge: `wiki.firma.local`, `*.firma.local`, `10.20.0.0/16`, `192.168.1.5`, zusätzlich `wiki.firma.local@10.20.0.0/16` |
+| `ARGOS_UPSTREAM_PROXY` | `network.upstream-proxy` | Optionaler vorgeschalteter Proxy, `socks5://[user:pass@]host:port` oder `http://[user:pass@]host:port` (HTTP CONNECT) |
+| `ARGOS_UPSTREAM_DNS` | `network.upstream-dns` | `local` (Standard): Argos gibt dem Upstream die geprüfte IP; `remote`: der Upstream löst den Namen selbst auf (geo-konsistentes DNS, die Richtlinie sieht dann nur Argos' eigene Auflösung) |
+
+Eine **Host-Regel** lässt nur Intranet-Adressen zu (privat, Unique-Local, CGNAT). Loopback, Link-Local und Metadaten brauchen eine **Bereichsregel**, die sie ausdrücklich nennt. `0.0.0.0` und Multicast lassen sich nicht freigeben, Argos' eigener `SERVER_PORT` und der Proxy-Port bleiben auch bei freigegebenem Loopback gesperrt. Ein `proxy` in der Camoufox-`launch.json` wird automatisch als Upstream verkettet. `network.proxy.*`- oder `network.trr.*`-Prefs in der `launch.json` führen zu einem Startfehler, weil Argos diese Einstellungen selbst setzt.
+
+Gesetzte Firefox-Prefs (gegen Firefox `StaticPrefList.yaml`/`all.js` und Camoufox 158 `camoufox.cfg` geprüft): `network.proxy.type=1`, `network.proxy.socks*` auf den Argos-Proxy mit Version 5, `network.proxy.socks5_remote_dns=true` (für SOCKS5 maßgeblich; `socks_remote_dns` gilt nur für SOCKS4 und wird zusätzlich gesetzt), `network.proxy.no_proxies_on=""`, `network.proxy.allow_hijacking_localhost=true`, `network.proxy.failover_direct=false`, `network.proxy.allow_bypass=false`, `network.proxy.retry_failed_proxies=true`, `network.trr.mode=5`, `network.dns.prefetch_via_proxy=false`, `network.http.altsvc.proxy_checks=true`, `media.peerconnection.ice.proxy_only_if_behind_proxy=true` (Camoufox-Standard, kein UDP am Proxy vorbei). **Nicht** verändert werden `network.dns.disablePrefetch`, `network.prefetch-next` und `network.http.speculative-parallel-limit`: Camoufox lässt sie bewusst auf Firefox-Standard, weil Seiten Abweichungen über Resource Timing erkennen können. Firefox löst hinter einem Proxy ohnehin kein DNS-Prefetch auf.
+
 ## GitHub Actions und Releases
 
 Der Workflow [Build and Release Argos](.github/workflows/build-release.yml) läuft bei jedem Push auf `main`, bei Pull Requests und manuell über **Actions → Build and Release Argos → Run workflow**. Er baut Playwright4J aus einem **festgepinnten Commit** selbst in Maven Local, führt die Java-Tests aus und erstellt das plattformübergreifende `argos-package.zip`. Anschließend prüft ein separater Windows-Job sowohl den **echten Playwright4J-Treiberstart aus der einzelnen JAR** (`--verify-runtime`) als auch den MCP-Handshake und die Browserwerkzeugliste, ohne dass ein externes `lib/`-Verzeichnis existiert. Die Browser-Funktionstests mit echter Camoufox-Binärdatei bleiben lokal, da der Runner diese nicht mitbringt.
@@ -167,7 +188,10 @@ Im GitHub Release liegen die **direkt ausführbare `argos.jar`** und optional `a
 ```powershell
 .\gradlew.bat test
 .\gradlew.bat test --tests com.aresstack.argos.CamoufoxBrowserTest -PtestCamoufox=true
+.\gradlew.bat test --tests com.aresstack.argos.CamoufoxNetworkBoundaryTest -PtestCamoufox=true
 ```
+
+`CamoufoxNetworkBoundaryTest` prüft mit dem echten Camoufox, dass ein Redirect auf `127.0.0.2`, ein `<img>` ins LAN und WebRTC-UDP zu einem lokalen STUN-Port abgewiesen werden, während die freigegebene Testseite normal lädt. DNS-Rebinding prüft `Socks5ProxyTest` mit einem steuerbaren Resolver.
 
 Der zweite Befehl verwendet eine **separate temporäre Headless-Camoufox-Instanz** und einen lokalen HTTP-Testserver. Er überprüft Navigation, Seitentext, DOM-Inspektion, Eingaben, Klicks, JavaScript, Screenshots und Netzwerkereignisse. Bereits laufende GPT-Desktop-Sitzungen werden nicht verwendet oder beendet.
 

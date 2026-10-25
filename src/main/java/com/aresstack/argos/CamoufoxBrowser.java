@@ -1,19 +1,29 @@
 package com.aresstack.argos;
 
+import com.aresstack.argos.network.FirefoxNetworkPrefs;
+import com.aresstack.argos.network.NetworkSettings;
+import com.aresstack.argos.network.Socks5Proxy;
+import com.aresstack.argos.network.UpstreamProxy;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.microsoft.playwright.BrowserContext;
 import com.microsoft.playwright.BrowserType;
 import com.microsoft.playwright.Page;
 import com.microsoft.playwright.Playwright;
+import com.microsoft.playwright.PlaywrightException;
 import com.microsoft.playwright.Response;
 import com.microsoft.playwright.options.WaitUntilState;
 
+import java.io.IOException;
+import java.net.InetAddress;
+import java.net.ServerSocket;
+import java.net.Socket;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -24,6 +34,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Owns one persistent Camoufox browser and serializes every Playwright API call
@@ -37,6 +48,7 @@ public final class CamoufoxBrowser implements AutoCloseable {
     private final ObjectMapper mapper = new ObjectMapper();
     private final Deque<Map<String, Object>> network = new ArrayDeque<>();
     private Playwright playwright;
+    private Socks5Proxy proxy;
     private BrowserContext context;
     private Page page;
 
@@ -86,6 +98,23 @@ public final class CamoufoxBrowser implements AutoCloseable {
                 else if (value.isTextual()) prefs.put(entry.getKey(), value.asText());
                 else throw new IllegalArgumentException("Unsupported Firefox pref: " + entry.getKey());
             });
+            NetworkSettings network = config.network();
+            if (network.strictMode()) {
+                network = withLaunchProxy(network, launch.path("proxy"));
+                for (String key : prefs.keySet()) {
+                    if (FirefoxNetworkPrefs.ownedPrefixes().stream().anyMatch(key::startsWith)) {
+                        throw new IllegalArgumentException("launch.json sets " + key + ", but Argos owns the "
+                                + "browser network settings. Configure a browser proxy as ARGOS_UPSTREAM_PROXY.");
+                    }
+                }
+                // Fail closed: no proxy, no browser.
+                proxy = Socks5Proxy.start(network, Socks5Proxy.SYSTEM_DNS);
+                proxy.protectLoopbackPort(config.port());
+                prefs.putAll(FirefoxNetworkPrefs.forLocalSocks(proxy.port()));
+            } else {
+                System.err.println("ARGOS_NETWORK_POLICY=off: Camoufox connects directly and can reach "
+                        + "loopback and intranet services.");
+            }
             List<String> args = new ArrayList<>();
             launch.path("args").forEach(value -> args.add(value.asText()));
             BrowserType.LaunchPersistentContextOptions options =
@@ -101,12 +130,12 @@ public final class CamoufoxBrowser implements AutoCloseable {
                             .setContrast(null)
                             .setFirefoxUserPrefs(prefs);
             if (!args.isEmpty()) options.setArgs(args);
-            playwright = Playwright.create();
             try {
+                playwright = Playwright.create();
                 context = playwright.firefox().launchPersistentContext(config.profile(), options);
-            } catch (RuntimeException error) {
-                playwright.close();
-                playwright = null;
+                if (proxy != null) verifyNetworkBoundary();
+            } catch (Exception error) {
+                shutDown();
                 throw error;
             }
         }
@@ -116,6 +145,72 @@ public final class CamoufoxBrowser implements AutoCloseable {
         page.onResponse(response -> record("response", response.request().method(), response.url(), response.status()));
         page.onRequestFailed(request -> record("failed", request.method(), request.url(), 0));
         return page;
+    }
+
+    /** Chains a proxy from Camoufox' launch.json, which Argos would otherwise drop under strict mode. */
+    private static NetworkSettings withLaunchProxy(NetworkSettings network, JsonNode launchProxy) {
+        if (!launchProxy.isObject() || !launchProxy.path("server").isTextual()) return network;
+        UpstreamProxy fromLaunch = UpstreamProxy.parse(launchProxy.path("server").asText(),
+                launchProxy.path("username").asText(null), launchProxy.path("password").asText(null));
+        if (network.upstream() == null) return network.withUpstream(fromLaunch);
+        if (!network.upstream().equals(fromLaunch)) {
+            throw new IllegalArgumentException("launch.json proxy " + fromLaunch
+                    + " differs from ARGOS_UPSTREAM_PROXY " + network.upstream());
+        }
+        return network;
+    }
+
+    /**
+     * Start self-test in a throwaway tab: a loopback canary and a never-resolvable host must both arrive
+     * at the proxy as refused connections, the canary must see no connection, and the repeat proves
+     * Firefox does not fall back to direct connections after proxy refusals.
+     */
+    private void verifyNetworkBoundary() throws IOException {
+        AtomicInteger direct = new AtomicInteger();
+        try (ServerSocket canary = new ServerSocket(0, 8, InetAddress.getByName("127.0.0.1"))) {
+            Thread.ofVirtual().start(() -> {
+                while (!canary.isClosed()) {
+                    try (Socket ignored = canary.accept()) {
+                        direct.incrementAndGet();
+                    } catch (IOException closed) {
+                        return;
+                    }
+                }
+            });
+            int port = canary.getLocalPort();
+            String loopback = "127.0.0.1:" + port;
+            String probeHost = "argos-boundary-probe.invalid:" + port;
+            proxy.protectLoopbackPort(port);
+            Page probe = context.newPage();
+            try {
+                for (String target : List.of(loopback, probeHost, loopback)) {
+                    try {
+                        probe.navigate("http://" + target + "/", new Page.NavigateOptions()
+                                .setWaitUntil(WaitUntilState.COMMIT).setTimeout(15_000));
+                    } catch (PlaywrightException refused) {
+                        // Expected: the proxy refuses both targets.
+                    }
+                }
+            } finally {
+                probe.close();
+                proxy.releaseLoopbackPort(port);
+            }
+            List<Object> seen = proxy.blockedEvents().stream().map(event -> event.get("url")).toList();
+            proxy.discardBlockedEvents(loopback);
+            proxy.discardBlockedEvents(probeHost);
+            if (direct.get() > 0) {
+                throw new IllegalStateException("Network boundary self-test failed: Camoufox reached a loopback "
+                        + "port without the Argos proxy.");
+            }
+            if (!seen.contains(loopback)) {
+                throw new IllegalStateException("Network boundary self-test failed: Camoufox did not send "
+                        + "127.0.0.1 through the Argos proxy (network.proxy.allow_hijacking_localhost ignored?).");
+            }
+            if (!seen.contains(probeHost)) {
+                throw new IllegalStateException("Network boundary self-test failed: Camoufox did not leave DNS "
+                        + "to the Argos proxy (network.proxy.socks5_remote_dns ignored?).");
+            }
+        }
     }
 
     private void record(String kind, String method, String originalUrl, int status) {
@@ -206,21 +301,51 @@ public final class CamoufoxBrowser implements AutoCloseable {
     }
 
     public List<Map<String, Object>> networkEvents() {
-        return onBrowser(() -> List.copyOf(network));
+        return onBrowser(() -> {
+            if (proxy == null) return List.copyOf(network);
+            // Refused connections never reach the page as requests; merge them in time order.
+            List<Map<String, Object>> events = new ArrayList<>(network);
+            events.addAll(proxy.blockedEvents());
+            events.sort(Comparator.comparing(event -> Instant.parse(event.get("at").toString())));
+            return List.copyOf(events.subList(Math.max(0, events.size() - MAX_NETWORK_EVENTS), events.size()));
+        });
     }
 
     public Map<String, Object> status() {
         return onBrowser(() -> Map.of("started", context != null, "profile", config.profile().toString(),
-                "url", page == null || page.isClosed() ? "" : page.url()));
+                "url", page == null || page.isClosed() ? "" : page.url(), "network", networkStatus()));
+    }
+
+    private Map<String, Object> networkStatus() {
+        NetworkSettings network = config.network();
+        Map<String, Object> status = new LinkedHashMap<>();
+        status.put("policy", network.mode().name().toLowerCase(java.util.Locale.ROOT));
+        status.put("intranetAllow", network.policy().rules());
+        status.put("upstreamProxy", network.upstream() == null ? "" : network.upstream().toString());
+        if (proxy != null) {
+            status.put("proxyRunning", proxy.running());
+            status.put("blocked", proxy.blockedEvents().size());
+        }
+        return status;
+    }
+
+    private void shutDown() {
+        try {
+            if (context != null) context.close();
+            if (playwright != null) playwright.close();
+        } finally {
+            context = null;
+            playwright = null;
+            // The proxy goes last: until then the browser still has its only route through it.
+            if (proxy != null) proxy.close();
+            proxy = null;
+        }
     }
 
     @Override
     public void close() {
         onBrowser(() -> {
-            if (context != null) context.close();
-            if (playwright != null) playwright.close();
-            context = null;
-            playwright = null;
+            shutDown();
             return null;
         });
         driver.shutdown();

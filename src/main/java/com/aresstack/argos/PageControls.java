@@ -147,6 +147,9 @@ public final class PageControls {
         if (roleMatch.matches()) {
             role = roleMatch.group(1).toLowerCase(Locale.ROOT);
             name = roleMatch.group(2) == null ? "" : roleMatch.group(2).replace("\\\"", "\"");
+        } else if (named.matches() && !named.group(1).equals("name")) {
+            // An explicit selector kind means that engine, even if another control has the same name.
+            return Target.fallback(named.group(1), named.group(2));
         } else if (named.matches()) {
             name = named.group(2);
         } else {
@@ -177,8 +180,7 @@ public final class PageControls {
         if (roleMatch.matches()) {
             throw new IllegalArgumentException("Nothing matches " + wanted + "; list the controls to see what the page offers.");
         }
-        String kind = named.matches() ? named.group(1) : "text";
-        return Target.fallback(kind.equals("name") ? "text" : kind, name);
+        return Target.fallback("text", name);
     }
 
     private static Target unique(List<AriaTree.Node> candidates, String wanted) {

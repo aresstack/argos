@@ -13,6 +13,7 @@ import java.util.random.RandomGenerator;
  */
 final class RealInput {
     private static final double ACTION_TIMEOUT_MS = 10_000;
+    private static final double HIT_CHECK_TIMEOUT_MS = 2_000;
     private final RandomGenerator random;
 
     RealInput(RandomGenerator random) {
@@ -24,17 +25,46 @@ final class RealInput {
         // Trial run: Playwright's actionability checks (attached, visible, stable, enabled, not covered) and
         // scroll into view, evaluated in its isolated utility world. It does not click.
         target.click(new Locator.ClickOptions().setTrial(true).setTimeout(ACTION_TIMEOUT_MS));
-        BoundingBox box = target.boundingBox(new Locator.BoundingBoxOptions().setTimeout(ACTION_TIMEOUT_MS));
-        if (box == null || box.width <= 0 || box.height <= 0) {
-            throw new IllegalStateException("Element is not visible on the page");
-        }
-        double[] point = pointInside(box);
+        double[] point = verifiedPoint(target);
         page.mouse().move(point[0], point[1], new com.microsoft.playwright.Mouse.MoveOptions()
                 .setSteps(6 + random.nextInt(10)));
         pause(page, 30, 140);
         page.mouse().down();
         pause(page, 40, 120);
         page.mouse().up();
+    }
+
+    /**
+     * A random point inside the element that Playwright's hit-target check confirms: scrolled into the viewport
+     * and not covered by another element. Falls back to the element's center, which the first trial validated.
+     */
+    private double[] verifiedPoint(Locator target) {
+        for (int attempt = 0; attempt < 3; attempt++) {
+            BoundingBox box = visibleBox(target);
+            double[] point = pointInside(box);
+            double offsetX = point[0] - box.x;
+            double offsetY = point[1] - box.y;
+            try {
+                target.click(new Locator.ClickOptions().setTrial(true).setTimeout(HIT_CHECK_TIMEOUT_MS)
+                        .setPosition(offsetX, offsetY));
+            } catch (com.microsoft.playwright.PlaywrightException missed) {
+                continue;
+            }
+            // The trial may have scrolled; the offset inside the element stays valid.
+            BoundingBox now = visibleBox(target);
+            return new double[] {now.x + offsetX, now.y + offsetY};
+        }
+        target.click(new Locator.ClickOptions().setTrial(true).setTimeout(ACTION_TIMEOUT_MS));
+        BoundingBox box = visibleBox(target);
+        return new double[] {box.x + box.width / 2, box.y + box.height / 2};
+    }
+
+    private static BoundingBox visibleBox(Locator target) {
+        BoundingBox box = target.boundingBox(new Locator.BoundingBoxOptions().setTimeout(ACTION_TIMEOUT_MS));
+        if (box == null || box.width <= 0 || box.height <= 0) {
+            throw new IllegalStateException("Element is not visible on the page");
+        }
+        return box;
     }
 
     /** Focuses the field by a real click, replaces its content and types {@code text} key by key. */

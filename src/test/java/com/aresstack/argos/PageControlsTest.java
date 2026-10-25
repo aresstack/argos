@@ -40,7 +40,7 @@ class PageControlsTest {
         assertEquals("e6", controls.resolve("e6").ref());
         assertEquals("e6", controls.resolve("ref=e6").ref());
         assertEquals("e12", controls.resolve("role=button name=\"Los\"").ref());
-        assertEquals("e10", controls.resolve("label=\"Suchbegriff\"").ref());
+        assertEquals("e10", controls.resolve("name=\"Suchbegriff\"").ref());
         assertEquals("e12", controls.resolve("los").ref());
         assertEquals("e12", controls.resolve("\"Los\"").ref());
         assertEquals("e3", controls.resolve("Alpha").ref(), "links are valid targets");
@@ -78,5 +78,15 @@ class PageControlsTest {
         assertEquals("Para text", target.fallbackValue());
         assertEquals("css", controls.resolve("css=#main > button").fallbackKind());
         assertEquals("placeholder", controls.resolve("placeholder=\"Mail\"").fallbackKind());
+    }
+
+    @Test void explicitSelectorKindsAreNotMatchedAgainstOtherControlNames() {
+        // A button named "Los" must not win over the placeholder, label or text engine.
+        for (String kind : List.of("placeholder", "label", "text")) {
+            PageControls.Target target = controls.resolve(kind + "=\"Los\"");
+            assertFalse(target.hasRef(), kind);
+            assertEquals(kind, target.fallbackKind());
+            assertEquals("Los", target.fallbackValue());
+        }
     }
 }

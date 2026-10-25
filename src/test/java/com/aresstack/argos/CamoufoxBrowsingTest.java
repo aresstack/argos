@@ -30,6 +30,9 @@ class CamoufoxBrowsingTest {
             <label for="q">Suchbegriff</label><input id="q">
             <input type="password" aria-label="Passwort" value="geheim">
             <button id="go">Suchen</button>
+            <label for="ort">Ort</label><input id="ort" placeholder="Suchen">
+            <div style="height:3000px"><button id="tall" style="height:2500px;width:200px"
+              onclick="this.textContent='tall clicked'">Hoch</button></div>
             <p id="log">idle</p>
             <a href="/second">Zweite Seite</a>
             <a href="/second" target="_blank">Neuer Tab</a>
@@ -82,6 +85,12 @@ class CamoufoxBrowsingTest {
             browser.clickTarget("role=button name=\"Suchen\"");
             assertEquals("clicked trusted=true value=Graz",
                     browser.evaluate("() => document.getElementById('log').textContent"));
+            // placeholder= means the placeholder engine, although a button has the same name.
+            browser.fillTarget("placeholder=\"Suchen\"", "Linz");
+            assertEquals("Linz", browser.evaluate("() => document.getElementById('ort').value"));
+            // An element taller than the viewport is still hit by the verified random point.
+            browser.clickTarget("Hoch");
+            assertEquals("tall clicked", browser.evaluate("() => document.getElementById('tall').textContent"));
             // Nothing of the automation leaks into the page's own realm.
             assertEquals(baseline, browser.evaluate(globals));
 

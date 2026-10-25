@@ -269,6 +269,7 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
         page.onRequest(request -> {
             if (isMainDocument(page, request)) {
                 tab.activity.reset();
+                tab.navigations++;
                 tab.saved = null; // the tab loads a new document
             }
             tab.activity.started();
@@ -308,6 +309,8 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
         /** Last top-level response the browser saved as a download; it never replaces the rendered page. */
         MainDocument lastDownload;
         Download download;
+        /** Top-level navigation requests seen in this tab. */
+        int navigations;
         /** A feed, XML, JSON or text document Firefox saved instead of rendering, read from the saved file. */
         SavedDocument saved;
     }
@@ -1258,14 +1261,41 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
             // whose actionability machinery dispatches page-observable marker events (playwright4j #38).
             Locator target = p.locator(selector).first();
             if (target.count() == 0) return false;
+            TabDocument tab = document(p);
+            int navigations = tab.navigations;
+            MainDocument before = tab.mainDocument;
             try {
                 input.click(p, target);
             } catch (RuntimeException unreachable) {
                 return false;
             }
+            awaitNavigationAfterInput(p, tab, navigations, before);
             settleLoad(p);
             return true;
         });
+    }
+
+    /**
+     * A click that submits a form (a consent wall) navigates a moment later, often to the same URL, so the
+     * current document's load state says nothing yet. Waits briefly for a top-level request to start and,
+     * if one does, for the final (non-redirect) document response to finish. Protocol events only.
+     */
+    private static void awaitNavigationAfterInput(Page p, TabDocument tab, int navigations, MainDocument before) {
+        try {
+            p.waitForCondition(() -> tab.navigations > navigations,
+                    new Page.WaitForConditionOptions().setTimeout(1_500));
+        } catch (PlaywrightException noNavigation) {
+            return;
+        }
+        try {
+            p.waitForCondition(() -> {
+                MainDocument main = tab.mainDocument;
+                return main != null && main != before && (main.status() < 300 || main.status() >= 400) && main.finished;
+            }, new Page.WaitForConditionOptions().setTimeout(15_000));
+            p.waitForLoadState(LoadState.DOMCONTENTLOADED, new Page.WaitForLoadStateOptions().setTimeout(5_000));
+        } catch (PlaywrightException slow) {
+            // Reading proceeds with the document that is there.
+        }
     }
 
     /** DOMContentLoaded is enough to read; give late resources a bounded chance, never a long sleep. */

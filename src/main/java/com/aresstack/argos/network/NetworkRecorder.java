@@ -1,5 +1,7 @@
 package com.aresstack.argos.network;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.microsoft.playwright.Page;
 import com.microsoft.playwright.Request;
 import com.microsoft.playwright.Response;
@@ -35,6 +37,8 @@ public final class NetworkRecorder {
     // Eager body capture is limited to the exchanges that carry page data.
     private static final Set<String> EAGER_BODY_TYPES = Set.of("document", "xhr", "fetch");
 
+    private static final int MAX_JSON_KEYS = 12;
+    private final ObjectMapper json = new ObjectMapper();
     private final SecretMasker masker;
     private final boolean captureBodies;
     private final Supplier<Instant> clock;
@@ -114,6 +118,36 @@ public final class NetworkRecorder {
             NetworkEntry entry = pendingBodies.removeFirst();
             if (byId.get(entry.id) == entry) loadBody(entry);
         }
+    }
+
+    /**
+     * The page's own data responses (JSON from XHR/fetch and similar), newest first, with a
+     * shape preview so a model can pick the right one before reading it with detail().
+     * Bodies come from the browser's network data collector, never from in-page scripts.
+     */
+    public List<Map<String, Object>> jsonResponses(String filter, int limit) {
+        String needle = filter == null ? "" : filter.trim().toLowerCase(Locale.ROOT);
+        int count = Math.min(50, Math.max(1, limit));
+        List<Map<String, Object>> rows = new ArrayList<>();
+        for (var iterator = entries.descendingIterator(); iterator.hasNext() && rows.size() < count; ) {
+            NetworkEntry entry = iterator.next();
+            if (entry.state != NetworkEntry.State.FINISHED || !entry.mimeType.contains("json")) continue;
+            if (!needle.isEmpty() && !entry.url.toLowerCase(Locale.ROOT).contains(needle)) continue;
+            if (entry.body == null && entry.bodyUnavailable == null) loadBody(entry);
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("id", entry.id);
+            row.put("url", entry.listUrl);
+            row.put("status", entry.status);
+            row.put("type", entry.resourceType);
+            if (entry.body == null) {
+                row.put("bodyUnavailable", entry.bodyUnavailable == null ? "still loading" : entry.bodyUnavailable);
+            } else {
+                row.put("bytes", entry.bodyBytes);
+                row.put("shape", jsonShape(entry.body, entry.bodyTruncated));
+            }
+            rows.add(row);
+        }
+        return rows;
     }
 
     /** Compact one-line-per-request view; same base fields as the original browser_network. */
@@ -292,6 +326,26 @@ public final class NetworkRecorder {
         har.put("_resourceType", entry.resourceType);
         if (entry.failure != null) har.put("_failure", entry.failure);
         return har;
+    }
+
+    private String jsonShape(String body, boolean truncated) {
+        try {
+            JsonNode tree = json.readTree(body);
+            if (tree.isArray()) return "array[" + tree.size() + "]";
+            if (tree.isObject()) {
+                List<String> keys = new ArrayList<>();
+                tree.fieldNames().forEachRemaining(name -> {
+                    if (keys.size() < MAX_JSON_KEYS) {
+                        JsonNode child = tree.get(name);
+                        keys.add(child.isArray() ? name + "[" + child.size() + "]" : name);
+                    }
+                });
+                return "{" + String.join(", ", keys) + (tree.size() > MAX_JSON_KEYS ? ", …" : "") + "}";
+            }
+            return tree.getNodeType().name().toLowerCase(Locale.ROOT);
+        } catch (Exception unparseable) {
+            return truncated ? "json (truncated)" : "json (unparseable)";
+        }
     }
 
     private static Map<String, Double> timingPhases(Timing timing) {

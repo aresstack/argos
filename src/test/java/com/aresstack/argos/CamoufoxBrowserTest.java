@@ -86,6 +86,9 @@ class CamoufoxBrowserTest {
             assertFalse(rendered.contains("top-secret"));
             assertFalse(rendered.contains("cookie-secret"));
             assertFalse(rendered.contains("token=abc"));
+            var data = browser.networkJson(null, 20);
+            assertEquals(id, data.get(0).get("id"));
+            assertEquals("{name, access_token}", data.get(0).get("shape"));
         } finally {
             site.stop(0);
         }

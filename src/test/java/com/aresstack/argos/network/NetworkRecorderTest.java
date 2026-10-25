@@ -115,6 +115,29 @@ class NetworkRecorderTest {
         assertFalse(detail.get("body").toString().contains("sssss"));
     }
 
+    @Test void listsPageDataResponsesWithShapeNewestFirst() {
+        NetworkRecorder recorder = recorder(false);
+        Object[][] exchanges = {
+                {"https://example.org/api/search?q=x", "fetch", "application/json",
+                        "{\"results\":[{\"t\":1},{\"t\":2}],\"total\":2,\"token\":\"secret\"}"},
+                {"https://example.org/style.css", "stylesheet", "text/css", "body{}"},
+                {"https://example.org/api/facets", "xhr", "application/vnd.api+json", "[1,2,3]"}};
+        for (Object[] exchange : exchanges) {
+            Request request = request("GET", (String) exchange[0], (String) exchange[1], null);
+            recorder.requestStarted(request);
+            recorder.responseReceived(response(request, 200, (String) exchange[2], (String) exchange[3]));
+            recorder.requestFinished(request);
+        }
+
+        List<Map<String, Object>> rows = recorder.jsonResponses(null, 20);
+        assertEquals(List.of("n3", "n1"), ids(rows));
+        assertEquals("array[3]", rows.get(0).get("shape"));
+        assertEquals("{results[2], total, token}", rows.get(1).get("shape"));
+        assertEquals("https://example.org/api/search", rows.get(1).get("url"));
+        assertEquals(List.of("n1"), ids(recorder.jsonResponses("search", 20)));
+        assertFalse(recorder.detail("n1", true).get("body").toString().contains("secret"));
+    }
+
     @Test void neverFetchesBinaryBodiesAndReportsWhy() {
         NetworkRecorder recorder = recorder(false);
         Request request = request("GET", "https://example.org/paper.pdf", "document", null);

@@ -206,6 +206,10 @@ public final class CamoufoxBrowser implements AutoCloseable {
         return onBrowser(() -> network.detail(id, includeBody));
     }
 
+    public List<Map<String, Object>> networkJson(String filter, int limit) {
+        return onBrowser(() -> network.jsonResponses(filter, limit));
+    }
+
     public Map<String, Object> networkHar(int limit) {
         return onBrowser(() -> network.har(limit, ArgosTools.VERSION));
     }

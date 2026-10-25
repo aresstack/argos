@@ -31,8 +31,8 @@ class ArgosToolsTest {
             Set<String> names = new ArgosTools(browser).forProfile(ToolProfile.EXPERT).stream()
                     .map(spec -> spec.tool().name()).collect(Collectors.toSet());
             assertTrue(names.containsAll(Set.of("browser_network", "browser_network_detail",
-                    "browser_network_har", "browser_network_clear")));
-            assertEquals(12, names.size());
+                    "browser_network_har", "browser_network_clear", "browser_network_json")));
+            assertEquals(13, names.size());
         }
     }
 

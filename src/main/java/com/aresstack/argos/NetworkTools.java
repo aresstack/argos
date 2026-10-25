@@ -8,6 +8,7 @@ import java.util.Map;
 import static com.aresstack.argos.ArgosTools.field;
 import static com.aresstack.argos.ArgosTools.flag;
 import static com.aresstack.argos.ArgosTools.number;
+import static com.aresstack.argos.ArgosTools.optionalString;
 import static com.aresstack.argos.ArgosTools.string;
 import static com.aresstack.argos.ArgosTools.tool;
 
@@ -24,6 +25,12 @@ final class NetworkTools {
 
     List<SyncToolSpecification> expertTools() {
         return List.of(
+                tool("browser_network_json", "List the JSON data the page loaded in the background (XHR/fetch APIs), newest first, "
+                                + "with id, URL and top-level keys, e.g. {results[20], total}. Read one fully with "
+                                + "browser_network_detail and body=true. Captured invisibly by the browser. Example: {\"filter\":\"search\"}",
+                        Map.of("filter", field("string", "Optional text the URL must contain"),
+                                "limit", field("integer", "Maximum responses (1–50, default 20)")),
+                        List.of(), args -> browser.networkJson(optionalString(args, "filter"), number(args, "limit", 20))),
                 tool("browser_network_detail", "Show one request from browser_network by id: full URL, status, MIME type, "
                                 + "timing, request/response headers and POST data. Secrets (cookies, tokens, passwords) are "
                                 + "masked. Set body=true to include the text response body. Example: {\"id\":\"n12\",\"body\":true}",

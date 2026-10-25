@@ -154,6 +154,7 @@ Mit `ARGOS_TOOL_PROFILE=expert` (Property `tools.profile`) veröffentlicht Argos
 | Tool | Zweck |
 | --- | --- |
 | `browser_network_detail` | Einen Request per `id` vollständig anzeigen: URL mit maskierten Query-Werten, Status, MIME-Typ, Timing-Phasen (DNS, Verbindung, TLS, Warten, Empfang), Request-/Response-Header, POST-Daten, Weiterleitungskette; mit `body=true` zusätzlich den Text-Body (max. 32 000 Zeichen) |
+| `browser_network_json` | JSON-Daten, die die Seite im Hintergrund per XHR/Fetch geladen hat, neueste zuerst, mit Struktur-Vorschau (z. B. `{results[20], total}`); vollständiger Inhalt über `browser_network_detail` mit `body=true` |
 | `browser_network_har` | Die neuesten Requests (`limit`, Standard 50) als HAR 1.2 exportieren |
 | `browser_network_clear` | Aufzeichnung leeren, um eine einzelne Aktion isoliert zu beobachten |
 

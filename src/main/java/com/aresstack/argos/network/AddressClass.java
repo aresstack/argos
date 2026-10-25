@@ -16,8 +16,11 @@ public enum AddressClass {
     PRIVATE(true, "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fec0::/10"),
     UNIQUE_LOCAL(true, "fc00::/7"),
     SHARED_CGNAT(true, "100.64.0.0/10"),
-    RESERVED(false, "192.0.0.0/24", "198.18.0.0/15", "240.0.0.0/4", "255.255.255.255/32"),
-    MULTICAST(false, "224.0.0.0/4", "ff00::/8");
+    RESERVED(false, "192.0.0.0/24", "198.18.0.0/15", "240.0.0.0/4", "255.255.255.255/32",
+            "64:ff9b:1::/48", "100::/64", "2001:db8::/32"),
+    MULTICAST(false, "224.0.0.0/4", "ff00::/8"),
+    /** An address of one of this machine's own interfaces; set by {@link NetworkPolicy}, not by range. */
+    LOCAL_INTERFACE(false);
 
     private static final IpRange NAT64 = IpRange.parse("64:ff9b::/96");
     private static final IpRange SIX_TO_FOUR = IpRange.parse("2002::/16");
@@ -25,6 +28,9 @@ public enum AddressClass {
     // Built from bytes: Java turns the text form ::ffff:a.b.c.d into a plain IPv4 address.
     private static final IpRange IPV4_MAPPED = new IpRange(
             new byte[]{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, (byte) 0xff, (byte) 0xff, 0, 0, 0, 0}, 96);
+    // SIIT IPv4-translated form ::ffff:0:a.b.c.d (RFC 2765).
+    private static final IpRange IPV4_TRANSLATED = new IpRange(
+            new byte[]{0, 0, 0, 0, 0, 0, 0, 0, (byte) 0xff, (byte) 0xff, 0, 0, 0, 0, 0, 0}, 96);
 
     private final boolean intranet;
     private final List<IpRange> ranges;
@@ -62,9 +68,9 @@ public enum AddressClass {
         return null;
     }
 
-    /** IPv4 hidden in IPv6 forms that route to it: mapped, compatible, NAT64 and 6to4. */
+    /** IPv4 hidden in IPv6 forms that route to it: mapped, translated, compatible, NAT64 and 6to4. */
     private static byte[] embeddedIpv4(byte[] raw) {
-        if (IPV4_MAPPED.contains(raw) || NAT64.contains(raw)) {
+        if (IPV4_MAPPED.contains(raw) || IPV4_TRANSLATED.contains(raw) || NAT64.contains(raw)) {
             return new byte[]{raw[12], raw[13], raw[14], raw[15]};
         }
         if (IPV4_COMPATIBLE.contains(raw)) {

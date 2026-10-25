@@ -181,6 +181,8 @@ Jede Maus- und Tastatureingabe geht als vertrauenswürdiges Ereignis über WebDr
 
 Ob Playwright Unicode-Tasten als echte Tasten sendet, prüft Argos einmal beim Browserstart auf einem leeren Tab. Sobald Playwright4J sie über `performActions` unterstützt ([playwright4j#36](https://github.com/aresstack/playwright4j/issues/36)), nutzt Argos sie automatisch.
 
+**Einschränkung in Argos 2.0:** Mit dem in der CI gepinnten Playwright4J-Stand (`1c11fe9`, Playwright Core 1.62) fällt diese Prüfung negativ aus. Text mit Zeichen außerhalb des US-Layouts (Umlaute, `ß`, `€`, typografische Anführungszeichen) wird in der Voreinstellung `strict` **abgelehnt**, nicht getippt; der Fehler nennt die Zeichen. Echte Unicode-Tasten gibt es erst mit [playwright4j#59](https://github.com/aresstack/playwright4j/pull/59), das noch nicht in Playwright4J `master` ist. Dieser Weg ist bisher nur unter Linux mit Camoufox 158.0-beta.40 gegen den #59-Quellstand nachgewiesen (`-Pplaywright4jSource`), nicht unter Windows. Argos behauptet also keine vollständige Unicode-Eingabe; sie wird mit einem neuen Playwright4J-Pin und wiederholten Camoufox-Läufen nachgezogen.
+
 ### Dokumenttypen und Seitenbereitschaft
 
 `browser_snapshot` setzt kein HTML-`body` mehr voraus. Der Dokumenttyp wird aus dem `Content-Type` der Hauptdokument-Antwort bestimmt (Dateiendung nur als Rückfall) und als `documentType` zurückgegeben:

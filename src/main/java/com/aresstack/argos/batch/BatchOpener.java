@@ -8,6 +8,7 @@ import com.aresstack.argos.fetch.FetchedResource;
 import com.aresstack.argos.fetch.WebAddress;
 import com.aresstack.argos.web.UrlPolicy;
 import com.microsoft.playwright.BrowserContext;
+import com.microsoft.playwright.Page;
 import com.microsoft.playwright.PlaywrightException;
 
 import java.util.ArrayDeque;
@@ -25,8 +26,8 @@ import java.util.Set;
  * every API call blocks that thread. Starting a navigation therefore costs one round trip up to the first
  * response headers (commit), one tab after the other. Everything after the commit (body, sub-resources, scripts,
  * rendering) proceeds in the browser for all open tabs at once while the thread waits for the oldest tab. Up to
- * {@code parallel} tabs are kept open in a sliding window. See {@code docs/batch-and-documents.md} for the
- * measurement.
+ * {@code parallel} tabs are kept open in a sliding window; a tab that was read loads the next address. See
+ * {@code docs/batch-and-documents.md} for the measurement.
  *
  * <p>Every address gets its own entry in request order; a failing address never fails the others.
  */
@@ -94,22 +95,28 @@ public final class BatchOpener {
         Deque<Integer> waiting = new ArrayDeque<>();
         for (int i = 0; i < entries.length; i++) if (entries[i] == null) waiting.add(i);
         Deque<OpenTab> open = new ArrayDeque<>();
+        // A finished tab loads the next address instead of being closed: opening a tab costs seconds in Camoufox
+        // on Windows, so a batch opens at most `parallel` tabs, not one per address.
+        Deque<Page> idle = new ArrayDeque<>();
         try {
             while (!waiting.isEmpty() || !open.isEmpty()) {
                 while (!waiting.isEmpty() && open.size() < options.parallel()) {
                     int index = waiting.poll();
-                    open.add(OpenTab.start(context, index, urls.get(index).trim(), options, policy,
+                    open.add(OpenTab.start(context, idle.poll(), index, urls.get(index).trim(), options, policy,
                             downloadsCancellable));
                 }
                 OpenTab oldest = open.poll();
                 try {
                     entries[oldest.index] = read(oldest, options);
                 } finally {
-                    oldest.tab.close();
+                    Page reusable = waiting.isEmpty() ? null : oldest.tab.release();
+                    if (reusable == null) oldest.tab.close();
+                    else idle.add(reusable);
                 }
             }
         } finally {
             open.forEach(remaining -> remaining.tab.close());
+            idle.forEach(BatchOpener::closeQuietly);
         }
         return List.of(entries);
     }
@@ -164,12 +171,20 @@ public final class BatchOpener {
                 open.tab.status(), "", "", "", false, false, failure.getMessage(), open.elapsed(), null);
     }
 
+    private static void closeQuietly(Page page) {
+        try {
+            if (!page.isClosed()) page.close();
+        } catch (PlaywrightException ignored) {
+            // The browser may already be gone.
+        }
+    }
+
     private record OpenTab(int index, String url, BackgroundTab tab, long startedNanos) {
-        static OpenTab start(BrowserContext context, int index, String url, Options options, UrlPolicy policy,
-                             boolean downloadsCancellable) {
+        static OpenTab start(BrowserContext context, Page reused, int index, String url, Options options,
+                             UrlPolicy policy, boolean downloadsCancellable) {
             long started = System.nanoTime();
-            return new OpenTab(index, url, BackgroundTab.open(context, url, options.commitTimeoutMillis(), policy,
-                    downloadsCancellable), started);
+            return new OpenTab(index, url, BackgroundTab.open(context, reused, url, options.commitTimeoutMillis(),
+                    policy, downloadsCancellable), started);
         }
 
         long elapsed() {

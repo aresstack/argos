@@ -68,6 +68,10 @@ public final class FixtureSite implements AutoCloseable {
                 case "/other.html" -> send(exchange, 200, "text/html; charset=utf-8",
                         html("Other", "<p>Another page</p>"));
                 case "/paper.pdf" -> send(exchange, 200, "application/pdf", pdf);
+                // A landing page that starts its file download a moment after loading.
+                case "/download-soon.html" -> send(exchange, 200, "text/html; charset=utf-8", html("Download",
+                        "<p>Your download starts shortly</p><script>setTimeout(() => location.href = 'attachment', "
+                                + Math.max(delay, 1) + ")</script>"));
                 case "/attachment" -> {
                     exchange.getResponseHeaders().add("Content-Disposition", "attachment; filename=\"bericht.docx\"");
                     send(exchange, 200, "application/octet-stream", docx);

@@ -21,8 +21,10 @@ Fehlermeldungen der Einzelwerkzeuge beginnen mit derselben Kategorie (`TOO_LARGE
 
 ## Stealth: Wie geladen wird
 
-Jeder Download und jede Batch-Adresse wird in einem **eigenen Hintergrund-Tab derselben persistenten Session**
-geöffnet (`BackgroundTab`), danach wird der Tab geschlossen. Die aktuelle Seite wird nicht navigiert.
+Jeder Download und jede Batch-Adresse wird in einem **Hintergrund-Tab derselben persistenten Session**
+geladen (`BackgroundTab`), nie im aktuellen Tab. Ein Download bekommt einen eigenen Tab, der danach geschlossen
+wird. Ein Batch öffnet höchstens `parallelTabs` Tabs und lädt weitere Adressen in Tabs, die fertig gelesen sind
+(siehe Parallelität); am Ende des Batches werden alle geschlossen.
 
 - Die Bytes stammen aus dem Netzwerkstack des Browsers: dieselben Cookies, Logins, TLS-Fingerprints und
   Request-Header wie bei einem normalen Tab.
@@ -141,8 +143,18 @@ Daraus folgt für `browser_open_many`:
    (Server-Antwortzeit, Weiterleitungen) läuft daher Tab für Tab nacheinander.**
 2. Alles danach – Body, Subressourcen, Skripte, Rendering – erledigt der Browser für alle offenen Tabs
    gleichzeitig, während der Thread auf den ältesten Tab wartet (`waitForLoadState(LOAD)`).
-3. `BatchOpener` hält bis zu 4 Tabs in einem gleitenden Fenster offen: Sobald der älteste gelesen und
-   geschlossen ist, wird die nächste Adresse geöffnet.
+3. `BatchOpener` hält bis zu 4 Tabs in einem gleitenden Fenster offen: Sobald der älteste gelesen ist, lädt
+   derselbe Tab die nächste Adresse. Ein Tab wird nur wiederverwendet, wenn seine Navigation committet hat
+   (auch mit Fehlerstatus) oder ein fertiger Download war und nichts abgewiesen wurde; sonst wird er
+   geschlossen und für die nächste Adresse ein neuer geöffnet. Vor der nächsten Adresse lädt der Tab
+   `about:blank` (keine Netzwerkanfrage): Skripte der vorigen Seite können danach keinen Download und keine
+   Navigation mehr auslösen, und die nächste Adresse ist immer ein neues Dokument (nie nur ein Sprung zu einem
+   `#Fragment`). Als Download einer Adresse zählt nur ein Download ihrer eigenen Navigationen; einen Download,
+   den die vorige Seite kurz vor dem Verlassen begonnen hat, meldet Firefox erst etwas später, und er wird
+   ignoriert (im ungünstigsten Fall bricht er die Navigation der nächsten Adresse ab, die dann als Fehler
+   gemeldet wird). Ein `beforeunload`-Dialog beim Verlassen wird
+   bestätigt (Handler im Treiber, für die Seite unsichtbar). Die nächste Website sieht in diesem Tab
+   `history.length` > 1, wie in jedem Tab, in dem ein Mensch weitersurft.
 
 Gemessen mit `BatchParallelismMeasurementTest` (lokaler Server mit 4 Threads, 4 Adressen, 1500 ms Verzögerung
 je Adresse):
@@ -151,6 +163,9 @@ je Adresse):
 | --- | --- | --- | --- |
 | Chromium 1243 headless, CDP, Linux | 1249 ms | 6909 / **2096 ms** | 6902 / 7036 ms |
 | Camoufox, BiDi, Windows (Angelo, 2c5f7fb, Fixtures über `localhost`) | – | 25 372 / **19 985 ms** | 27 534 / 25 457 ms |
+| Camoufox 156.0.1-beta.36 (gepatcht), BiDi, Windows headless (Angelo, 12fb7d6, ohne Tab-Wiederverwendung) | 17 089 ms, davon `newPage()` 15 890 ms | 27 420 / **18 391 ms** | 22 996 / 23 152 ms |
+| Camoufox 158.0-beta.40 (gepatcht), BiDi, Linux headless (12fb7d6) | 2021 ms, davon `newPage()` 628 ms | 7608 / **2770 ms** | 7699 / 7585 ms |
+| Camoufox 158.0-beta.40 (gepatcht), BiDi, Linux headless, mit Tab-Wiederverwendung (`about:blank` dazwischen) | 1658 ms (ein Tab für 4 Adressen; 4 leere Tabs öffnen: 533 ms) | 7185 / **2571 ms** | 7361 / 7515 ms |
 
 Auswertung:
 
@@ -164,6 +179,12 @@ Auswertung:
   Grundkosten pro Tab und muss für Camoufox neu erhoben werden.
 - Die Testschwelle prüft deshalb nicht mehr ein festes Verhältnis, sondern dass mindestens 60 % der
   überlappbaren Wartezeit tatsächlich eingespart werden. Das hätte auch der Camoufox-Lauf mit 5387 ms erfüllt.
+
+- `context.newPage()` kostet in Camoufox 156 unter Windows rund 4 s pro Tab (Linux, headless und unter Xvfb
+  headed: rund 0,2 s). Playwright4J öffnet jeden neuen Tab im Vordergrund (`browsingContext.create` ohne
+  `background: true`); die Ursache unter Windows ist noch nicht gemessen. Seit der Tab-Wiederverwendung
+  öffnet ein Batch höchstens `parallelTabs` Tabs statt einen pro Adresse; ein einzelner Download zahlt die
+  Kosten weiterhin einmal.
 
 **Leistungsversprechen:** `browser_open_many` spart die Lade- und Renderzeit nach dem Commit (typisch der
 größte Teil moderner Seiten), nicht die Antwortzeit langsamer Server und nicht die Grundkosten pro Tab. Bei

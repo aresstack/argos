@@ -32,7 +32,7 @@ class BatchParallelismMeasurementTest {
         TestBrowserSession browser = TestBrowserSession.start(temporary).orElse(null);
         Assumptions.assumeTrue(browser != null, "Opt-in real browser measurement");
         try (browser; FixtureSite site = new FixtureSite()) {
-            BatchOpener opener = new BatchOpener();
+            BatchOpener opener = new BatchOpener(FixtureSite.testPolicy());
             // Warm-up so browser start and first-tab costs do not count.
             run(browser, opener, site, "/other.html", 1, 1);
 
@@ -66,7 +66,7 @@ class BatchParallelismMeasurementTest {
         BatchOpener.Options options = new BatchOpener.Options(parallel, 20_000, 15_000, 1_000, 1024 * 1024);
         long started = System.nanoTime();
         List<BatchEntry> entries = browser.inBrowserContext(
-                context -> opener.load(context, urls, BatchOpener.plan(urls), options), 120);
+                context -> opener.load(context, urls, opener.plan(urls), options), 120);
         long elapsed = (System.nanoTime() - started) / 1_000_000;
         for (BatchEntry entry : entries) {
             assertTrue(entry.status() == BatchEntry.Status.SUCCESS && entry.loadComplete(), entry.toString());

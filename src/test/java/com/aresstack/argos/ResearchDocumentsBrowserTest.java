@@ -39,7 +39,7 @@ class ResearchDocumentsBrowserTest {
         Assumptions.assumeTrue(browser != null, "Opt-in real browser test");
         site = new FixtureSite();
         documents = new ResearchDocuments(browser, new DocumentStore(
-                32 * 1024, 1024 * 1024, 20, Duration.ofMinutes(5), Clock.systemUTC()));
+                32 * 1024, 1024 * 1024, 20, Duration.ofMinutes(5), Clock.systemUTC()), FixtureSite.testPolicy());
     }
 
     @AfterAll
@@ -83,6 +83,24 @@ class ResearchDocumentsBrowserTest {
         assertEquals(FetchFailure.Kind.NOT_FOUND, missing.kind());
         FetchFailure unknown = assertThrows(FetchFailure.class, () -> documents.read("doc-999", 1_000));
         assertEquals(FetchFailure.Kind.NOT_FOUND, unknown.kind());
+    }
+
+    @Test
+    void blocksAddressesAndRedirectsTheUrlPolicyDoesNotAllow() {
+        browser.openCurrent(site.url("/article.html"));
+        FetchFailure direct = assertThrows(FetchFailure.class,
+                () -> documents.download(site.loopbackUrl("/paper.pdf")));
+        assertEquals(FetchFailure.Kind.BLOCKED, direct.kind());
+
+        String redirect = site.url("/redirect?to=" + java.net.URLEncoder.encode(site.loopbackUrl("/paper.pdf"),
+                java.nio.charset.StandardCharsets.UTF_8));
+        FetchFailure redirected = assertThrows(FetchFailure.class, () -> documents.download(redirect));
+        assertEquals(FetchFailure.Kind.BLOCKED, redirected.kind(), redirected.getMessage());
+
+        Map<String, Object> batch = documents.openMany(List.of(redirect, site.url("/other.html")), 1_000);
+        assertEquals(List.of("BLOCKED", "SUCCESS"), ((List<?>) batch.get("results")).stream()
+                .map(result -> ((Map<?, ?>) result).get("status")).toList(), batch.toString());
+        assertEquals(site.url("/article.html"), browser.currentUrl());
     }
 
     @Test

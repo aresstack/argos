@@ -24,7 +24,8 @@ class BackgroundTabDeadlineTest {
             for (String path : new String[]{"/stalled-attachment", "/stalled.pdf"}) {
                 long started = System.nanoTime();
                 FetchFailure.Kind kind = browser.inBrowserContext(context -> {
-                    try (BackgroundTab tab = BackgroundTab.open(context, site.url(path), 10_000)) {
+                    try (BackgroundTab tab = BackgroundTab.open(context, site.url(path), 10_000,
+                            FixtureSite.testPolicy())) {
                         tab.content(1024 * 1024, 2_000);
                         return null;
                     } catch (FetchFailure failure) {

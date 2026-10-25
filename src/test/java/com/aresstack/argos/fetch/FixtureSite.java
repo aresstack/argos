@@ -32,14 +32,25 @@ public final class FixtureSite implements AutoCloseable {
         server.start();
     }
 
+    /** Fixture address via host name {@code localhost}, which test URL policies admit as an intranet host. */
     public String url(String path) {
+        return "http://localhost:" + server.getAddress().getPort() + path;
+    }
+
+    /** The same fixture via the loopback literal, which test URL policies do not admit. */
+    public String loopbackUrl(String path) {
         return "http://127.0.0.1:" + server.getAddress().getPort() + path;
+    }
+
+    /** URL policy for tests: only {@code localhost} is admitted, the loopback literal stays blocked. */
+    public static com.aresstack.argos.web.UrlPolicy testPolicy() {
+        return new com.aresstack.argos.web.UrlPolicy(false, java.util.List.of("localhost"));
     }
 
     /** An address on which nothing listens (connection refused). */
     public static String refusedUrl() throws IOException {
         try (ServerSocket socket = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
-            return "http://127.0.0.1:" + socket.getLocalPort() + "/";
+            return "http://localhost:" + socket.getLocalPort() + "/";
         }
     }
 
@@ -65,6 +76,12 @@ public final class FixtureSite implements AutoCloseable {
                     send(exchange, 200, "text/html; charset=utf-8", html("Slow head", "<p>late headers</p>"));
                 }
                 case "/slow-body" -> slowBody(exchange, delay);
+                case "/redirect" -> {
+                    String query = exchange.getRequestURI().getRawQuery();
+                    exchange.getResponseHeaders().add("Location", java.net.URLDecoder.decode(
+                            query.substring(query.indexOf("to=") + 3), StandardCharsets.UTF_8));
+                    exchange.sendResponseHeaders(302, -1);
+                }
                 case "/stalled-attachment" -> stall(exchange, "application/octet-stream", true);
                 case "/stalled.pdf" -> stall(exchange, "application/pdf", false);
                 default -> send(exchange, 404, "text/html", html("Not found", "<p>missing</p>"));

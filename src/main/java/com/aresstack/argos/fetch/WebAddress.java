@@ -1,5 +1,7 @@
 package com.aresstack.argos.fetch;
 
+import com.aresstack.argos.web.UrlPolicy;
+
 import java.net.URI;
 import java.util.Locale;
 
@@ -25,6 +27,20 @@ public final class WebAddress {
                     "Requires an absolute http(s) URL: " + redacted(target));
         }
         return uri.toString();
+    }
+
+    /**
+     * Applies the URL policy before anything is loaded, with the failure kind an agent can act on:
+     * {@code BLOCKED} for refused targets, {@code INVALID_REQUEST} for unusable addresses.
+     */
+    public static void admit(UrlPolicy policy, String url) {
+        try {
+            policy.check(url);
+        } catch (UrlPolicy.BlockedUrlException blocked) {
+            throw new FetchFailure(FetchFailure.Kind.BLOCKED, blocked.getMessage());
+        } catch (IllegalArgumentException invalid) {
+            throw new FetchFailure(FetchFailure.Kind.INVALID_REQUEST, invalid.getMessage());
+        }
     }
 
     /** The address without fragment, used to recognise duplicates. */

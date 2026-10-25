@@ -32,10 +32,37 @@ geöffnet (`BackgroundTab`), danach wird der Tab geschlossen. Die aktuelle Seite
   wurde bewusst nicht übernommen) und kein `APIRequestContext` (eigener HTTP-Client des Treibers mit
   abweichendem TLS-Fingerprint). Text gelesen wird nur über `innerText`/`textContent`-Locator-Abfragen.
 - Nicht umgehbar: 401/403/429 werden als `BLOCKED` gemeldet; Paywalls und Logins bleiben, was sie sind.
+- Das einzige Skript ist die Frist-Uhr im eigenen `about:blank`-Hilfstab (siehe Temporäre Dateien). Keine
+  Website sieht sie.
 
 Bekannte Einschränkung: Ein neuer Tab sendet keinen `Referer`. Server, die Dokumente nur mit Referer ausliefern,
 liefern dann 403 (`BLOCKED`). Ein Klick auf den Link in der aktuellen Seite würde den Referer senden, verlässt
 aber die Seite; das ist bewusst nicht der Standardweg.
+
+## URL-Richtlinie (gemeinsam mit PR #3)
+
+Alle Pfade dieses Arbeitspakets verwenden dieselbe `com.aresstack.argos.web.UrlPolicy` wie `web_open` und
+`web_follow` aus PR #3 (gleiche Datei, hier um Intranet-Regeln erweitert):
+
+| Pfad | Vorab-Check | Redirect-Hops | Endadresse |
+| --- | --- | --- | --- |
+| `browser_download` | ✔ | ✔ (Navigationsanfragen des Haupt-Frames) | ✔ (auch die URL eines Browser-Downloads) |
+| `browser_open_many` | ✔ pro URL, abgewiesene URL → `BLOCKED`, die anderen laufen weiter | ✔ | ✔ |
+
+Standardmäßig werden Ziele abgewiesen, die zu Loopback, RFC 1918, Link-Local (auch `169.254.169.254`),
+IPv6-ULA oder CGNAT auflösen. **Freigegebene Intranet-Ziele** werden ausdrücklich erlaubt mit
+`ARGOS_INTRANET_ALLOW`, kommagetrennt: `wiki.firma.local` (genau dieser Host), `*.firma.local`
+(Subdomains), `10.20.0.0/16` oder `192.168.1.5` (aufgelöste Adressen). `ARGOS_ALLOW_PRIVATE_NETWORKS=true`
+(wie in PR #3) schaltet die Prüfung ganz ab, nur für lokale Tests.
+
+**Das ist keine Sicherheitsgrenze.** Ein Redirect-Hop wird erst geprüft, wenn der Browser ihn bereits
+anfordert; Subrequests der Seite und die DNS-Auflösung des Browsers sieht die Prüfung gar nicht. Der Check
+liefert eine frühe, verständliche Fehlermeldung (`BLOCKED: …`) und sorgt dafür, dass Inhalte abgewiesener
+Ziele nie im Toolergebnis landen (der Tab wird beim abgewiesenen Hop sofort geschlossen). Durchgesetzt wird
+die Richtlinie an der Verbindungsgrenze: lokaler SOCKS5-Proxy, Analyse Abschnitt 5.4, eigenes Arbeitspaket.
+Die Regelsyntax von `ARGOS_INTRANET_ALLOW` ist als Vorlage für dessen `NetworkPolicy` gedacht.
+
+Das Legacy-Werkzeug `browser_navigate` bleibt wie in PR #3 unverändert (Rückwärtskompatibilität).
 
 ## Dokumentverarbeitung
 
@@ -130,6 +157,19 @@ Die Browser-Tests (`ResearchDocumentsBrowserTest`, `BatchParallelismMeasurementT
 lokalen HTTP-Fixtures (`FixtureSite`): PDF über Link der aktuellen Seite (Seite bleibt erhalten),
 Attachment-Download mit Server-Dateinamen, Größenlimit, 404, Batch mit 404, verweigerter Verbindung, PDF, RSS,
 Duplikat und ungültiger Adresse. Der Messbericht landet in `build/reports/argos/`.
+
+**Noch nicht mit Camoufox belegt** (der Chromium-Lauf beweist diese Teile nicht, weil Chromium über CDP statt
+WebDriver BiDi läuft):
+
+1. PDF als Navigations-Response: Liefert `Response.body()` unter BiDi/pdf.js die echten PDF-Bytes (Data
+   Collector), oder kommt die Datei als Download an? Beides ist implementiert; der Test zeigt, welcher Weg greift.
+2. Attachment-Download: Kommt `Page.onDownload` unter BiDi an, und liefert `Download.path()` die Datei?
+3. Frist (`BackgroundTabDeadlineTest`): Werden Konsolenmeldungen des Hilfstabs während `Download.failure()`
+   bzw. `Response.body()` zugestellt, und bricht `Download.cancel()` den BiDi-Download ab?
+4. Redirect-Hop-Erkennung: Meldet BiDi den Redirect-Hop als Navigationsanfrage des Haupt-Frames?
+
+Alle vier laufen mit `./gradlew test -PtestCamoufox=true --tests '*BrowserTest' --tests '*DeadlineTest'
+--tests '*Measurement*'`. Schlägt einer fehl, ist das vor der Integration zu beheben.
 
 Für Chromium stellt der Test die eingebaute PDF-Anzeige ab (`plugins.always_open_pdf_externally`), damit die
 PDF-Datei als Download ankommt; liefert ein Browser stattdessen seine Viewer-Seite, meldet Argos das als

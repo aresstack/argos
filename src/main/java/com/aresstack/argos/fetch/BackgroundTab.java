@@ -1,5 +1,6 @@
 package com.aresstack.argos.fetch;
 
+import com.aresstack.argos.web.UrlPolicy;
 import com.microsoft.playwright.BrowserContext;
 import com.microsoft.playwright.Download;
 import com.microsoft.playwright.Page;
@@ -23,6 +24,11 @@ import java.util.concurrent.atomic.AtomicReference;
  * BiDi data collector / CDP) or, when the server sends an attachment, from the browser's own download.
  * The tab the user or agent currently works with is not touched.
  *
+ * <p>Redirect hops of the tab's own navigation and the final address are checked against the {@link UrlPolicy}.
+ * A refused hop closes the tab and the result is {@code BLOCKED}. This only keeps refused content out of tool
+ * results and explains the refusal; the browser has already sent that hop. Enforcement lives at the
+ * connection boundary (analysis section 5.4).
+ *
  * <p>Must only be used on the browser driver thread, like every other Playwright object.
  */
 public final class BackgroundTab implements AutoCloseable {
@@ -34,6 +40,7 @@ public final class BackgroundTab implements AutoCloseable {
     private final AtomicReference<Download> download = new AtomicReference<>();
     private Response response;
     private FetchFailure failure;
+    private String refusedHop;
 
     private BackgroundTab(Page tab, String requestedUrl) {
         this.tab = tab;
@@ -44,9 +51,18 @@ public final class BackgroundTab implements AutoCloseable {
      * Opens a new tab and returns as soon as the navigation committed (response headers arrived) or became a
      * download. The rest of the page keeps loading in the browser while the caller starts further tabs.
      */
-    public static BackgroundTab open(BrowserContext context, String url, double commitTimeoutMillis) {
+    public static BackgroundTab open(BrowserContext context, String url, double commitTimeoutMillis,
+                                     UrlPolicy policy) {
         BackgroundTab opened = new BackgroundTab(context.newPage(), url);
         opened.tab.onDownload(opened.download::set);
+        opened.tab.onRequest(request -> {
+            if (opened.refusedHop != null || !request.isNavigationRequest() || request.url().equals(url)
+                    || request.frame() != opened.tab.mainFrame() || policy.permits(request.url())) {
+                return;
+            }
+            opened.refusedHop = request.url();
+            opened.tab.close(); // stop loading; the pending navigation fails and is reported as BLOCKED
+        });
         try {
             opened.response = opened.tab.navigate(url, new Page.NavigateOptions()
                     .setWaitUntil(WaitUntilState.COMMIT).setTimeout(commitTimeoutMillis));
@@ -59,7 +75,15 @@ public final class BackgroundTab implements AutoCloseable {
                 opened.failure = new FetchFailure(FetchFailure.Kind.FAILED, navigationError(error));
             }
         }
-        if (opened.failure == null && opened.download.get() == null && opened.response != null) {
+        // Only a loaded page or download has a final address; error pages (chrome-error:, about:neterror) do not.
+        if (opened.refusedHop == null && opened.failure == null && !opened.tab.isClosed()
+                && !policy.permits(opened.finalUrl())) {
+            opened.refusedHop = opened.finalUrl();
+        }
+        if (opened.refusedHop != null) {
+            opened.failure = new FetchFailure(FetchFailure.Kind.BLOCKED, "Redirected to an address the URL policy "
+                    + "does not allow: " + WebAddress.redacted(opened.refusedHop));
+        } else if (opened.failure == null && opened.download.get() == null && opened.response != null) {
             opened.failure = FetchFailure.forHttpStatus(opened.response.status());
         }
         return opened;

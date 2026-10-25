@@ -6,6 +6,7 @@ import com.aresstack.argos.fetch.BackgroundTab;
 import com.aresstack.argos.fetch.FetchFailure;
 import com.aresstack.argos.fetch.FetchedResource;
 import com.aresstack.argos.fetch.WebAddress;
+import com.aresstack.argos.web.UrlPolicy;
 import com.microsoft.playwright.BrowserContext;
 import com.microsoft.playwright.PlaywrightException;
 
@@ -46,8 +47,17 @@ public final class BatchOpener {
         }
     }
 
-    /** Validates and de-duplicates {@code urls}; entries that need no browser are filled in already. */
-    public static BatchEntry[] plan(List<String> urls) {
+    private final UrlPolicy policy;
+
+    public BatchOpener(UrlPolicy policy) {
+        this.policy = policy;
+    }
+
+    /**
+     * Validates, de-duplicates and admits {@code urls} by the URL policy; entries that need no browser are
+     * filled in already.
+     */
+    public BatchEntry[] plan(List<String> urls) {
         if (urls == null || urls.isEmpty()) {
             throw new FetchFailure(FetchFailure.Kind.INVALID_REQUEST, "Give at least one URL");
         }
@@ -60,12 +70,14 @@ public final class BatchOpener {
             String requested = urls.get(i) == null ? "" : urls.get(i).trim();
             try {
                 String url = WebAddress.requireHttp(requested, null);
+                WebAddress.admit(policy, url);
                 if (!seen.add(WebAddress.withoutFragment(url))) {
                     entries[i] = BatchEntry.skipped(requested, BatchEntry.Status.DUPLICATE,
                             "Same address as an earlier entry");
                 }
-            } catch (FetchFailure invalid) {
-                entries[i] = BatchEntry.skipped(requested, BatchEntry.Status.INVALID_REQUEST, invalid.getMessage());
+            } catch (FetchFailure refused) {
+                entries[i] = BatchEntry.skipped(requested, BatchEntry.Status.valueOf(refused.kind().name()),
+                        refused.getMessage());
             }
         }
         return entries;
@@ -84,7 +96,7 @@ public final class BatchOpener {
             while (!waiting.isEmpty() || !open.isEmpty()) {
                 while (!waiting.isEmpty() && open.size() < options.parallel()) {
                     int index = waiting.poll();
-                    open.add(OpenTab.start(context, index, urls.get(index).trim(), options));
+                    open.add(OpenTab.start(context, index, urls.get(index).trim(), options, policy));
                 }
                 OpenTab oldest = open.poll();
                 try {
@@ -150,9 +162,10 @@ public final class BatchOpener {
     }
 
     private record OpenTab(int index, String url, BackgroundTab tab, long startedNanos) {
-        static OpenTab start(BrowserContext context, int index, String url, Options options) {
+        static OpenTab start(BrowserContext context, int index, String url, Options options, UrlPolicy policy) {
             long started = System.nanoTime();
-            return new OpenTab(index, url, BackgroundTab.open(context, url, options.commitTimeoutMillis()), started);
+            return new OpenTab(index, url, BackgroundTab.open(context, url, options.commitTimeoutMillis(), policy),
+                    started);
         }
 
         long elapsed() {

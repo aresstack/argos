@@ -14,6 +14,7 @@ import jakarta.servlet.DispatcherType;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import com.aresstack.argos.document.DocumentStore;
+import com.aresstack.argos.web.UrlPolicy;
 import io.modelcontextprotocol.server.McpServerFeatures.SyncToolSpecification;
 
 import java.util.ArrayList;
@@ -44,7 +45,7 @@ public final class ArgosApplication {
         }
         ArgosConfig config = ArgosConfig.fromEnvironment();
         CamoufoxBrowser browser = new CamoufoxBrowser(config);
-        ResearchDocuments documents = new ResearchDocuments(browser, new DocumentStore());
+        ResearchDocuments documents = new ResearchDocuments(browser, new DocumentStore(), UrlPolicy.fromEnvironment());
         List<SyncToolSpecification> tools = new ArrayList<>(new ArgosTools(browser).all());
         // Documents and batches belong to the expert profile only; the legacy tool list stays unchanged.
         if ("expert".equalsIgnoreCase(System.getenv("ARGOS_TOOL_PROFILE"))) {

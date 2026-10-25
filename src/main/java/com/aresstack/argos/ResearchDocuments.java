@@ -11,6 +11,7 @@ import com.aresstack.argos.fetch.BrowserContextAccess;
 import com.aresstack.argos.fetch.FetchFailure;
 import com.aresstack.argos.fetch.FetchedResource;
 import com.aresstack.argos.fetch.WebAddress;
+import com.aresstack.argos.web.UrlPolicy;
 
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -29,19 +30,23 @@ public final class ResearchDocuments implements AutoCloseable {
     private final BrowserContextAccess browser;
     private final DocumentStore store;
     private final DocumentTextExtractor extractor = new DocumentTextExtractor();
-    private final BatchOpener batch = new BatchOpener();
+    private final UrlPolicy policy;
+    private final BatchOpener batch;
 
-    public ResearchDocuments(BrowserContextAccess browser, DocumentStore store) {
+    public ResearchDocuments(BrowserContextAccess browser, DocumentStore store, UrlPolicy policy) {
         this.browser = browser;
         this.store = store;
+        this.policy = policy;
+        this.batch = new BatchOpener(policy);
     }
 
     /** Downloads {@code url} (absolute, or relative to the current page) and keeps it in the store. */
     public StoredDocument download(String url) {
         String target = WebAddress.requireHttp(url, browser.currentUrl());
+        WebAddress.admit(policy, target);
         long limit = store.maxDocumentBytes();
         FetchedResource resource = unwrapping(() -> browser.inBrowserContext(context -> {
-            try (BackgroundTab tab = BackgroundTab.open(context, target, COMMIT_TIMEOUT_MILLIS)) {
+            try (BackgroundTab tab = BackgroundTab.open(context, target, COMMIT_TIMEOUT_MILLIS, policy)) {
                 return tab.content(limit, CONTENT_TIMEOUT_MILLIS);
             }
         }, DOWNLOAD_TIMEOUT_SECONDS));
@@ -69,7 +74,7 @@ public final class ResearchDocuments implements AutoCloseable {
 
     /** Opens up to {@link BatchOpener#MAX_URLS} addresses in background tabs and reads each one. */
     public Map<String, Object> openMany(List<String> urls, int maxCharactersPerPage) {
-        BatchEntry[] planned = BatchOpener.plan(urls);
+        BatchEntry[] planned = batch.plan(urls);
         int perPage = Math.min(Math.max(200, maxCharactersPerPage), BatchOpener.MAX_TOTAL_CHARACTERS / urls.size());
         BatchOpener.Options options = BatchOpener.Options.defaults(perPage);
         long started = System.nanoTime();

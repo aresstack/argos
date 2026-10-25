@@ -20,6 +20,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.LongSupplier;
 import java.util.function.Supplier;
 
 /**
@@ -34,6 +35,15 @@ public final class NetworkRecorder {
     public static final int MAX_BODY_CHARACTERS = 32_000;
     private static final int MAX_POST_DATA_CHARACTERS = 8_000;
     private static final int MASKING_INPUT_LIMIT = 2_000_000;
+    // Bodies announced larger than this are never fetched over the protocol.
+    static final long MAX_FETCH_BYTES = 2_000_000;
+    // Automatic fetching (eager capture, JSON listing) gets a small budget per browser task,
+    // so a heavy page can never keep the single driver thread busy for long.
+    static final int AUTOMATIC_FETCHES_PER_TASK = 5;
+    static final long AUTOMATIC_FETCH_BUDGET_MILLIS = 2_000;
+    // One fetch this slow suspends automatic fetching until clear(); explicit detail calls still work.
+    static final long SLOW_FETCH_MILLIS = 3_000;
+    public static final int MAX_JSON_RESPONSES = 20;
     // Eager body capture is limited to the exchanges that carry page data.
     private static final Set<String> EAGER_BODY_TYPES = Set.of("document", "xhr", "fetch");
 
@@ -42,6 +52,8 @@ public final class NetworkRecorder {
     private final SecretMasker masker;
     private final boolean captureBodies;
     private final Supplier<Instant> clock;
+    private final LongSupplier nanos;
+    private boolean automaticFetchSuspended;
     private final Deque<NetworkEntry> entries = new ArrayDeque<>();
     private final Map<String, NetworkEntry> byId = new LinkedHashMap<>();
     private final Map<Request, NetworkEntry> byRequest = new IdentityHashMap<>();
@@ -49,13 +61,14 @@ public final class NetworkRecorder {
     private long sequence;
 
     public NetworkRecorder(SecretMasker masker, boolean captureBodies) {
-        this(masker, captureBodies, Instant::now);
+        this(masker, captureBodies, Instant::now, System::nanoTime);
     }
 
-    NetworkRecorder(SecretMasker masker, boolean captureBodies, Supplier<Instant> clock) {
+    NetworkRecorder(SecretMasker masker, boolean captureBodies, Supplier<Instant> clock, LongSupplier nanos) {
         this.masker = masker;
         this.captureBodies = captureBodies;
         this.clock = clock;
+        this.nanos = nanos;
     }
 
     public void attach(Page page) {
@@ -70,7 +83,7 @@ public final class NetworkRecorder {
         NetworkEntry previous = request.redirectedFrom() == null ? null : byRequest.get(request.redirectedFrom());
         String postData = request.postData();
         Map<String, String> headers = masker.headers(request.headers());
-        NetworkEntry entry = new NetworkEntry("n" + (++sequence), clock.get(), System.nanoTime(),
+        NetworkEntry entry = new NetworkEntry("n" + (++sequence), clock.get(), nanos.getAsLong(),
                 request.method(), masker.urlWithoutQuery(request.url()), masker.url(request.url()),
                 request.resourceType(), headers,
                 postData == null ? null : truncate(masker.body(postData, header(headers, "content-type")),
@@ -114,10 +127,14 @@ public final class NetworkRecorder {
 
     /** Fetches bodies queued by eager capture; call outside event handlers. */
     public void captureQueuedBodies() {
-        while (!pendingBodies.isEmpty()) {
+        FetchBudget budget = new FetchBudget();
+        while (!pendingBodies.isEmpty() && budget.allowsAnother()) {
             NetworkEntry entry = pendingBodies.removeFirst();
-            if (byId.get(entry.id) == entry) loadBody(entry);
+            if (byId.get(entry.id) == entry && entry.body == null && entry.bodyUnavailable == null) {
+                budget.fetch(entry);
+            }
         }
+        // Whatever is left waits for the next browser task.
     }
 
     /**
@@ -127,20 +144,29 @@ public final class NetworkRecorder {
      */
     public List<Map<String, Object>> jsonResponses(String filter, int limit) {
         String needle = filter == null ? "" : filter.trim().toLowerCase(Locale.ROOT);
-        int count = Math.min(50, Math.max(1, limit));
+        int count = Math.min(MAX_JSON_RESPONSES, Math.max(1, limit));
+        FetchBudget budget = new FetchBudget();
         List<Map<String, Object>> rows = new ArrayList<>();
         for (var iterator = entries.descendingIterator(); iterator.hasNext() && rows.size() < count; ) {
             NetworkEntry entry = iterator.next();
             if (entry.state != NetworkEntry.State.FINISHED || !entry.mimeType.contains("json")) continue;
             if (!needle.isEmpty() && !entry.url.toLowerCase(Locale.ROOT).contains(needle)) continue;
-            if (entry.body == null && entry.bodyUnavailable == null) loadBody(entry);
+            boolean deferred = false;
+            if (entry.body == null && entry.bodyUnavailable == null) {
+                if (budget.allowsAnother()) budget.fetch(entry);
+                else deferred = true;
+            }
             Map<String, Object> row = new LinkedHashMap<>();
             row.put("id", entry.id);
             row.put("url", entry.listUrl);
             row.put("status", entry.status);
             row.put("type", entry.resourceType);
             if (entry.body == null) {
-                row.put("bodyUnavailable", entry.bodyUnavailable == null ? "still loading" : entry.bodyUnavailable);
+                row.put("bodyUnavailable", entry.bodyUnavailable != null ? entry.bodyUnavailable
+                        : deferred ? automaticFetchSuspended
+                                ? "automatic loading paused after a slow response; use browser_network_detail"
+                                : "not loaded yet; call again or use browser_network_detail"
+                        : "still loading");
             } else {
                 row.put("bytes", entry.bodyBytes);
                 row.put("shape", jsonShape(entry.body, entry.bodyTruncated));
@@ -226,6 +252,7 @@ public final class NetworkRecorder {
         byId.clear();
         byRequest.clear();
         pendingBodies.clear();
+        automaticFetchSuspended = false;
     }
 
     private void complete(NetworkEntry entry, Request request) {
@@ -235,7 +262,7 @@ public final class NetworkRecorder {
             if (timing.responseEnd > 0) entry.durationMillis = Math.round(timing.responseEnd);
         }
         if (entry.durationMillis == null) {
-            entry.durationMillis = (System.nanoTime() - entry.startedNanos) / 1_000_000;
+            entry.durationMillis = (nanos.getAsLong() - entry.startedNanos) / 1_000_000;
         }
     }
 
@@ -246,8 +273,10 @@ public final class NetworkRecorder {
     private void loadFullHeaders(NetworkEntry entry) {
         entry.fullHeadersLoaded = true;
         try {
-            entry.fullRequestHeaders = masker.headers(entry.request.allHeaders());
-            if (entry.response != null) entry.responseHeaders = masker.headers(entry.response.allHeaders());
+            entry.fullRequestHeaders = merged(entry.requestHeaders, masker.headers(entry.request.allHeaders()));
+            if (entry.response != null) {
+                entry.responseHeaders = merged(entry.responseHeaders, masker.headers(entry.response.allHeaders()));
+            }
         } catch (RuntimeException unavailable) {
             // Keep the provisional headers recorded from the events.
         }
@@ -260,6 +289,16 @@ public final class NetworkRecorder {
         }
         if (entry.response == null || entry.state != NetworkEntry.State.FINISHED) {
             // Not cached: the body may still arrive, so a later detail call retries.
+            return;
+        }
+        if (entry.status == 204 || entry.status == 304 || (entry.status >= 300 && entry.status < 400)
+                || entry.method.equalsIgnoreCase("HEAD")) {
+            entry.bodyUnavailable = "no body (status " + entry.status + ")";
+            return;
+        }
+        Long announced = contentLength(entry.responseHeaders);
+        if (announced != null && announced > MAX_FETCH_BYTES) {
+            entry.bodyUnavailable = "too large (" + announced + " bytes)";
             return;
         }
         if (!isTextual(entry.mimeType)) {
@@ -326,6 +365,48 @@ public final class NetworkRecorder {
         har.put("_resourceType", entry.resourceType);
         if (entry.failure != null) har.put("_failure", entry.failure);
         return har;
+    }
+
+    /** Per-task limit on automatic body fetches: count, cumulative time and a stall breaker. */
+    private final class FetchBudget {
+        private final long startedNanos = nanos.getAsLong();
+        private int fetches;
+
+        boolean allowsAnother() {
+            return !automaticFetchSuspended && fetches < AUTOMATIC_FETCHES_PER_TASK
+                    && elapsedMillis(startedNanos) < AUTOMATIC_FETCH_BUDGET_MILLIS;
+        }
+
+        void fetch(NetworkEntry entry) {
+            fetches++;
+            long before = nanos.getAsLong();
+            loadBody(entry);
+            if (elapsedMillis(before) >= SLOW_FETCH_MILLIS) automaticFetchSuspended = true;
+        }
+    }
+
+    private long elapsedMillis(long sinceNanos) {
+        return (nanos.getAsLong() - sinceNanos) / 1_000_000;
+    }
+
+    // Full headers extend the provisional ones; a header missing from the full set is kept.
+    private static Map<String, String> merged(Map<String, String> provisional, Map<String, String> full) {
+        Map<String, String> result = new LinkedHashMap<>(provisional);
+        full.forEach((name, value) -> {
+            result.keySet().removeIf(existing -> existing.equalsIgnoreCase(name));
+            result.put(name, value);
+        });
+        return result;
+    }
+
+    private static Long contentLength(Map<String, String> headers) {
+        String value = header(headers, "content-length");
+        if (value == null) return null;
+        try {
+            return Long.parseLong(value.trim());
+        } catch (NumberFormatException malformed) {
+            return null;
+        }
     }
 
     private String jsonShape(String body, boolean truncated) {

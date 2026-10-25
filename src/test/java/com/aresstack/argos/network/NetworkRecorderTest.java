@@ -138,6 +138,89 @@ class NetworkRecorderTest {
         assertFalse(recorder.detail("n1", true).get("body").toString().contains("secret"));
     }
 
+    @Test void jsonListingFetchesOnlyASmallBudgetPerCall() {
+        NetworkRecorder recorder = recorder(false);
+        List<Response> responses = new java.util.ArrayList<>();
+        for (int i = 0; i < 12; i++) {
+            responses.add(finished(recorder, "https://example.org/api/" + i, "fetch", "application/json", "{\"i\":" + i + "}"));
+        }
+        List<Map<String, Object>> first = recorder.jsonResponses(null, 50);
+        assertEquals(NetworkRecorder.MAX_JSON_RESPONSES, 20);
+        assertEquals(12, first.size());
+        long loaded = first.stream().filter(row -> row.containsKey("shape")).count();
+        assertEquals(NetworkRecorder.AUTOMATIC_FETCHES_PER_TASK, loaded);
+        assertTrue(first.get(11).get("bodyUnavailable").toString().contains("not loaded yet"));
+        int calls = 0;
+        for (Response response : responses) calls += mockingDetails(response).getInvocations().stream()
+                .filter(invocation -> invocation.getMethod().getName().equals("body")).count();
+        assertEquals(NetworkRecorder.AUTOMATIC_FETCHES_PER_TASK, calls);
+
+        // Already loaded bodies are cached, so the next call continues with the remaining ones.
+        long secondLoaded = recorder.jsonResponses(null, 50).stream().filter(row -> row.containsKey("shape")).count();
+        assertEquals(2L * NetworkRecorder.AUTOMATIC_FETCHES_PER_TASK, secondLoaded);
+    }
+
+    @Test void slowBodyFetchSuspendsAutomaticLoadingButNotExplicitDetail() {
+        long[] now = {0};
+        NetworkRecorder recorder = new NetworkRecorder(new SecretMasker(), true, () -> NOW, () -> now[0]);
+        Response slow = finished(recorder, "https://example.org/api/slow", "fetch", "application/json", "{\"a\":1}");
+        when(slow.body()).thenAnswer(invocation -> {
+            now[0] += (NetworkRecorder.SLOW_FETCH_MILLIS + 1) * 1_000_000;
+            return "{\"a\":1}".getBytes(StandardCharsets.UTF_8);
+        });
+        Response next = finished(recorder, "https://example.org/api/next", "fetch", "application/json", "{\"b\":2}");
+
+        recorder.captureQueuedBodies();
+        verify(slow, times(1)).body();
+        verify(next, never()).body();
+        assertTrue(recorder.jsonResponses(null, 10).get(0).get("bodyUnavailable").toString().contains("paused"));
+        verify(next, never()).body();
+
+        assertEquals("{\"b\":2}", recorder.detail("n2", true).get("body"));
+        recorder.clear();
+        Response fresh = finished(recorder, "https://example.org/api/fresh", "fetch", "application/json", "{}");
+        recorder.captureQueuedBodies();
+        verify(fresh, times(1)).body();
+    }
+
+    @Test void neverFetchesOversizedEmptyOrAbortedBodies() {
+        NetworkRecorder recorder = recorder(false);
+        Request big = request("GET", "https://example.org/huge.json", "fetch", null);
+        Response bigResponse = response(big, 200, "application/json", "{}");
+        when(bigResponse.headers()).thenReturn(Map.of("content-type", "application/json",
+                "content-length", String.valueOf(NetworkRecorder.MAX_FETCH_BYTES + 1)));
+        recorder.requestStarted(big);
+        recorder.responseReceived(bigResponse);
+        recorder.requestFinished(big);
+
+        Request empty = request("GET", "https://example.org/none", "fetch", null);
+        Response emptyResponse = response(empty, 204, "application/json", "");
+        recorder.requestStarted(empty);
+        recorder.responseReceived(emptyResponse);
+        recorder.requestFinished(empty);
+
+        // Headers arrived, then the transfer was aborted: never a finished download.
+        Request aborted = request("GET", "https://example.org/aborted", "fetch", null);
+        Response abortedResponse = response(aborted, 200, "application/json", "{\"partial\":");
+        when(aborted.failure()).thenReturn("NS_BINDING_ABORTED");
+        recorder.requestStarted(aborted);
+        recorder.responseReceived(abortedResponse);
+        recorder.requestFailed(aborted);
+
+        Request loading = request("GET", "https://example.org/stream", "fetch", null);
+        Response loadingResponse = response(loading, 200, "application/json", "{}");
+        recorder.requestStarted(loading);
+        recorder.responseReceived(loadingResponse);
+
+        assertTrue(recorder.detail("n1", true).get("bodyUnavailable").toString().startsWith("too large"));
+        assertEquals("no body (status 204)", recorder.detail("n2", true).get("bodyUnavailable"));
+        assertEquals("request failed", recorder.detail("n3", true).get("bodyUnavailable"));
+        assertEquals("still loading", recorder.detail("n4", true).get("bodyUnavailable"));
+        for (Response response : List.of(bigResponse, emptyResponse, abortedResponse, loadingResponse)) {
+            verify(response, never()).body();
+        }
+    }
+
     @Test void neverFetchesBinaryBodiesAndReportsWhy() {
         NetworkRecorder recorder = recorder(false);
         Request request = request("GET", "https://example.org/paper.pdf", "document", null);
@@ -212,7 +295,16 @@ class NetworkRecorderTest {
     }
 
     private static NetworkRecorder recorder(boolean eagerBodies) {
-        return new NetworkRecorder(new SecretMasker(), eagerBodies, () -> NOW);
+        return new NetworkRecorder(new SecretMasker(), eagerBodies, () -> NOW, System::nanoTime);
+    }
+
+    private static Response finished(NetworkRecorder recorder, String url, String type, String mime, String body) {
+        Request request = request("GET", url, type, null);
+        Response response = response(request, 200, mime, body);
+        recorder.requestStarted(request);
+        recorder.responseReceived(response);
+        recorder.requestFinished(request);
+        return response;
     }
 
     private static Request request(String method, String url, String type, String postData) {

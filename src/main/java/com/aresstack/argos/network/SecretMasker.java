@@ -43,6 +43,13 @@ public final class SecretMasker {
     // "token": "value" inside scripts, HTML-embedded JSON or JSON that failed to parse.
     private static final Pattern QUOTED_PAIR = Pattern.compile(
             "([\"']?)([A-Za-z0-9_.-]{2,64})\\1(\\s*[:=]\\s*)([\"'])([^\"'\\r\\n]{1,4096})\\4");
+    // "pin": 1234 or otp=123456 — secrets that are not quoted strings.
+    private static final Pattern LITERAL_PAIR = Pattern.compile(
+            "([\"']?)([A-Za-z0-9_.-]{2,64})\\1(\\s*[:=]\\s*)(-?[0-9][0-9.eE+-]{0,63})\\b");
+    // token=abc inside URLs, log lines or error messages.
+    private static final Pattern ASSIGNMENT = Pattern.compile(
+            "\\b([A-Za-z0-9_.-]{2,64})=([^&\\s\"'<>;,)]{1,4096})");
+    private static final Pattern URL_USER_INFO = Pattern.compile("(?i)\\b([a-z][a-z0-9+.-]*://)[^/\\s@]+@");
     // <input name="csrf_token" value="..."> and <input value="..." name="csrf_token">.
     private static final Pattern INPUT_VALUE = Pattern.compile(
             "(?i)(name\\s*=\\s*[\"']([^\"']{1,64})[\"'][^>]{0,200}?value\\s*=\\s*)([\"'])([^\"']*)\\3");
@@ -128,6 +135,8 @@ public final class SecretMasker {
         if (body == null || body.isEmpty()) return body;
         String mime = mimeType == null ? "" : mimeType.toLowerCase(Locale.ROOT);
         if (mime.contains("x-www-form-urlencoded")) return formEncoded(body);
+        // A byte order mark would otherwise make JSON unparsable and skip key-based masking.
+        if (body.charAt(0) == '\uFEFF') body = body.substring(1);
         String trimmed = body.stripLeading();
         if (mime.contains("json") || trimmed.startsWith("{") || trimmed.startsWith("[")) {
             try {
@@ -148,7 +157,11 @@ public final class SecretMasker {
         if (value == null || value.isEmpty()) return value;
         String masked = JWT.matcher(value).replaceAll(MASK);
         masked = BEARER.matcher(masked).replaceAll("$1 " + MASK);
+        masked = URL_USER_INFO.matcher(masked).replaceAll("$1");
         masked = replaceSecretPairs(masked);
+        masked = replaceSecret(LITERAL_PAIR, masked, 2,
+                m -> m.group(1) + m.group(2) + m.group(1) + m.group(3) + MASK);
+        masked = replaceSecret(ASSIGNMENT, masked, 1, m -> m.group(1) + "=" + MASK);
         return replaceSecretInputs(masked);
     }
 
@@ -215,6 +228,18 @@ public final class SecretMasker {
                 out.append(name).append(equals < 0 ? "" : "=" + MASK);
             }
         }
+        return out.toString();
+    }
+
+    private static String replaceSecret(Pattern pattern, String value, int nameGroup,
+                                        java.util.function.Function<Matcher, String> masked) {
+        Matcher matcher = pattern.matcher(value);
+        StringBuilder out = new StringBuilder();
+        while (matcher.find()) {
+            String replacement = isSecretName(matcher.group(nameGroup)) ? masked.apply(matcher) : matcher.group();
+            matcher.appendReplacement(out, Matcher.quoteReplacement(replacement));
+        }
+        matcher.appendTail(out);
         return out.toString();
     }
 

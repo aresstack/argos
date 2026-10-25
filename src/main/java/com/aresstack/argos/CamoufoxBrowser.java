@@ -33,6 +33,7 @@ public final class CamoufoxBrowser implements AutoCloseable {
     private final ExecutorService driver = Executors.newSingleThreadExecutor(
             runnable -> Thread.ofPlatform().name("argos-camoufox-driver").unstarted(runnable));
     private final ObjectMapper mapper = new ObjectMapper();
+    private final SecretMasker masker = new SecretMasker();
     private final NetworkRecorder network;
     private Playwright playwright;
     private BrowserContext context;
@@ -40,7 +41,7 @@ public final class CamoufoxBrowser implements AutoCloseable {
 
     public CamoufoxBrowser(ArgosConfig config) {
         this.config = config;
-        this.network = new NetworkRecorder(new SecretMasker(), config.networkBodies());
+        this.network = new NetworkRecorder(masker, config.networkBodies());
     }
 
     public <T> T onBrowser(Callable<T> action) {
@@ -58,7 +59,9 @@ public final class CamoufoxBrowser implements AutoCloseable {
             Thread.currentThread().interrupt();
             throw new IllegalStateException("Browser task interrupted", e);
         } catch (Exception e) {
-            throw new IllegalStateException("Camoufox operation failed: " + e.getMessage(), e);
+            // Playwright errors can quote URLs with tokens or credentials; never pass them through raw.
+            String detail = e.getMessage() == null ? e.getClass().getSimpleName() : masker.text(e.getMessage());
+            throw new IllegalStateException("Camoufox operation failed: " + detail, e);
         }
     }
 

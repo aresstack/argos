@@ -87,4 +87,21 @@ class SecretMaskerTest {
         assertTrue(SecretMasker.isSecretName("sessionid"));
         assertTrue(SecretMasker.isSecretName("PASSWORD"));
     }
+
+    @Test void masksUnusualBodyFormatsAndErrorTexts() {
+        String bom = masker.body("\uFEFF{\"password\":\"hunter2\"}", "application/json");
+        assertFalse(bom.contains("hunter2"), bom);
+        String jsonp = masker.body("cb({\"access_token\":\"abc\",\"pin\":1234,\"year\":2024});", "application/javascript");
+        assertFalse(jsonp.contains("abc"), jsonp);
+        assertFalse(jsonp.contains("1234"), jsonp);
+        assertTrue(jsonp.contains("2024"));
+        String ndjson = masker.body("{\"token\":\"t1\"}\n{\"token\":\"t2\"}", "application/x-ndjson");
+        assertFalse(ndjson.contains("t1") || ndjson.contains("t2"), ndjson);
+        String error = masker.text("NS_ERROR at https://user:pw@example.org/cb?code=abc123&state=ok (sid=42)");
+        assertFalse(error.contains("pw@"), error);
+        assertFalse(error.contains("abc123"), error);
+        assertFalse(error.contains("sid=42"), error);
+        assertTrue(error.contains("state=ok"));
+        assertEquals("plain text with a=b and key words", masker.text("plain text with a=b and key words"));
+    }
 }

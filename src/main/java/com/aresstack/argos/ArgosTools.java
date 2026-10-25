@@ -24,7 +24,8 @@ public final class ArgosTools {
     }
 
     public List<SyncToolSpecification> forProfile(ToolProfile profile) {
-        if (profile == ToolProfile.LEGACY) return all();
+        // COMPACT's web_* tools arrive with the compact-profile branch; network analysis is EXPERT only.
+        if (profile != ToolProfile.EXPERT) return all();
         List<SyncToolSpecification> tools = new ArrayList<>(all());
         tools.addAll(new NetworkTools(browser).expertTools());
         return List.copyOf(tools);

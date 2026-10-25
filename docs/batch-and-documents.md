@@ -59,10 +59,20 @@ IPv6-ULA oder CGNAT auflösen. **Freigegebene Intranet-Ziele** werden ausdrückl
 anfordert; Subrequests der Seite und die DNS-Auflösung des Browsers sieht die Prüfung gar nicht. Der Check
 liefert eine frühe, verständliche Fehlermeldung (`BLOCKED: …`) und sorgt dafür, dass Inhalte abgewiesener
 Ziele nie im Toolergebnis landen (der Tab wird beim abgewiesenen Hop sofort geschlossen). Durchgesetzt wird
-die Richtlinie an der Verbindungsgrenze: lokaler SOCKS5-Proxy, Analyse Abschnitt 5.4, eigenes Arbeitspaket.
-Die Regelsyntax von `ARGOS_INTRANET_ALLOW` ist als Vorlage für dessen `NetworkPolicy` gedacht.
+die Richtlinie an der Verbindungsgrenze: lokaler SOCKS5-Proxy mit `NetworkPolicy` (PR #11).
 
-Das Legacy-Werkzeug `browser_navigate` bleibt wie in PR #3 unverändert (Rückwärtskompatibilität).
+**Entscheidung (Angelo, 2026-10-25):** Es gibt genau eine Sicherheitslogik, die `NetworkPolicy` an der
+SOCKS5-Grenze. Sie gilt ohne Ausnahme für alle Profile und Werkzeuge, also auch für `legacy` und
+`browser_navigate`, einschließlich Redirects und Subrequests. Einen Legacy-Bypass gibt es nicht. Private und
+Loopback-Ziele sind damit auch über die Legacy-Werkzeuge gesperrt. Das ist eine bewusste
+Verhaltensänderung. Freigaben laufen nur über `ARGOS_INTRANET_ALLOW`. `ARGOS_NETWORK_POLICY=off` ist ein
+bewusstes Debug-Opt-out und kein Standard. Die Signaturen und die Navigations-API der neun Legacy-Werkzeuge
+bleiben unverändert, und sie bekommen keine eigene kopierte URL-Prüfung.
+
+Für die Integration bedeutet das: Der Vorab-Check dieses Arbeitspakets ruft dann dieselbe zentrale Policy
+auf (`NetworkPolicy` aus `ARGOS_INTRANET_ALLOW`) statt eigener `UrlPolicy`-Regeln und bleibt rein
+informativ. Der Integrationsbranch testet `legacy/browser_navigate` mit drei Fällen: Ein internes Ziel ist
+blockiert, ein gezielt erlaubtes funktioniert, ein öffentliches funktioniert.
 
 ## Dokumentverarbeitung
 

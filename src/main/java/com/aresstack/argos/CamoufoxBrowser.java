@@ -25,13 +25,11 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.microsoft.playwright.BrowserContext;
 import com.microsoft.playwright.BrowserType;
 import com.microsoft.playwright.Locator;
-import com.microsoft.playwright.Mouse;
 import com.microsoft.playwright.Page;
 import com.microsoft.playwright.Playwright;
 import com.microsoft.playwright.PlaywrightException;
 import com.microsoft.playwright.Request;
 import com.microsoft.playwright.Response;
-import com.microsoft.playwright.options.BoundingBox;
 import com.microsoft.playwright.TimeoutError;
 import com.microsoft.playwright.options.AriaSnapshotMode;
 import com.microsoft.playwright.options.LoadState;
@@ -1149,28 +1147,22 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
     }
 
     /**
-     * Clicks the element's bounding-box centre with real pointer input (WebDriver BiDi input actions),
-     * never with a page-visible element.click(). Returns false when the element has no box.
+     * Clicks the element with real, human pointer input (WebDriver BiDi input actions), never with a
+     * page-visible element.click(). Returns false when the element is missing or cannot be reached.
      */
     public boolean clickWithTrustedInput(String selector) {
         return onBrowser(() -> {
             Page p = activePage();
-            // Measure only (count/boundingBox); no Locator.click or scrollIntoView, whose actionability
-            // machinery dispatches page-observable marker events (playwright4j #38).
+            // Measure only (count); the click itself is the same human BiDi input as every other click
+            // (RealInput: wheel scrolling, curved path, occlusion check), never Locator.click or scrollIntoView,
+            // whose actionability machinery dispatches page-observable marker events (playwright4j #38).
             Locator target = p.locator(selector).first();
             if (target.count() == 0) return false;
-            BoundingBox box = target.boundingBox(new Locator.BoundingBoxOptions().setTimeout(2_000));
-            if (box != null && (box.y < 0 || box.y + box.height > 700)) {
-                p.mouse().wheel(0, box.y - 300); // scroll like a user, then measure again
-                p.waitForTimeout(400);
-                box = target.boundingBox(new Locator.BoundingBoxOptions().setTimeout(2_000));
+            try {
+                input.click(p, target);
+            } catch (RuntimeException unreachable) {
+                return false;
             }
-            if (box == null || box.width < 1 || box.height < 1) return false;
-            double x = box.x + box.width / 2;
-            double y = box.y + box.height / 2;
-            p.mouse().move(x, y, new Mouse.MoveOptions().setSteps(12));
-            p.mouse().click(x, y);
-            p.waitForTimeout(800);
             settleLoad(p);
             return true;
         });

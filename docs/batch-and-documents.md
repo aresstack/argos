@@ -39,10 +39,11 @@ Bekannte Einschränkung: Ein neuer Tab sendet keinen `Referer`. Server, die Doku
 liefern dann 403 (`BLOCKED`). Ein Klick auf den Link in der aktuellen Seite würde den Referer senden, verlässt
 aber die Seite; das ist bewusst nicht der Standardweg.
 
-## URL-Richtlinie (gemeinsam mit PR #3)
+## URL-Richtlinie (eine zentrale Netzwerkpolitik)
 
-Alle Pfade dieses Arbeitspakets verwenden dieselbe `com.aresstack.argos.web.UrlPolicy` wie `web_open` und
-`web_follow` aus PR #3 (gleiche Datei, hier um Intranet-Regeln erweitert):
+Alle Pfade dieses Arbeitspakets verwenden dieselbe `com.aresstack.argos.web.UrlPolicy` wie `web_open`,
+`web_follow`, `browser_navigate` und die Recherche. `UrlPolicy` hat keine eigenen Regeln mehr, sondern ruft
+`NetworkPolicy.checkUrl` aus PR #11 auf, also dieselben Regeln und dieselbe Auflösung wie der SOCKS5-Proxy:
 
 | Pfad | Vorab-Check | Redirect-Hops | Endadresse |
 | --- | --- | --- | --- |
@@ -50,10 +51,10 @@ Alle Pfade dieses Arbeitspakets verwenden dieselbe `com.aresstack.argos.web.UrlP
 | `browser_open_many` | ✔ pro URL, abgewiesene URL → `BLOCKED`, die anderen laufen weiter | ✔ | ✔ |
 
 Standardmäßig werden Ziele abgewiesen, die zu Loopback, RFC 1918, Link-Local (auch `169.254.169.254`),
-IPv6-ULA oder CGNAT auflösen. **Freigegebene Intranet-Ziele** werden ausdrücklich erlaubt mit
-`ARGOS_INTRANET_ALLOW`, kommagetrennt: `wiki.firma.local` (genau dieser Host), `*.firma.local`
-(Subdomains), `10.20.0.0/16` oder `192.168.1.5` (aufgelöste Adressen). `ARGOS_ALLOW_PRIVATE_NETWORKS=true`
-(wie in PR #3) schaltet die Prüfung ganz ab, nur für lokale Tests.
+IPv6-ULA, CGNAT oder anderen nicht öffentlichen Bereichen auflösen. **Freigegebene Intranet-Ziele** werden
+ausdrücklich erlaubt mit `ARGOS_INTRANET_ALLOW` (Syntax siehe README, Abschnitt Netzwerkgrenze).
+`ARGOS_ALLOW_PRIVATE_NETWORKS` gibt es nicht mehr; Argos bricht den Start mit einem Hinweis ab, wenn es
+gesetzt ist. `ARGOS_NETWORK_POLICY=off` schaltet Proxy und Vorab-Check gemeinsam ab (nur Fehlersuche).
 
 **Das ist keine Sicherheitsgrenze.** Ein Redirect-Hop wird erst geprüft, wenn der Browser ihn bereits
 anfordert; Subrequests der Seite und die DNS-Auflösung des Browsers sieht die Prüfung gar nicht. Der Check
@@ -69,10 +70,10 @@ Verhaltensänderung. Freigaben laufen nur über `ARGOS_INTRANET_ALLOW`. `ARGOS_N
 bewusstes Debug-Opt-out und kein Standard. Die Signaturen und die Navigations-API der neun Legacy-Werkzeuge
 bleiben unverändert, und sie bekommen keine eigene kopierte URL-Prüfung.
 
-Für die Integration bedeutet das: Der Vorab-Check dieses Arbeitspakets ruft dann dieselbe zentrale Policy
-auf (`NetworkPolicy` aus `ARGOS_INTRANET_ALLOW`) statt eigener `UrlPolicy`-Regeln und bleibt rein
-informativ. Der Integrationsbranch testet `legacy/browser_navigate` mit drei Fällen: Ein internes Ziel ist
-blockiert, ein gezielt erlaubtes funktioniert, ein öffentliches funktioniert.
+Umgesetzt im Integrationsbranch: Der Vorab-Check ruft die zentrale `NetworkPolicy` auf und ist rein
+informativ. `LegacyNavigateNetworkPolicyTest` prüft `legacy/browser_navigate` mit drei Fällen: Ein internes
+Ziel ist blockiert, ein gezielt erlaubtes funktioniert, ein öffentliches funktioniert (zusätzlich als
+Opt-in-Test mit echtem Camoufox und Proxy).
 
 ## Dokumentverarbeitung
 

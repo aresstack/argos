@@ -42,17 +42,22 @@ class BatchParallelismMeasurementTest {
             long bodyParallel = run(browser, opener, site, "/slow-body", TABS, TABS);
             long headSequential = run(browser, opener, site, "/slow-head", 1, TABS);
             long headParallel = run(browser, opener, site, "/slow-head", TABS, TABS);
-            long overlapped = bodySequential - bodyParallel;
+            // The sequential runs load all addresses in one reused tab, the parallel runs open TABS tabs: the
+            // parallel run alone pays for opening TABS - 1 more tabs, which says nothing about overlapping.
+            long extraTabs = (TABS - 1) * tabCost[0] / TABS;
+            long overlapped = bodySequential + extraTabs - bodyParallel;
 
             String report = """
                     engine: %s
                     tabs per run: %d, server delay per address: %d ms
-                    no delay (per-tab cost of open/read/close): %5d ms for %d tabs one after the other
-                    of that, bare context.newPage(): %5d ms, page.close(): %5d ms (sum over %d tabs)
+                    no delay (open/read/close, tab reused):     %5d ms for %d addresses one after the other
+                    bare context.newPage(): %5d ms, page.close(): %5d ms (sum over %d blank tabs)
                     delay after commit (slow body):     sequential %5d ms | %d parallel tabs %5d ms | saved %d ms
+                      (counting %d ms for the %d tabs only the parallel run opens)
                     delay before commit (slow headers): sequential %5d ms | %d parallel tabs %5d ms
-                    """.formatted(browser.engine(), TABS, DELAY_MILLIS, overhead, TABS, tabCost[0], tabCost[1], TABS, bodySequential, TABS,
-                    bodyParallel, overlapped, headSequential, TABS, headParallel);
+                    """.formatted(browser.engine(), TABS, DELAY_MILLIS, overhead, TABS, tabCost[0], tabCost[1], TABS,
+                    bodySequential, TABS, bodyParallel, overlapped, extraTabs, TABS - 1, headSequential, TABS,
+                    headParallel);
             Path out = Path.of("build", "reports", "argos");
             Files.createDirectories(out);
             Files.writeString(out.resolve("batch-parallelism-" + browser.engine() + ".txt"), report);

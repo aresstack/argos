@@ -17,7 +17,8 @@ import java.util.Locale;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
- * One extra tab of the existing browser session that loads a single address and is closed again.
+ * One extra tab of the existing browser session that loads a single address and is then closed, or handed back
+ * by {@link #release()} so that a batch can load its next address there.
  *
  * <p>The content is loaded by the browser's own network stack (same cookies, logins, TLS fingerprint and
  * request headers as a user's tab). Nothing is injected into the page: no init scripts, no main-world
@@ -50,20 +51,45 @@ public final class BackgroundTab implements AutoCloseable {
     };
     private final java.util.function.Consumer<Request> onFailed =
             request -> failed.put(request, String.valueOf(request.failure()));
+    /** Main-frame navigation requests of this load (redirect hops, page-triggered navigations). */
+    private final java.util.Set<String> navigated = new java.util.HashSet<>();
+    /**
+     * Only a download of this load's own navigations counts: a reused tab's previous page may have started one
+     * just before it was unloaded, and Firefox announces a download only after the transfer began.
+     */
+    private final java.util.function.Consumer<Download> onDownload = started -> {
+        if (navigated.contains(WebAddress.withoutFragment(started.url()))) download.set(started);
+    };
+    private java.util.function.Consumer<Request> onRequest;
     private Response response;
     private FetchFailure failure;
     private String refusedHop;
     private boolean downloadSettled;
+    /** The navigation committed with a response, whatever its status. */
+    private boolean committed;
     private Page ticker;
 
-    private BackgroundTab(BrowserContext context, String requestedUrl, boolean downloadsCancellable) {
+    private BackgroundTab(BrowserContext context, Page reused, String requestedUrl, boolean downloadsCancellable) {
         this.context = context;
         this.requestedUrl = requestedUrl;
         this.downloadsCancellable = downloadsCancellable;
+        this.tab = reused != null && !reused.isClosed() ? reused : newTab(context);
         // Context level: a download's request may no longer be attributed to the tab.
         context.onRequestFinished(onFinished);
         context.onRequestFailed(onFailed);
-        this.tab = context.newPage();
+    }
+
+    /**
+     * A new tab. Leaving a page later (when the tab is reused) must not stop at a {@code beforeunload} prompt,
+     * which Playwright would dismiss and so cancel the navigation; the handler is not visible to the page.
+     */
+    private static Page newTab(BrowserContext context) {
+        Page page = context.newPage();
+        page.onDialog(dialog -> {
+            if ("beforeunload".equals(dialog.type())) dialog.accept();
+            else dialog.dismiss();
+        });
+        return page;
     }
 
     /**
@@ -76,40 +102,60 @@ public final class BackgroundTab implements AutoCloseable {
      */
     public static BackgroundTab open(BrowserContext context, String url, double commitTimeoutMillis,
                                      UrlPolicy policy, boolean downloadsCancellable) {
-        BackgroundTab opened = new BackgroundTab(context, url, downloadsCancellable);
-        opened.tab.onDownload(opened.download::set);
-        opened.tab.onRequest(request -> {
-            if (opened.refusedHop != null || !request.isNavigationRequest() || request.url().equals(url)
-                    || request.frame() != opened.tab.mainFrame() || policy.permits(request.url())) {
-                return;
-            }
-            opened.refusedHop = request.url();
-            opened.tab.close(); // stop loading; the pending navigation fails and is reported as BLOCKED
-        });
+        return open(context, null, url, commitTimeoutMillis, policy, downloadsCancellable);
+    }
+
+    /**
+     * Like {@link #open(BrowserContext, String, double, UrlPolicy, boolean)}, in {@code reused} (a tab handed back
+     * by {@link #release()}) when it is given and still open. Opening a tab can cost seconds (Camoufox on Windows).
+     */
+    public static BackgroundTab open(BrowserContext context, Page reused, String url, double commitTimeoutMillis,
+                                     UrlPolicy policy, boolean downloadsCancellable) {
+        BackgroundTab opened = new BackgroundTab(context, reused, url, downloadsCancellable);
         try {
-            opened.response = opened.tab.navigate(url, new Page.NavigateOptions()
+            opened.load(url, commitTimeoutMillis, policy);
+        } catch (RuntimeException unexpected) {
+            opened.close(); // the browser went away, say: never leave the tab or its listeners behind
+            throw unexpected;
+        }
+        return opened;
+    }
+
+    private void load(String url, double commitTimeoutMillis, UrlPolicy policy) {
+        navigated.add(WebAddress.withoutFragment(url));
+        tab.onDownload(onDownload);
+        onRequest = request -> {
+            if (!request.isNavigationRequest() || request.frame() != tab.mainFrame()) return;
+            navigated.add(WebAddress.withoutFragment(request.url()));
+            if (refusedHop != null || request.url().equals(url) || policy.permits(request.url())) return;
+            refusedHop = request.url();
+            tab.close(); // stop loading; the pending navigation fails and is reported as BLOCKED
+        };
+        tab.onRequest(onRequest);
+        try {
+            response = tab.navigate(url, new Page.NavigateOptions()
                     .setWaitUntil(WaitUntilState.COMMIT).setTimeout(commitTimeoutMillis));
         } catch (TimeoutError timeout) {
-            opened.failure = new FetchFailure(FetchFailure.Kind.TIMEOUT,
+            failure = new FetchFailure(FetchFailure.Kind.TIMEOUT,
                     "No response within " + Math.round(commitTimeoutMillis / 1000) + " s");
         } catch (PlaywrightException error) {
             // A navigation that turns into a download is aborted; the download event may arrive just after.
-            if (!opened.awaitDownloadEvent()) {
-                opened.failure = new FetchFailure(FetchFailure.Kind.FAILED, navigationError(error));
+            if (!awaitDownloadEvent()) {
+                failure = new FetchFailure(FetchFailure.Kind.FAILED, navigationError(error));
             }
         }
         // Only a loaded page or download has a final address; error pages (chrome-error:, about:neterror) do not.
-        if (opened.refusedHop == null && opened.failure == null && !opened.tab.isClosed()
-                && !policy.permits(opened.finalUrl())) {
-            opened.refusedHop = opened.finalUrl();
+        if (refusedHop == null && failure == null && !tab.isClosed()
+                && !policy.permits(finalUrl())) {
+            refusedHop = finalUrl();
         }
-        if (opened.refusedHop != null) {
-            opened.failure = new FetchFailure(FetchFailure.Kind.BLOCKED, "Redirected to an address the URL policy "
-                    + "does not allow: " + WebAddress.redacted(opened.refusedHop));
-        } else if (opened.failure == null && opened.download.get() == null && opened.response != null) {
-            opened.failure = FetchFailure.forHttpStatus(opened.response.status());
+        if (refusedHop != null) {
+            failure = new FetchFailure(FetchFailure.Kind.BLOCKED, "Redirected to an address the URL policy "
+                    + "does not allow: " + WebAddress.redacted(refusedHop));
+        } else if (failure == null && download.get() == null && response != null) {
+            failure = FetchFailure.forHttpStatus(response.status());
+            committed = true; // an error status is still a loaded page
         }
-        return opened;
     }
 
     private boolean awaitDownloadEvent() {
@@ -334,9 +380,37 @@ public final class BackgroundTab implements AutoCloseable {
         return "Navigation failed: " + (at < 0 ? message : message.substring(0, at)).trim();
     }
 
-    /** Closes the tab and discards the browser's temporary download file. Never fails. */
-    @Override
-    public void close() {
+    /**
+     * Ends this load and hands the tab back for the next address instead of closing it, when that is safe: the
+     * tab is open, its navigation committed or became a finished download, and nothing was refused. The page of
+     * this address is unloaded first ({@code about:blank}, no network request), so its scripts cannot start a
+     * download or navigation that would be credited to the next address, and the next address is always a new
+     * document (never a same-document fragment navigation). Otherwise the tab is closed and {@code null}
+     * returned. The caller closes a returned tab when it has no further use.
+     */
+    public Page release() {
+        boolean reusable = !tab.isClosed() && refusedHop == null
+                && (failure == null || committed)
+                && (download.get() == null || downloadSettled);
+        if (!reusable) {
+            close();
+            return null;
+        }
+        detach();
+        try {
+            tab.offDownload(onDownload);
+            if (onRequest != null) tab.offRequest(onRequest);
+            tab.navigate("about:blank", new Page.NavigateOptions()
+                    .setWaitUntil(WaitUntilState.COMMIT).setTimeout(5_000));
+            return tab;
+        } catch (PlaywrightException notUnloaded) {
+            close();
+            return null;
+        }
+    }
+
+    /** Context listeners, the helper tab and a settled download file; the tab itself stays. */
+    private void detach() {
         context.offRequestFinished(onFinished);
         context.offRequestFailed(onFailed);
         Download file = download.get();
@@ -347,6 +421,12 @@ public final class BackgroundTab implements AutoCloseable {
         } catch (PlaywrightException ignored) {
             // The browser may already be gone.
         }
+    }
+
+    /** Closes the tab and discards the browser's temporary download file. Never fails. */
+    @Override
+    public void close() {
+        detach();
         try {
             if (!tab.isClosed()) tab.close();
         } catch (PlaywrightException ignored) {

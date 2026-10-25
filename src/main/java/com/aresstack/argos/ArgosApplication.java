@@ -9,6 +9,12 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.eclipse.jetty.ee10.servlet.ServletContextHandler;
 import org.eclipse.jetty.ee10.servlet.ServletHolder;
+import org.eclipse.jetty.ee10.servlet.FilterHolder;
+import jakarta.servlet.DispatcherType;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+import java.util.EnumSet;
+import java.util.Map;
 import org.eclipse.jetty.server.Server;
 
 import java.io.IOException;
@@ -47,7 +53,12 @@ public final class ArgosApplication {
         ServletHolder mcpServlet = new ServletHolder(transport);
         mcpServlet.setAsyncSupported(true);
         context.addServlet(mcpServlet, "/mcp");
+        FilterHolder authorization = new FilterHolder(new ArgosMcpAuthorizationFilter(config));
+        authorization.setAsyncSupported(true);
+        context.addFilter(authorization, "/mcp", EnumSet.of(DispatcherType.REQUEST, DispatcherType.ASYNC));
         context.addServlet(new ServletHolder(new HealthServlet()), "/health");
+        context.addServlet(new ServletHolder(new ProtectedResourceServlet(config)),
+                "/.well-known/oauth-protected-resource");
         server.setHandler(context);
         Runtime.getRuntime().addShutdownHook(Thread.ofPlatform().name("argos-shutdown").unstarted(() -> {
             try {
@@ -64,6 +75,29 @@ public final class ArgosApplication {
                 + ((org.eclipse.jetty.server.ServerConnector) server.getConnectors()[0]).getLocalPort()
                 + "/mcp (health: /health)");
         server.join();
+    }
+
+    static final class ProtectedResourceServlet extends HttpServlet {
+        private final byte[] metadata;
+
+        ProtectedResourceServlet(ArgosConfig config) throws IOException {
+            Map<String, Object> data = new java.util.LinkedHashMap<>();
+            if (config.publicOrigin() != null) {
+                data.put("resource", config.publicOrigin() + "/");
+                data.put("authorization_servers", java.util.List.of(config.centralOauthIssuer() == null
+                        ? config.publicOrigin() : config.centralOauthIssuer()));
+                data.put("scopes_supported", java.util.List.of(config.requiredScope()));
+                data.put("bearer_methods_supported", java.util.List.of("header"));
+            }
+            metadata = new ObjectMapper().writeValueAsBytes(data);
+        }
+
+        @Override
+        protected void doGet(HttpServletRequest request, HttpServletResponse response) throws IOException {
+            response.setStatus(HttpServletResponse.SC_OK);
+            response.setContentType("application/json; charset=utf-8");
+            response.getOutputStream().write(metadata);
+        }
     }
 
     static final class HealthServlet extends HttpServlet {

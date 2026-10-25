@@ -8,7 +8,9 @@ if (-not (Test-Path $java)) { throw 'Set JAVA_HOME to a Java 21 installation.' }
 $artifact = Join-Path $project 'build/libs/argos.jar'
 if (-not (Test-Path $artifact)) { throw 'Standalone Argos JAR missing. Run gradlew bootJar first.' }
 
-$work = Join-Path $project ('build/standalone-smoke-' + [guid]::NewGuid().ToString('N'))
+$smokeRoot = if ($env:ARGOS_SMOKE_ROOT) { $env:ARGOS_SMOKE_ROOT } else { Join-Path $project 'build' }
+New-Item -ItemType Directory -Force -Path $smokeRoot | Out-Null
+$work = Join-Path $smokeRoot ('standalone-smoke-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Force -Path $work | Out-Null
 Copy-Item $artifact (Join-Path $work 'argos.jar')
 if (Test-Path (Join-Path $work 'lib')) { throw 'The smoke must not use external lib/ files.' }
@@ -17,7 +19,8 @@ $portListener = [System.Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback,
 $portListener.Start()
 $port = $portListener.LocalEndpoint.Port
 $portListener.Stop()
-$env:ARGOS_PORT = [string]$port
+$env:SERVER_PORT = [string]$port
+$env:SECURITY_MODE = 'none' # isolated loopback smoke test only; production uses central-oauth
 $env:ARGOS_PROFILE_DIR = Join-Path $work 'profile'
 $env:ARGOS_HEADLESS = 'true'
 $backend = $null

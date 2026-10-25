@@ -32,10 +32,13 @@ dependencies {
         exclude group: 'com.microsoft.playwright', module: 'driver-bundle'
     }
     implementation 'io.modelcontextprotocol.sdk:mcp:0.18.4'
+    // Same central OAuth JWT verification library used by Pyloros.
+    implementation 'com.aresstack:anauthentia-jwt:0.1.0'
     implementation 'org.eclipse.jetty:jetty-server:12.0.16'
     implementation 'org.eclipse.jetty.ee10:jetty-ee10-servlet:12.0.16'
     implementation 'org.slf4j:slf4j-simple:2.0.16'
     testImplementation 'org.junit.jupiter:junit-jupiter:5.13.1'
+    testImplementation 'org.mockito:mockito-core:5.15.2'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher:1.13.1'
 }
 
@@ -45,6 +48,9 @@ tasks.withType(JavaCompile).configureEach { options.encoding = 'UTF-8' }
 tasks.named('test') {
     useJUnitPlatform()
     systemProperty 'argos.testCamoufox', providers.gradleProperty('testCamoufox').orElse('false').get()
+    // Test-only environment. Production must receive SERVER_PORT from the managed service.
+    environment 'SERVER_PORT', '18098'
+    environment 'SECURITY_MODE', 'none'
 }
 // The managed webserver starts one executable JAR, never an external lib/ tree.
 // Spring Boot's nested-JAR launcher preserves GraalJS and Playwright4J JAR

@@ -13,7 +13,7 @@ ChatGPT / MCP-Client
 AresStack Webserver (Caddy-Reverse-Proxy)
        │ HTTP nur nach 127.0.0.1
        ▼
-Argos :8082 ─── GET /health
+Argos :SERVER_PORT ─── GET /health
        └─────── /mcp (offizieller MCP Java SDK Streamable HTTP)
                    │
                    ▼
@@ -52,7 +52,11 @@ Eigenständige Konfiguration über `~/.argos/argos.properties`:
 
 ```properties
 server.host=127.0.0.1
-server.port=8082
+server.port=8085
+security.mode=central-oauth
+public.origin=https://argos.aresstack.de
+oauth.central-issuer=https://argos.aresstack.de
+security.required-scope=argos
 camoufox.executable=G:/camoufox-bidi-smoke-20261025/browser/camoufox.exe
 camoufox.launchOptions=G:/camoufox-bidi-smoke-20261025/cmp/launch.json
 browser.profile=C:/Users/USERNAME/.argos/profiles/default
@@ -61,7 +65,19 @@ browser.headless=false
 
 Die angegebenen Dateipfade sind Beispiele aus der isolierten Testinstallation und sind nicht Teil des Git-Repositories.
 
-Alternativ unterstützt Argos die Umgebungsvariablen `ARGOS_PORT`, `ARGOS_HOST` (nur Loopback), `ARGOS_CAMOUFOX_EXECUTABLE`, `ARGOS_CAMOUFOX_LAUNCH_OPTIONS`, `ARGOS_PROFILE_DIR` und `ARGOS_HEADLESS`.
+**Im AresStack Webserver haben die Umgebungsvariablen Vorrang vor den Properties.** Pflichtfeld ist `SERVER_PORT`; Argos besitzt **keinen fest einprogrammierten Standardport**. Wie bei Pyloros werden `SERVER_PORT`, `SERVER_HOST` (optional, nur Loopback), `SECURITY_MODE`, `REQUIRED_SCOPE`, `PUBLIC_ORIGIN` und `CENTRAL_OAUTH_ISSUER` ausgewertet. Für den Camoufox-Browser bleiben zusätzlich `ARGOS_CAMOUFOX_EXECUTABLE`, `ARGOS_CAMOUFOX_LAUNCH_OPTIONS`, `ARGOS_PROFILE_DIR` und `ARGOS_HEADLESS` verfügbar.
+
+Die bereits angelegten Webserver-Variablen für Argos sind:
+
+| Variable | Wert |
+| --- | --- |
+| `SERVER_PORT` | `8085` |
+| `SECURITY_MODE` | `central-oauth` |
+| `REQUIRED_SCOPE` | `argos` |
+| `PUBLIC_ORIGIN` | `https://argos.aresstack.de` |
+| `CENTRAL_OAUTH_ISSUER` | `https://argos.aresstack.de` |
+
+`central-oauth` ist der sichere Standard und benötigt die beiden HTTPS-Origins. Argos validiert eingehende JWTs selbst mit der **AnAuthentia**-Bibliothek (Signatur aus JWKS, Issuer, Audience, Ablaufdatum und Scope). `/.well-known/oauth-protected-resource` ist ohne Token erreichbar und verweist auf den zentralen Issuer. `/health` bleibt lokal ohne Token erreichbar; `/mcp` verlangt ein gültiges Bearer-Token mit Scope `argos`. Nur mit ausdrücklich gesetztem `SECURITY_MODE=none` sind lokale MCP-Tests ohne JWT möglich. Dieser Modus darf nicht im öffentlich angebundenen Webserver aktiviert werden.
 
 Start:
 
@@ -69,7 +85,7 @@ Start:
 java -jar .\build\package\argos.jar
 ```
 
-Prüfen: `http://127.0.0.1:8082/health`, MCP: `http://127.0.0.1:8082/mcp`.
+Prüfen bei der gezeigten Konfiguration: `http://127.0.0.1:8085/health`, MCP: `http://127.0.0.1:8085/mcp`.
 
 ## AresStack Webserver – Managed JAR
 
@@ -77,10 +93,10 @@ Prüfen: `http://127.0.0.1:8082/health`, MCP: `http://127.0.0.1:8082/mcp`.
 - **Working directory:** Beliebiges Arbeitsverzeichnis für Argos; `argos.jar` benötigt kein externes `lib/`.
 - **Java executable:** Java 21.
 - **Start automatically / Restart automatically:** optional einschalten.
-- **Health check:** `http://127.0.0.1:8082/health`.
-- **Forward to:** `127.0.0.1:8082`, inkl. dem Pfad `/mcp`.
+- **Health check:** `http://127.0.0.1:8085/health` (entspricht `SERVER_PORT`).
+- **Forward to:** `127.0.0.1:8085`, inkl. dem Pfad `/mcp` (entspricht `SERVER_PORT`).
 
-Die öffentliche Adresse wird ausschließlich im AresStack Webserver konfiguriert. Argos selbst bietet **keine eigene öffentliche Anmeldung**: Der AresStack-Webserver muss den externen MCP-Zugang mittels seiner zentralen OAuth/JWT-Prüfung schützen. **Niemals `/mcp` ohne Authentifizierung ins Internet veröffentlichen.** Argos bindet sich absichtlich nur an `127.0.0.1` oder `::1`.
+Die öffentliche Adresse und zentrale OAuth-JWT-Ausstellung erfolgen im AresStack Webserver. Argos verwendet dieselbe Signatur- und Scope-Prüfung wie Pyloros, führt jedoch **keine eigenen OAuth-Anmeldeseiten** aus. Ein nicht validiertes Bearer-Token wird mit HTTP 401 zurückgewiesen. **Niemals mit `SECURITY_MODE=none` öffentlich veröffentlichen.** Argos bindet sich nur an `127.0.0.1` oder `::1`.
 
 ## MCP-Werkzeuge
 

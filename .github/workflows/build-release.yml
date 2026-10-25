@@ -70,7 +70,7 @@ jobs:
           test ! -e build/package/lib
           unzip -l build/distributions/argos-package.zip | grep -q 'argos.jar'
           java -jar build/package/argos.jar --verify-runtime | grep -F ARGOS_RUNTIME_OK
-          ARGOS_PORT=18082 java -jar build/package/argos.jar > "$RUNNER_TEMP/argos.log" 2>&1 &
+          SERVER_PORT=18082 SECURITY_MODE=none java -jar build/package/argos.jar > "$RUNNER_TEMP/argos.log" 2>&1 &
           ARGOS_PID=$!
           trap 'kill "$ARGOS_PID" 2>/dev/null || true' EXIT
           for attempt in $(seq 1 30); do
@@ -125,7 +125,8 @@ jobs:
           if (Test-Path 'argos/lib') { throw 'Standalone JAR must not need an external lib directory' }
           & java -jar 'argos/argos.jar' --verify-runtime
           if ($LASTEXITCODE -ne 0) { throw 'Playwright4J driver subprocess failed from standalone JAR' }
-          $env:ARGOS_PORT = '18082'
+          $env:SERVER_PORT = '18082'
+          $env:SECURITY_MODE = 'none' # CI tests the unauthenticated loopback path separately
           $workdir = (Resolve-Path 'argos').Path
           $proc = Start-Process -FilePath 'java' -ArgumentList @('-jar', 'argos.jar') -WorkingDirectory $workdir -PassThru -RedirectStandardOutput 'argos.stdout.log' -RedirectStandardError 'argos.stderr.log'
           try {

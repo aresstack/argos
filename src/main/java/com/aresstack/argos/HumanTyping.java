@@ -2,6 +2,7 @@ package com.aresstack.argos;
 
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.random.RandomGenerator;
@@ -103,7 +104,8 @@ final class HumanTyping {
         /** When the next key goes down. */
         long time;
         long lastUp;
-        String lastKey;
+        /** When each key was last released: the same key cannot go down again while it is still held. */
+        final Map<String, Long> releases = new HashMap<>();
         boolean shiftHeld;
 
         void add(Kind kind, String key, long at) {
@@ -131,13 +133,14 @@ final class HumanTyping {
                 time = Math.max(time, lastUp + 20);
             }
             // Roll-over only between different keys of the same Shift state.
-            boolean rollover = !off() && !shiftChange && layout && !key.equals(lastKey);
+            boolean rollover = !off() && !shiftChange && layout;
             if (!rollover) time = Math.max(time, lastUp + 5);
+            time = Math.max(time, releases.getOrDefault(key, -5L) + 5);
             long hold = hold();
             add(Kind.DOWN, key, time, layout);
             add(Kind.UP, key, time + hold, layout);
             lastUp = Math.max(lastUp, time + hold);
-            lastKey = key;
+            releases.put(key, time + hold);
         }
 
         void releaseShift() {
@@ -209,14 +212,16 @@ final class HumanTyping {
     static String keyName(int codePoint) {
         return switch (codePoint) {
             case '\n', '\r' -> "Enter";
-            case '\t' -> "Tab";
             default -> new String(Character.toChars(codePoint));
         };
     }
 
-    /** Characters of the US layout, which Playwright sends as real keys. */
+    /**
+     * Characters of the US layout, which Playwright sends as real keys. A tab is not among them: as a key it would
+     * move the focus to the next control instead of entering a tab character.
+     */
     static boolean inLayout(int codePoint) {
-        return codePoint >= 0x20 && codePoint <= 0x7e || codePoint == '\n' || codePoint == '\r' || codePoint == '\t';
+        return codePoint >= 0x20 && codePoint <= 0x7e || codePoint == '\n' || codePoint == '\r';
     }
 
     static boolean shifted(int codePoint) {

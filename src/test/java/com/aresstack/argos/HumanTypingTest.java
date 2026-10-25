@@ -39,6 +39,16 @@ class HumanTypingTest {
         }
     }
 
+    @Test void aKeyIsNeverPressedAgainWhileItIsStillHeld() {
+        for (long seed = 1; seed <= 5000; seed++) {
+            Set<String> held = new HashSet<>();
+            for (HumanTyping.KeyEvent event : typing(seed).type("abab aba")) {
+                if (event.kind() == HumanTyping.Kind.DOWN) assertTrue(held.add(event.key()), "seed " + seed + " " + event);
+                else held.remove(event.key());
+            }
+        }
+    }
+
     @Test void shiftIsHeldExactlyAroundShiftedCharacters() {
         for (long seed = 1; seed <= 20; seed++) {
             boolean shift = false;

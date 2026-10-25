@@ -269,9 +269,9 @@ final class RealInput {
 
     /** Known before the first key: this Playwright refuses non-US characters and the policy forbids the fallback. */
     private void rejectUntypeable(String text) {
-        if (!Boolean.FALSE.equals(unicodeKeys) || settings.unicode() == HumanInputSettings.UnicodePolicy.INSERT) {
-            return;
-        }
+        if (settings.unicode() == HumanInputSettings.UnicodePolicy.INSERT) return;
+        if (text.indexOf('\t') >= 0) throw untypeable('\t', false);
+        if (!Boolean.FALSE.equals(unicodeKeys)) return;
         String checked = settings.unicode() == HumanInputSettings.UnicodePolicy.TRANSLITERATE
                 ? HumanTyping.transliterate(text) : text;
         checked.codePoints().filter(c -> !HumanTyping.inLayout(c)).findFirst()
@@ -292,7 +292,8 @@ final class RealInput {
                 pressed.remove(key);
                 continue;
             }
-            if (!event.layout() && Boolean.FALSE.equals(unicodeKeys)) {
+            // A tab key would leave the field; a tab character can only be inserted.
+            if (!event.layout() && (Boolean.FALSE.equals(unicodeKeys) || "\t".equals(key))) {
                 if (settings.unicode() != HumanInputSettings.UnicodePolicy.INSERT) {
                     throw takeBack(device, pressed, typed, key);
                 }
@@ -318,7 +319,7 @@ final class RealInput {
             pressed.add(key);
             if (!countText) continue;
             if ("Backspace".equals(key)) typed = Math.max(0, typed - 1);
-            else if (key.codePointCount(0, key.length()) == 1) typed++;
+            else if ("Enter".equals(key) || key.codePointCount(0, key.length()) == 1) typed++;
         }
     }
 
@@ -330,6 +331,10 @@ final class RealInput {
     }
 
     private static IllegalStateException untypeable(int codePoint, boolean erased) {
+        if (codePoint == '\t') {
+            return new IllegalStateException("Cannot type a tab character as a real key: the Tab key would move the"
+                    + " focus to the next control. Remove it, or set ARGOS_INPUT_UNICODE=insert (visible to the page).");
+        }
         return new IllegalStateException("Cannot type '" + new String(Character.toChars(codePoint))
                 + "' as a real key: Playwright Core sends characters outside the US layout only through a page"
                 + " script (playwright4j#36)." + (erased ? " The text typed so far was erased." : "")

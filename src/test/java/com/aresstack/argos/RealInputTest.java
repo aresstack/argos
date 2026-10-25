@@ -63,6 +63,24 @@ class RealInputTest {
         assertTrue(second.calls.isEmpty(), "known refusal is reported before the first key");
     }
 
+    @Test void strictRollbackAlsoErasesLineBreaks() {
+        RecordingDevice device = new RecordingDevice(false);
+        assertThrows(IllegalStateException.class,
+                () -> input(HumanInputSettings.UnicodePolicy.STRICT).type(device, "a\nbä"));
+        assertEquals(3, device.count("keyDown Backspace"), device.calls.toString());
+    }
+
+    @Test void tabsAreRejectedBeforeTheFirstKeyUnlessInsertIsAllowed() {
+        RecordingDevice device = new RecordingDevice(true);
+        assertThrows(IllegalStateException.class,
+                () -> input(HumanInputSettings.UnicodePolicy.STRICT).type(device, "a\tb"));
+        assertTrue(device.calls.isEmpty(), device.calls.toString());
+        RecordingDevice inserting = new RecordingDevice(true);
+        input(HumanInputSettings.UnicodePolicy.INSERT).type(inserting, "a\tb");
+        assertEquals(1, inserting.count("insertText \t"));
+        assertEquals(0, inserting.count("keyDown \t"));
+    }
+
     @Test void insertPolicyFallsBackToPlaywrightsInsertText() {
         RecordingDevice device = new RecordingDevice(false);
         input(HumanInputSettings.UnicodePolicy.INSERT).type(device, "aä");

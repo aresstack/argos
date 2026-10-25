@@ -1,0 +1,72 @@
+plugins {
+    id 'java'
+    id 'application'
+}
+
+group = 'com.aresstack'
+version = '0.1.0-SNAPSHOT'
+
+java {
+    toolchain { languageVersion = JavaLanguageVersion.of(21) }
+}
+
+repositories {
+    mavenLocal()
+    mavenCentral()
+}
+
+// The Java Playwright API must use Playwright4J's GraalJS driver, never Node's driver.
+configurations.configureEach {
+    exclude group: 'com.microsoft.playwright', module: 'driver'
+    exclude group: 'com.microsoft.playwright', module: 'driver-bundle'
+}
+
+dependencies {
+    implementation 'com.aresstack:playwright4j:0.2.2-SNAPSHOT'
+    implementation('com.microsoft.playwright:playwright:1.62.0') {
+        exclude group: 'com.microsoft.playwright', module: 'driver'
+        exclude group: 'com.microsoft.playwright', module: 'driver-bundle'
+    }
+    implementation 'io.modelcontextprotocol.sdk:mcp:0.18.4'
+    implementation 'org.eclipse.jetty:jetty-server:12.0.16'
+    implementation 'org.eclipse.jetty.ee10:jetty-ee10-servlet:12.0.16'
+    implementation 'org.slf4j:slf4j-simple:2.0.16'
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.13.1'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher:1.13.1'
+}
+
+application { mainClass = 'com.aresstack.argos.ArgosApplication' }
+
+tasks.withType(JavaCompile).configureEach { options.encoding = 'UTF-8' }
+tasks.named('test') {
+    useJUnitPlatform()
+    systemProperty 'argos.testCamoufox', providers.gradleProperty('testCamoufox').orElse('false').get()
+}
+// Keep original GraalJS / Truffle multi-release JARs intact, as Playwright4J requires.
+def runtimeJars = providers.provider {
+    configurations.runtimeClasspath.files
+        .findAll { it.name.endsWith('.jar') }
+        .sort { a, b -> a.name <=> b.name }
+}
+
+tasks.named('jar') {
+    archiveFileName = 'argos.jar'
+    manifest {
+        attributes('Main-Class': application.mainClass.get(),
+                   'Class-Path': runtimeJars.get().collect { 'lib/' + it.name }.join(' '))
+    }
+}
+
+tasks.register('packageArgos', Sync) {
+    dependsOn tasks.named('jar')
+    into layout.buildDirectory.dir('package')
+    from(tasks.named('jar'))
+    from(runtimeJars) { into 'lib' }
+}
+
+tasks.register('argosZip', Zip) {
+    dependsOn tasks.named('packageArgos')
+    archiveFileName = 'argos-package.zip'
+    destinationDirectory = layout.buildDirectory.dir('distributions')
+    from(layout.buildDirectory.dir('package'))
+}

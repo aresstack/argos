@@ -151,7 +151,11 @@ public final class CamoufoxBrowser implements AutoCloseable {
             }
             record("response", response.request().method(), response.url(), response.status());
         });
-        current.onRequestFinished(request -> activity.ended());
+        current.onRequestFinished(request -> {
+            activity.ended();
+            MainDocument main = mainDocument;
+            if (main != null && main.isFor(request)) main.finished = true;
+        });
         current.onRequestFailed(request -> {
             activity.ended();
             record("failed", request.method(), request.url(), 0);
@@ -208,7 +212,11 @@ public final class CamoufoxBrowser implements AutoCloseable {
                 mainDocument = previousDocument; // the previous page stays rendered
                 return downloadResult(target, download);
             }
-            if (response != null && isMainDocument(p, response.request())) mainDocument = new MainDocument(response);
+            // Keep the listener's instance: it may already carry the requestfinished flag.
+            if (response != null && isMainDocument(p, response.request())
+                    && (mainDocument == null || !mainDocument.isFor(response.request()))) {
+                mainDocument = new MainDocument(response);
+            }
             ReadinessReport readiness = settle(p, policy, null);
             Map<String, Object> result = new LinkedHashMap<>();
             result.put("url", p.url());
@@ -337,6 +345,8 @@ public final class CamoufoxBrowser implements AutoCloseable {
         private final int status;
         private final String contentType;
         private final boolean attachment;
+        /** Set from the protocol's requestfinished event (driver thread). */
+        boolean finished;
         private Optional<String> body;
 
         MainDocument(Response response) {
@@ -353,9 +363,18 @@ public final class CamoufoxBrowser implements AutoCloseable {
         String contentType() { return contentType; }
         boolean attachment() { return attachment; }
 
-        /** Response bodies travel over the protocol; the page cannot observe this read. */
+        boolean isFor(Request request) {
+            return response.request() == request;
+        }
+
+        /**
+         * Response bodies travel over the protocol; the page cannot observe this read. Only a finished
+         * response is read: asking for an unfinished (streaming or stalled) body would block the single
+         * driver thread.
+         */
         Optional<String> body() {
             if (body != null) return body;
+            if (!finished) return Optional.empty(); // fall back to the DOM; a later read may get the body
             try {
                 String length = response.headerValue("content-length");
                 if (length != null && Long.parseLong(length.trim()) > MAX_SOURCE_BYTES) return body = Optional.empty();

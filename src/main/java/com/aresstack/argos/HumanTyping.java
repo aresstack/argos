@@ -224,8 +224,9 @@ final class HumanTyping {
         return codePoint >= 0x20 && codePoint <= 0x7e || codePoint == '\n' || codePoint == '\r';
     }
 
+    /** Capitals (also Ä, Ö, Ü once Playwright sends them as real keys) and the shifted US symbols. */
     static boolean shifted(int codePoint) {
-        return codePoint >= 'A' && codePoint <= 'Z' || SHIFTED_SYMBOLS.indexOf(codePoint) >= 0;
+        return Character.isUpperCase(codePoint) || SHIFTED_SYMBOLS.indexOf(codePoint) >= 0;
     }
 
     private static boolean isLetter(int codePoint) {

@@ -144,9 +144,30 @@ Der Login allein ist **keine** Discovery-Abnahme. Nach erfolgreicher OAuth-Verbi
 | `browser_evaluate` | JavaScript in der Webseite ausführen |
 | `browser_screenshot` | Screenshot als MCP-Image zurückgeben |
 | `browser_network` | Letzte HTTP-Requests, Responses und Fehler untersuchen |
-| `web_search` | Websuche (DuckDuckGo → Bing → Google), nummerierte Treffer mit Titel, URL und Snippet |
 
 `browser_network` entfernt Query-Parameter und Benutzerinformationen aus den protokollierten URLs. Bis zu 200 Ereignisse bleiben im Speicher. `browser_evaluate` kann Webseiten verändern und ist deshalb nur für ausdrücklich autorisierte Nutzer über das gesicherte MCP-Plugin bestimmt.
+
+### Werkzeugprofile
+
+Welche Werkzeuge Argos veröffentlicht, bestimmt `ARGOS_TOOL_PROFILE` (Property `tools.profile`):
+
+| Profil | Werkzeuge | Gedacht für |
+| --- | --- | --- |
+| `legacy` (Standard) | die neun `browser_*`-Werkzeuge oben | bestehende Clients, unverändert |
+| `compact` | nur `web_search`, `web_open`, `web_read`, `web_links`, `web_follow`, `web_back` | kleine lokale Modelle (wie in AskAI erprobt) |
+| `expert` | `web_*` und `browser_*` (wird um Tabs, Extraktion, Netzwerk usw. erweitert) | leistungsfähige Modelle |
+
+Die `web_*`-Werkzeuge haben höchstens einen Parameter, Beispiele in der Beschreibung und antworten mit kurzem Klartext statt JSON:
+
+```text
+web_open url="https://example.org/"   → URL, TITLE, LINKS: 12, Seitentext (lange Seiten in Teilen: web_read part=2)
+web_links                              → link-1: Text — https://…   (IDs bleiben auf derselben Seite stabil)
+web_follow link_id="link-3"            → öffnet den Link als echte Navigation mit Referer, ohne Seitenskript
+web_back                               → vorherige Seite
+web_search query="…"                   → 1: Titel — URL (Treffer sind mit web_follow link_id="1" aufrufbar)
+```
+
+Gelesen wird über Playwrights isolierte Utility-Welt (`content()`, `innerText()`); die Links werden in Java aus dem serialisierten DOM gewonnen. Es wird kein für die Seite sichtbares Skript eingeschleust. `web_*` öffnet keine Loopback-, privaten, Link-Local-, IPv6-ULA- oder CGNAT-Adressen und verwirft Seiten, die per Weiterleitung auf solchen Adressen landen; für lokale Tests lässt `ARGOS_ALLOW_PRIVATE_NETWORKS=true` (Property `browser.allow-private-networks`) sie zu.
 
 `web_search` liest Suchergebnisseiten ausschließlich über `page.content()` (isolierte Playwright-Welt) und analysiert sie in der JVM; Consent-Banner werden per echter Mausbewegung über WebDriver BiDi angeklickt. Konfiguration: `ARGOS_SEARCH_ENGINES` (Reihenfolge, Standard `duckduckgo,bing,google`) und `ARGOS_SEARCH_MAX_RESULTS` (Standard 10). Details: [docs/web-search.md](docs/web-search.md).
 

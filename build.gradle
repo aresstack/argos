@@ -54,6 +54,10 @@ tasks.named('test') {
     useJUnitPlatform()
     systemProperty 'argos.testCamoufox', providers.gradleProperty('testCamoufox').orElse('false').get()
     systemProperty 'argos.testHumanBrowser', providers.gradleProperty('testHumanBrowser').orElse('').get()
+    // Unicode input test: must Playwright4J type umlauts as trusted keys? Defaults to true when Playwright4J is built
+    // from -Pplaywright4jSource (a fix under test), so a refusal fails the run instead of passing as fail-closed.
+    systemProperty 'argos.expectUnicodeKeys', providers.gradleProperty('expectUnicodeKeys')
+            .orElse(providers.gradleProperty('playwright4jSource').map { 'true' }).orElse('false').get()
     // Optional: engine-independent background-tab and batch tests against a local Chromium binary
     // (e.g. -PtestChromium=/path/to/chrome) where no Camoufox is installed. Production uses Camoufox only.
     systemProperty 'argos.testChromium', providers.gradleProperty('testChromium').orElse('').get()

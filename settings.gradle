@@ -1,1 +1,8 @@
 rootProject.name = 'argos'
+
+// -Pplaywright4jSource=<path to a playwright4j checkout>: build com.aresstack:playwright4j from that source, e.g. the
+// head of a Playwright4J pull request, instead of the 0.2.2-SNAPSHOT in Maven Local. Without it nothing changes.
+def playwright4jSource = startParameter.projectProperties['playwright4jSource']
+if (playwright4jSource) {
+    includeBuild(playwright4jSource)
+}

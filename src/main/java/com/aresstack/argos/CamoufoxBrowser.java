@@ -220,6 +220,11 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
         }
     }
 
+    /** How umlauts and other non-US characters are typed, as probed at browser start (UNKNOWN before). */
+    RealInput.UnicodeKeys unicodeInput() {
+        return input.unicodeKeys();
+    }
+
     /** Probes real Unicode keys on a blank tab before any website is opened. */
     private void probeUnicode() {
         Optional<Page> blank = context.pages().stream()

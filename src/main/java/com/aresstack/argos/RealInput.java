@@ -7,7 +7,6 @@ import com.microsoft.playwright.PlaywrightException;
 import com.microsoft.playwright.options.BoundingBox;
 
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -39,10 +38,36 @@ final class RealInput {
               const hit = document.elementFromPoint(x, y);
               return !!hit && (hit === element || element.contains(hit) || hit.control === element);
             }""";
+    /** "multi" for text areas and editable content, "single" for one-line inputs, "" when not editable. */
     private static final String EDITABLE = """
-            element => element.isContentEditable
-              || (/^(INPUT|TEXTAREA)$/.test(element.tagName) && !element.disabled && !element.readOnly
-                  && !/^(button|checkbox|radio|submit|reset|file|image|range|color|hidden)$/i.test(element.type || ''))""";
+            element => element.isContentEditable || (element.tagName === 'TEXTAREA' && !element.disabled
+                  && !element.readOnly) ? 'multi'
+              : element.tagName === 'INPUT' && !element.disabled && !element.readOnly
+                  && !/^(button|checkbox|radio|submit|reset|file|image|range|color|hidden)$/i.test(element.type || '')
+                ? 'single' : ''""";
+    /** Our own probe page, never a website: records what its text area receives in the title. */
+    private static final String PROBE_PAGE = """
+            <html><head><title></title></head><body><textarea autofocus></textarea><script>
+              const seen = [];
+              for (const type of ['keydown', 'keyup', 'input'])
+                document.querySelector('textarea').addEventListener(type,
+                  e => { seen.push(type + ':' + (e.key || e.data) + ':' + e.isTrusted); document.title = seen.join(' '); });
+            </script></body></html>""";
+
+    /** How characters outside the US layout reach the page as real keys, if at all. */
+    enum UnicodeKeys {
+        /** Not probed yet: such text is refused before the first key, fail closed. */
+        UNKNOWN,
+        /** {@code keyboard.down("ä")} sends a real key. */
+        KEY_NAMES,
+        /**
+         * {@code keyboard.insertText("ä")} sends a real keyDown/keyUp through WebDriver BiDi instead of Playwright's
+         * page script (Playwright4J with aresstack/playwright4j#59); key names are still refused.
+         */
+        TEXT_AS_KEYS,
+        /** Only the page-visible script fallback exists (Playwright Core 1.62, playwright4j#36). */
+        NONE
+    }
 
     private final HumanInputSettings settings;
     private final HumanMotion motion;
@@ -50,11 +75,8 @@ final class RealInput {
     /** Where the pointer of each tab was left: BiDi keeps one input state per browsing context. */
     private final Map<Page, HumanMotion.Point> pointers = new WeakHashMap<>();
     private HumanMotion.Box viewport;
-    /**
-     * Whether Playwright sends characters outside the US layout as real keys: probed once at browser start on a
-     * blank page. Until then (null) such text is refused before the first key, fail closed.
-     */
-    private Boolean unicodeKeys;
+    /** Whether and how Playwright sends characters outside the US layout as real keys; probed at browser start. */
+    private UnicodeKeys unicodeKeys = UnicodeKeys.UNKNOWN;
 
     RealInput(HumanInputSettings settings) {
         this.settings = settings;
@@ -69,22 +91,43 @@ final class RealInput {
 
     /**
      * Finds out once, before any website is loaded, whether this Playwright sends {@code ä} as a real key. Playwright
-     * Core 1.62 refuses it before anything reaches the browser (playwright4j#36); a version that accepts it sends a
-     * genuine keyDown/keyUp to the blank page, where it has no effect.
+     * Core 1.62 refuses the key name before anything reaches the browser (playwright4j#36); a version that accepts it
+     * sends a genuine keyDown/keyUp to the blank page, where it has no effect. Otherwise our own probe page (no
+     * website, nothing of it survives) checks whether {@code insertText} arrives as trusted key events
+     * (playwright4j#59) or only as the script-made input event. The tab is left blank again.
      */
     void probeUnicode(Page blank) {
         try {
             blank.keyboard().down("ä");
             blank.keyboard().up("ä");
-            unicodeKeys = true;
+            unicodeKeys = UnicodeKeys.KEY_NAMES;
+            return;
         } catch (PlaywrightException refused) {
-            unicodeKeys = false;
+            unicodeKeys = UnicodeKeys.NONE;
+        }
+        try {
+            blank.setContent(PROBE_PAGE);
+            blank.focus("textarea");
+            blank.keyboard().insertText("ä");
+            String seen = blank.title();
+            if (seen.contains("keydown:ä:true") && seen.contains("keyup:ä:true") && seen.contains("input:ä:true")
+                    && !seen.contains(":false")) {
+                unicodeKeys = UnicodeKeys.TEXT_AS_KEYS;
+            }
+        } catch (PlaywrightException failed) {
+            unicodeKeys = UnicodeKeys.NONE;
+        } finally {
+            blank.navigate("about:blank");
         }
     }
 
+    UnicodeKeys unicodeKeys() {
+        return unicodeKeys;
+    }
+
     /** For tests: the outcome of {@link #probeUnicode}. */
-    void unicodeKeys(boolean supported) {
-        unicodeKeys = supported;
+    void unicodeKeys(UnicodeKeys probed) {
+        unicodeKeys = probed;
     }
 
     /** The window's inner size from the Camoufox fingerprint, used for wheel scrolling and to keep paths on screen. */
@@ -270,8 +313,13 @@ final class RealInput {
         rejectUntypeable(text);
         ElementHandle element = target.elementHandle(new Locator.ElementHandleOptions().setTimeout(ACTION_TIMEOUT_MS));
         try {
-            if (!Boolean.TRUE.equals(element.evaluate(EDITABLE))) {
+            Object kind = element.evaluate(EDITABLE);
+            if (!"single".equals(kind) && !"multi".equals(kind)) {
                 throw new IllegalStateException("Element is not an editable field");
+            }
+            if ("single".equals(kind) && lineBreakInside(text)) {
+                throw new IllegalArgumentException("A single-line field takes no line break inside the text: the"
+                        + " Enter key would submit the form halfway. Only a trailing newline presses Enter.");
             }
             click(page, element);
         } finally {
@@ -299,9 +347,14 @@ final class RealInput {
      * send as real keys are refused unless the policy explicitly allows the page-visible fallback.
      */
     private void rejectUntypeable(String text) {
+        // WebDriver reserves U+E000..U+E05D for named keys: as a key value U+E007 would press Enter.
+        text.codePoints().filter(c -> c >= 0xE000 && c <= 0xE05D).findFirst().ifPresent(c -> {
+            throw new IllegalArgumentException(String.format("Cannot type U+%04X: WebDriver reserves it for a named"
+                    + " key. Nothing was typed into the field.", c));
+        });
         if (settings.unicode() == HumanInputSettings.UnicodePolicy.INSERT) return;
         if (text.indexOf('\t') >= 0) throw untypeable('\t', false);
-        if (Boolean.TRUE.equals(unicodeKeys)) return;
+        if (unicodeKeys == UnicodeKeys.KEY_NAMES || unicodeKeys == UnicodeKeys.TEXT_AS_KEYS) return;
         String checked = settings.unicode() == HumanInputSettings.UnicodePolicy.TRANSLITERATE
                 ? HumanTyping.transliterate(text) : text;
         checked.codePoints().filter(c -> !HumanTyping.inLayout(c)).findFirst()
@@ -310,7 +363,7 @@ final class RealInput {
 
     private void playKeys(InputDevice device, List<HumanTyping.KeyEvent> events, boolean countText) {
         long start = device.now();
-        Set<String> inserted = new HashSet<>();
+        List<String> inserted = new ArrayList<>(); // a list: the same character can be down twice
         Set<String> pressed = new LinkedHashSet<>();
         int typed = 0;
         for (HumanTyping.KeyEvent event : events) {
@@ -322,8 +375,15 @@ final class RealInput {
                 pressed.remove(key);
                 continue;
             }
+            // Playwright4J #59 sends inserted text as one real keyDown/keyUp per character.
+            if (!event.layout() && unicodeKeys == UnicodeKeys.TEXT_AS_KEYS && !"\t".equals(key)) {
+                device.insertText(key);
+                inserted.add(key);
+                typed++;
+                continue;
+            }
             // A tab key would leave the field; a tab character can only be inserted.
-            if (!event.layout() && (Boolean.FALSE.equals(unicodeKeys) || "\t".equals(key))) {
+            if (!event.layout() && (unicodeKeys == UnicodeKeys.NONE || "\t".equals(key))) {
                 if (settings.unicode() != HumanInputSettings.UnicodePolicy.INSERT) {
                     throw takeBack(device, pressed, typed, key);
                 }
@@ -334,10 +394,10 @@ final class RealInput {
             }
             try {
                 device.keyDown(key);
-                if (!event.layout()) unicodeKeys = true;
+                if (!event.layout()) unicodeKeys = UnicodeKeys.KEY_NAMES;
             } catch (PlaywrightException refused) {
                 if (event.layout() || !String.valueOf(refused.getMessage()).contains("Unknown key")) throw refused;
-                unicodeKeys = false;
+                unicodeKeys = UnicodeKeys.NONE;
                 if (settings.unicode() != HumanInputSettings.UnicodePolicy.INSERT) {
                     throw takeBack(device, pressed, typed, key);
                 }
@@ -360,6 +420,13 @@ final class RealInput {
         return untypeable(key.codePointAt(0), typed > 0);
     }
 
+    /** A line break before the end; one trailing newline (also CRLF) presses Enter on purpose. */
+    static boolean lineBreakInside(String text) {
+        String body = text.endsWith("\r\n") ? text.substring(0, text.length() - 2)
+                : text.endsWith("\n") || text.endsWith("\r") ? text.substring(0, text.length() - 1) : text;
+        return body.indexOf('\n') >= 0 || body.indexOf('\r') >= 0;
+    }
+
     private static IllegalStateException untypeable(int codePoint, boolean erased) {
         if (codePoint == '\t') {
             return new IllegalStateException("Cannot type a tab character as a real key: the Tab key would move the"
@@ -367,7 +434,7 @@ final class RealInput {
         }
         return new IllegalStateException("Cannot type '" + new String(Character.toChars(codePoint))
                 + "' as a real key: Playwright Core sends characters outside the US layout only through a page"
-                + " script (playwright4j#36)."
+                + " script (playwright4j#36); Playwright4J with playwright4j#59 types them as real keys."
                 + (erased ? " The text typed so far was erased." : " Nothing was typed into the field.")
                 + " Remove the character, or opt in to ARGOS_INPUT_UNICODE="
                 + "transliterate (changes the text: ä -> ae) or insert (debug only, visible to the page).");

@@ -164,6 +164,7 @@ je Adresse):
 | Chromium 1243 headless, CDP, Linux | 1249 ms | 6909 / **2096 ms** | 6902 / 7036 ms |
 | Camoufox, BiDi, Windows (Angelo, 2c5f7fb, Fixtures über `localhost`) | – | 25 372 / **19 985 ms** | 27 534 / 25 457 ms |
 | Camoufox 156.0.1-beta.36 (gepatcht), BiDi, Windows headless (Angelo, 12fb7d6, ohne Tab-Wiederverwendung) | 17 089 ms, davon `newPage()` 15 890 ms | 27 420 / **18 391 ms** | 22 996 / 23 152 ms |
+| Camoufox 156.0.1-beta.36 (gepatcht), BiDi, Windows headless (Angelo, 61075d5, mit Tab-Wiederverwendung) | 1308 ms (ein Tab für 4 Adressen; 4 leere Tabs öffnen: 610 ms) | 7799 / **2627 ms** | 8574 / 7646 ms |
 | Camoufox 158.0-beta.40 (gepatcht), BiDi, Linux headless (12fb7d6) | 2021 ms, davon `newPage()` 628 ms | 7608 / **2770 ms** | 7699 / 7585 ms |
 | Camoufox 158.0-beta.40 (gepatcht), BiDi, Linux headless, mit Tab-Wiederverwendung (`about:blank` dazwischen) | 1658 ms (ein Tab für 4 Adressen; 4 leere Tabs öffnen: 533 ms) | 7185 / **2571 ms** | 7361 / 7515 ms |
 
@@ -180,11 +181,13 @@ Auswertung:
 - Die Testschwelle prüft deshalb nicht mehr ein festes Verhältnis, sondern dass mindestens 60 % der
   überlappbaren Wartezeit tatsächlich eingespart werden. Das hätte auch der Camoufox-Lauf mit 5387 ms erfüllt.
 
-- `context.newPage()` kostet in Camoufox 156 unter Windows rund 4 s pro Tab (Linux, headless und unter Xvfb
-  headed: rund 0,2 s). Playwright4J öffnet jeden neuen Tab im Vordergrund (`browsingContext.create` ohne
-  `background: true`); die Ursache unter Windows ist noch nicht gemessen. Seit der Tab-Wiederverwendung
-  öffnet ein Batch höchstens `parallelTabs` Tabs statt einen pro Adresse; ein einzelner Download zahlt die
-  Kosten weiterhin einmal.
+- `context.newPage()` kostete in Camoufox 156 unter Windows im Lauf auf 12fb7d6 rund 4 s pro Tab, im Lauf
+  auf 61075d5 rund 0,15 s (610 ms für 4 leere Tabs; Linux, headless und unter Xvfb headed: rund 0,15–0,2 s).
+  Die Wiederverwendung erklärt nur den schnelleren Batch, nicht die schnelleren leeren Tabs: die 4 s hingen
+  offenbar vom Zustand der Sitzung oder des Rechners ab; die Ursache ist nicht gemessen. Playwright4J öffnet
+  jeden neuen Tab im Vordergrund (`browsingContext.create` ohne `background: true`). Seit der
+  Tab-Wiederverwendung öffnet ein Batch höchstens `parallelTabs` Tabs statt einen pro Adresse; ein einzelner
+  Download öffnet weiterhin einen Tab.
 
 **Leistungsversprechen:** `browser_open_many` spart die Lade- und Renderzeit nach dem Commit (typisch der
 größte Teil moderner Seiten), nicht die Antwortzeit langsamer Server und nicht die Grundkosten pro Tab. Bei

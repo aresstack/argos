@@ -162,6 +162,23 @@ class Socks5ProxyTest {
     }
 
     @Test
+    void releasesSocketsOfRefusedAndFinishedConnections() throws Exception {
+        int echo = echoServer();
+        Socks5Proxy proxy = proxy("127.0.0.1", dns(Map.of()));
+        for (int i = 0; i < 25; i++) {
+            Attempt refused = connect(proxy.port(), "10.0.0.1", 80);
+            assertEquals(2, refused.reply());
+            assertEquals(-1, refused.socket().getInputStream().read(), "proxy closes refused connections");
+        }
+        Attempt tunnel = connect(proxy.port(), "127.0.0.1", echo);
+        assertEquals("x", roundTrip(tunnel.socket(), "x"));
+        tunnel.socket().close();
+        long deadline = System.currentTimeMillis() + 5_000;
+        while (proxy.trackedSockets() > 0 && System.currentTimeMillis() < deadline) Thread.sleep(20);
+        assertEquals(0, proxy.trackedSockets());
+    }
+
+    @Test
     void neverResolvesInvalidNamesAndRefusesUnresolvableHosts() throws Exception {
         Socks5Proxy proxy = proxy("", dns(Map.of()));
         assertEquals(4, connect(proxy.port(), "argos-boundary-probe.invalid", 80).reply());

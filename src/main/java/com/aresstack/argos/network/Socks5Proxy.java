@@ -101,6 +101,11 @@ public final class Socks5Proxy implements AutoCloseable {
         }
     }
 
+    /** Sockets currently tracked for {@link #close()}; for tests. */
+    int trackedSockets() {
+        return open.size();
+    }
+
     private void acceptLoop() {
         while (!closed) {
             Socket client;
@@ -168,8 +173,13 @@ public final class Socks5Proxy implements AutoCloseable {
         } catch (IOException ignored) {
             // Client went away during the handshake or the tunnel; nothing to report.
         } finally {
+            // Every exit path, including refusals and handshake failures, stops tracking both sockets.
+            open.remove(client);
             closeQuietly(client);
-            if (remote != null) closeQuietly(remote);
+            if (remote != null) {
+                open.remove(remote);
+                closeQuietly(remote);
+            }
         }
     }
 
@@ -353,9 +363,6 @@ public final class Socks5Proxy implements AutoCloseable {
             upload.join();
         } catch (InterruptedException interrupted) {
             Thread.currentThread().interrupt();
-        } finally {
-            open.remove(remote);
-            open.remove(client);
         }
     }
 

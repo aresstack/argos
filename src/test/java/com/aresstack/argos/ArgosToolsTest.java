@@ -1,6 +1,9 @@
 package com.aresstack.argos;
 
 import io.modelcontextprotocol.server.McpServerFeatures.SyncToolSpecification;
+import com.aresstack.argos.research.ResearchBudget;
+import com.aresstack.argos.research.ResearchSettings;
+import com.aresstack.argos.web.SearchResults;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import java.nio.file.Path;
@@ -27,6 +30,23 @@ class ArgosToolsTest {
             assertEquals("browser_status", tools.get(0).tool().name());
             assertFalse(names.stream().anyMatch(name -> name.contains("chromium")));
             assertEquals(names, names(new ArgosTools(browser).forProfile(ToolProfile.LEGACY)));
+            assertFalse(names.contains("web_research"), "research orchestration is opt-in");
+        }
+    }
+
+    @Test void publishesResearchToolsOnlyWhenEnabled() {
+        try (CamoufoxBrowser browser = browser()) {
+            var enabled = new ResearchSettings(true, ResearchBudget.defaults());
+            var web = new com.aresstack.argos.web.WebSession(browser, new com.aresstack.argos.web.UrlPolicy(false),
+                    query -> new SearchResults(List.of(), List.of()));
+            for (ToolProfile profile : ToolProfile.values()) {
+                int plain = new ArgosTools(browser, web).forProfile(profile).size();
+                var tools = new ArgosTools(browser, web, enabled).forProfile(profile);
+                List<String> names = tools.stream().map(spec -> spec.tool().name()).toList();
+                assertEquals(plain + 2, tools.size(), profile.name());
+                assertEquals(List.of("web_research", "web_research_stop"), names.subList(plain, plain + 2));
+                assertEquals(List.of("question"), tools.get(plain).tool().inputSchema().required());
+            }
         }
     }
 

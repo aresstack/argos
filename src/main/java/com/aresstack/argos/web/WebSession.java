@@ -50,6 +50,11 @@ public final class WebSession {
         this.links = new LinkRegistry(maxLinks);
     }
 
+    /** The search backend, shared with the optional research orchestration. */
+    public WebSearchPort searchPort() {
+        return search;
+    }
+
     public synchronized String search(String query) throws Exception {
         if (query == null || query.isBlank()) throw new IllegalArgumentException("Empty search query.");
         SearchResults found = search.search(query.trim());

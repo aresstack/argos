@@ -1,5 +1,6 @@
 package com.aresstack.argos;
 
+import com.aresstack.argos.research.ResearchSettings;
 import com.aresstack.argos.search.BrowserWebSearch;
 import com.aresstack.argos.web.UrlPolicy;
 import com.aresstack.argos.web.WebSession;
@@ -49,7 +50,8 @@ public final class ArgosApplication {
                 .serverInfo("argos", "0.1.0")
                 .capabilities(ServerCapabilities.builder().tools(true).build())
                 .tools(new ArgosTools(browser, new WebSession(browser,
-                        new UrlPolicy(config.allowPrivateNetworks()), new BrowserWebSearch(browser)))
+                        new UrlPolicy(config.allowPrivateNetworks()), new BrowserWebSearch(browser)),
+                        ResearchSettings.fromEnvironment())
                         .forProfile(config.toolProfile())).build();
 
         Server server = new Server(new InetSocketAddress(config.host(), config.port()));

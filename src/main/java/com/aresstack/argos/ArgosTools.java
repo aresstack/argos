@@ -1,5 +1,9 @@
 package com.aresstack.argos;
 
+import com.aresstack.argos.research.CamoufoxResearchPageReader;
+import com.aresstack.argos.research.ResearchService;
+import com.aresstack.argos.research.ResearchSettings;
+import com.aresstack.argos.research.ResearchTools;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.modelcontextprotocol.server.McpServerFeatures.SyncToolSpecification;
 import io.modelcontextprotocol.spec.McpSchema.CallToolResult;
@@ -23,6 +27,8 @@ import java.util.function.Function;
 public final class ArgosTools {
     private final CamoufoxBrowser browser;
     private final WebSession web;
+    /** Optional research orchestration; null unless ARGOS_RESEARCH=true. */
+    private final ResearchTools research;
     private final ObjectMapper json = new ObjectMapper();
 
     public ArgosTools(CamoufoxBrowser browser) {
@@ -30,8 +36,16 @@ public final class ArgosTools {
     }
 
     public ArgosTools(CamoufoxBrowser browser, WebSession web) {
+        this(browser, web, ResearchSettings.disabled());
+    }
+
+    public ArgosTools(CamoufoxBrowser browser, WebSession web, ResearchSettings researchSettings) {
         this.browser = browser;
         this.web = web;
+        this.research = researchSettings.enabled() && web.searchPort() != null
+                ? new ResearchTools(new ResearchService(web.searchPort(), new CamoufoxResearchPageReader(browser),
+                        researchSettings.budget()))
+                : null;
     }
 
     /** The original nine browser_* tools (the {@link ToolProfile#LEGACY} profile). */
@@ -40,6 +54,13 @@ public final class ArgosTools {
     }
 
     public List<SyncToolSpecification> forProfile(ToolProfile profile) {
+        List<SyncToolSpecification> tools = new ArrayList<>(profileTools(profile));
+        // Opt-in (ARGOS_RESEARCH=true): one-call research suits small models, so every profile gets it.
+        if (research != null) tools.addAll(research.specifications());
+        return List.copyOf(tools);
+    }
+
+    private List<SyncToolSpecification> profileTools(ToolProfile profile) {
         return switch (profile) {
             case LEGACY -> browserTools();
             // Small models: only the six short AskAI tools, nothing else to choose from.

@@ -58,7 +58,7 @@ public final class ArgosApplication {
                 HttpServletStreamableServerTransportProvider.builder()
                         .mcpEndpoint("/").build();
         McpSyncServer mcp = McpServer.sync(transport)
-                .serverInfo("argos", "0.1.0")
+                .serverInfo("argos", ArgosTools.VERSION)
                 .capabilities(ServerCapabilities.builder().tools(true).build())
                 .tools(tools).build();
 

@@ -16,7 +16,8 @@ import java.util.Properties;
 public record ArgosConfig(
         String host, int port, Path executable, Path launchOptions, Path profile, boolean headless,
         String publicOrigin, String securityMode, String centralOauthIssuer, String requiredScope,
-        ToolProfile toolProfile, ReadinessPolicy readiness, NetworkSettings network) {
+        ToolProfile toolProfile, ReadinessPolicy readiness, NetworkSettings network,
+        boolean networkBodies) {
 
     public ArgosConfig {
         toolProfile = toolProfile == null ? ToolProfile.LEGACY : toolProfile;
@@ -29,7 +30,7 @@ public record ArgosConfig(
                        Path profile, boolean headless) {
         this(host, port, executable, launchOptions, profile, headless,
                 null, "central-oauth", null, "argos", ToolProfile.LEGACY, ReadinessPolicy.balanced(),
-                NetworkSettings.strict());
+                NetworkSettings.strict(), false);
     }
 
     public ArgosConfig(String host, int port, Path executable, Path launchOptions, Path profile,
@@ -37,7 +38,7 @@ public record ArgosConfig(
                        String centralOauthIssuer, String requiredScope) {
         this(host, port, executable, launchOptions, profile, headless, publicOrigin, securityMode,
                 centralOauthIssuer, requiredScope, ToolProfile.LEGACY, ReadinessPolicy.balanced(),
-                NetworkSettings.strict());
+                NetworkSettings.strict(), false);
     }
 
     public ArgosConfig(String host, int port, Path executable, Path launchOptions, Path profile,
@@ -45,13 +46,13 @@ public record ArgosConfig(
                        String requiredScope, ToolProfile toolProfile, ReadinessPolicy readiness) {
         this(host, port, executable, launchOptions, profile, headless, publicOrigin, securityMode,
                 centralOauthIssuer, requiredScope, toolProfile, readiness,
-                NetworkSettings.strict());
+                NetworkSettings.strict(), false);
     }
 
     public ArgosConfig withNetwork(NetworkSettings settings) {
         return new ArgosConfig(host, port, executable, launchOptions, profile, headless, publicOrigin,
                 securityMode, centralOauthIssuer, requiredScope, toolProfile, readiness,
-                settings);
+                settings, networkBodies);
     }
 
     public static ArgosConfig fromEnvironment() throws IOException {
@@ -121,7 +122,9 @@ public record ArgosConfig(
                         setting("ARGOS_NETWORK_POLICY", application, "network.policy", null),
                         setting("ARGOS_INTRANET_ALLOW", application, "network.intranet-allow", null),
                         setting("ARGOS_UPSTREAM_PROXY", application, "network.upstream-proxy", null),
-                        setting("ARGOS_UPSTREAM_DNS", application, "network.upstream-dns", null)));
+                        setting("ARGOS_UPSTREAM_DNS", application, "network.upstream-dns", null)),
+                // Opt-in: eagerly keeps (masked) document/XHR/fetch bodies for browser_network_detail.
+                Boolean.parseBoolean(setting("ARGOS_NETWORK_BODIES", application, "network.bodies", "false")));
     }
 
     private static Properties readProperties(Path path) throws IOException {

@@ -36,6 +36,8 @@ import com.microsoft.playwright.TimeoutError;
 import com.microsoft.playwright.options.AriaSnapshotMode;
 import com.microsoft.playwright.options.LoadState;
 import com.microsoft.playwright.options.WaitUntilState;
+import com.aresstack.argos.network.NetworkRecorder;
+import com.aresstack.argos.network.SecretMasker;
 
 import java.io.IOException;
 import java.net.InetAddress;
@@ -44,10 +46,8 @@ import java.net.Socket;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
-import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
@@ -69,7 +69,6 @@ import java.util.function.Function;
  * onto a single driver thread. Never attaches to an existing user's browser.
  */
 public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAccess, AutoCloseable {
-    private static final int MAX_NETWORK_EVENTS = 200;
     /** Source documents above this size are not pulled through the protocol for a snapshot. */
     private static final long MAX_SOURCE_BYTES = 8_000_000;
     private static final int PROBE_TIMEOUT_MS = 2_000;
@@ -77,7 +76,8 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
     private final ExecutorService driver = Executors.newSingleThreadExecutor(
             runnable -> Thread.ofPlatform().name("argos-camoufox-driver").unstarted(runnable));
     private final ObjectMapper mapper = new ObjectMapper();
-    private final Deque<Map<String, Object>> network = new ArrayDeque<>();
+    private final SecretMasker masker = new SecretMasker();
+    private final NetworkRecorder network;
     private final BrowserTabs tabs = new BrowserTabs();
     private final Map<Page, PageControls> controlSnapshots = new IdentityHashMap<>();
     private final RealInput input;
@@ -99,6 +99,7 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
         this.config = config;
         this.input = new RealInput(humanInput);
         this.urlPolicy = UrlPolicy.from(config.network());
+        this.network = new NetworkRecorder(masker, config.networkBodies());
     }
 
     public <T> T onBrowser(Callable<T> action) {
@@ -108,7 +109,14 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
     /** Like {@link #onBrowser(Callable)} with a longer budget for multi-tab work such as batches. */
     public <T> T onBrowser(Callable<T> action, int timeoutSeconds) {
         try {
-            Future<T> result = driver.submit(action);
+            Future<T> result = driver.submit(() -> {
+                try {
+                    return action.call();
+                } finally {
+                    // Outside Playwright event handlers, so protocol calls are safe here.
+                    if (context != null) network.captureQueuedBodies();
+                }
+            });
             return result.get(timeoutSeconds, TimeUnit.SECONDS);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
@@ -116,9 +124,13 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
         } catch (java.util.concurrent.ExecutionException e) {
             // Report the browser task's own message, not the executor's wrapper text.
             Throwable cause = e.getCause() == null ? e : e.getCause();
-            throw new IllegalStateException("Camoufox operation failed: " + cause.getMessage(), cause);
+            // Playwright errors can quote URLs with tokens or credentials; never pass them through raw.
+            String detail = cause.getMessage() == null ? cause.getClass().getSimpleName() : masker.text(cause.getMessage());
+            throw new IllegalStateException("Camoufox operation failed: " + detail, cause);
         } catch (Exception e) {
-            throw new IllegalStateException("Camoufox operation failed: " + e.getMessage(), e);
+            // Playwright errors can quote URLs with tokens or credentials; never pass them through raw.
+            String detail = e.getMessage() == null ? e.getClass().getSimpleName() : masker.text(e.getMessage());
+            throw new IllegalStateException("Camoufox operation failed: " + detail, e);
         }
     }
 
@@ -253,7 +265,6 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
         page.onRequest(request -> {
             if (isMainDocument(page, request)) tab.activity.reset();
             tab.activity.started();
-            record("request", request.method(), request.url(), 0);
         });
         page.onResponse(response -> {
             if (isMainDocument(page, response.request())) {
@@ -261,13 +272,15 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
                 if (document.attachment()) tab.lastDownload = document;
                 else tab.mainDocument = document;
             }
-            record("response", response.request().method(), response.url(), response.status());
         });
-        page.onRequestFinished(request -> tab.activity.ended());
-        page.onRequestFailed(request -> {
+        page.onRequestFinished(request -> {
             tab.activity.ended();
-            record("failed", request.method(), request.url(), 0);
+            MainDocument main = tab.mainDocument;
+            if (main != null && main.isFor(request)) main.finished = true;
         });
+        page.onRequestFailed(request -> tab.activity.ended());
+        // Protocol-level BiDi network events only; nothing is injected into the page.
+        network.attach(page);
         page.onClose(closed -> {
             tabs.forget(closed);
             controlSnapshots.remove(closed);
@@ -362,22 +375,6 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
         }
     }
 
-    private void record(String kind, String method, String originalUrl, int status) {
-        String sanitized = originalUrl;
-        try {
-            java.net.URI uri = java.net.URI.create(originalUrl);
-            sanitized = new java.net.URI(uri.getScheme(), null, uri.getHost(), uri.getPort(),
-                    uri.getPath(), null, null).toString();
-        } catch (Exception ignored) {
-            // Unknown schemes may not have a host; keep only the scheme.
-            int colon = originalUrl.indexOf(':');
-            if (colon >= 0) sanitized = originalUrl.substring(0, colon + 1);
-        }
-        if (network.size() >= MAX_NETWORK_EVENTS) network.removeFirst();
-        network.addLast(Map.of("at", Instant.now().toString(), "kind", kind,
-                "method", method, "url", sanitized, "status", status));
-    }
-
     public Map<String, Object> navigate(String target) {
         requireWebUrl(target);
         return onBrowser(() -> {
@@ -398,7 +395,10 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
                 tab.mainDocument = previousDocument; // the previous page stays rendered
                 return downloadResult(target, download);
             }
-            if (response != null && isMainDocument(p, response.request())) tab.mainDocument = new MainDocument(response);
+            if (response != null && isMainDocument(p, response.request())
+                    && (tab.mainDocument == null || !tab.mainDocument.isFor(response.request()))) {
+                tab.mainDocument = new MainDocument(response);
+            }
             ReadinessReport readiness = settle(p, policy, null);
             Map<String, Object> result = new LinkedHashMap<>();
             result.put("url", p.url());
@@ -620,6 +620,8 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
         private final int status;
         private final String contentType;
         private final boolean attachment;
+        /** Set from the protocol's requestfinished event (driver thread). */
+        boolean finished;
         private Optional<String> body;
 
         MainDocument(Response response) {
@@ -636,9 +638,17 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
         String contentType() { return contentType; }
         boolean attachment() { return attachment; }
 
-        /** Response bodies travel over the protocol; the page cannot observe this read. */
+        boolean isFor(Request request) {
+            return response.request() == request;
+        }
+
+        /**
+         * Response bodies travel over the protocol; the page cannot observe this read. Only a finished
+         * response is read: asking for an unfinished body would block the single driver thread.
+         */
         Optional<String> body() {
             if (body != null) return body;
+            if (!finished) return Optional.empty(); // fall back to the DOM; a later read may get the body
             try {
                 String length = response.headerValue("content-length");
                 if (length != null && Long.parseLong(length.trim()) > MAX_SOURCE_BYTES) return body = Optional.empty();
@@ -1067,13 +1077,44 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
     }
 
     public List<Map<String, Object>> networkEvents() {
+        return networkEvents(null);
+    }
+
+    public List<Map<String, Object>> networkEvents(String filter) {
         return onBrowser(() -> {
-            if (proxy == null) return List.copyOf(network);
+            List<Map<String, Object>> rows = network.summary(filter);
+            if (proxy == null) return rows;
             // Refused connections never reach the page as requests; merge them in time order.
-            List<Map<String, Object>> events = new ArrayList<>(network);
-            events.addAll(proxy.blockedEvents());
+            String needle = filter == null ? "" : filter.trim().toLowerCase(java.util.Locale.ROOT);
+            List<Map<String, Object>> events = new ArrayList<>(rows);
+            for (Map<String, Object> blocked : proxy.blockedEvents()) {
+                if (needle.isEmpty() || blocked.values().stream()
+                        .anyMatch(value -> String.valueOf(value).toLowerCase(java.util.Locale.ROOT).contains(needle))) {
+                    events.add(blocked);
+                }
+            }
             events.sort(Comparator.comparing(event -> Instant.parse(event.get("at").toString())));
-            return List.copyOf(events.subList(Math.max(0, events.size() - MAX_NETWORK_EVENTS), events.size()));
+            int max = NetworkRecorder.MAX_ENTRIES;
+            return List.copyOf(events.subList(Math.max(0, events.size() - max), events.size()));
+        });
+    }
+
+    public Map<String, Object> networkDetail(String id, boolean includeBody) {
+        return onBrowser(() -> network.detail(id, includeBody));
+    }
+
+    public List<Map<String, Object>> networkJson(String filter, int limit) {
+        return onBrowser(() -> network.jsonResponses(filter, limit));
+    }
+
+    public Map<String, Object> networkHar(int limit) {
+        return onBrowser(() -> network.har(limit, ArgosTools.VERSION));
+    }
+
+    public Map<String, Object> clearNetwork() {
+        return onBrowser(() -> {
+            network.clear();
+            return Map.of("cleared", true);
         });
     }
 

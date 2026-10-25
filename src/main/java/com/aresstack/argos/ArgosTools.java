@@ -25,6 +25,8 @@ import java.util.function.Function;
  * WebSession. Which tools are published depends on the configured {@link ToolProfile}.
  */
 public final class ArgosTools {
+    static final String VERSION = "0.1.0";
+    private static final ObjectMapper JSON = new ObjectMapper();
     private final CamoufoxBrowser browser;
     private final WebSession web;
     /** Optional research orchestration; null unless ARGOS_RESEARCH=true. */
@@ -32,7 +34,6 @@ public final class ArgosTools {
     private final ArgosBrowsingTools browsing;
     /** browser_download, browser_document, browser_open_many; null in tests without a document store. */
     private final DocumentAndBatchTools documents;
-    private static final ObjectMapper JSON = new ObjectMapper();
 
     public ArgosTools(CamoufoxBrowser browser) {
         this(browser, new WebSession(browser, UrlPolicy.publicOnly(), null));
@@ -82,6 +83,7 @@ public final class ArgosTools {
                 // web_click, web_fill) joins COMPACT only after it has been tested with small models.
                 tools.addAll(browsing.expert());
                 tools.addAll(expertTools());
+                tools.addAll(new NetworkTools(browser).expertTools());
                 if (documents != null) tools.addAll(documents.all());
                 yield List.copyOf(tools);
             }
@@ -159,8 +161,10 @@ public final class ArgosTools {
         tools.add(tool("browser_evaluate", "Evaluate JavaScript in the current website and return its result. This can change the page.",
                 Map.of("expression", field("string", "JavaScript expression or function, e.g. () => document.title")),
                 List.of("expression"), args -> browser.evaluate(string(args, "expression"))));
-        tools.add(tool("browser_network", "List recent page requests and responses (URLs have query parameters redacted).",
-                Map.of(), List.of(), args -> browser.networkEvents()));
+        tools.add(tool("browser_network", "List recent page requests and responses, one line per request with an id "
+                        + "(URLs have query parameters redacted). Optional filter, e.g. \"xhr\", \"json\", \"failed\" or \"api/\".",
+                Map.of("filter", field("string", "Optional case-insensitive text matched against url, type, mime, kind, status")),
+                List.of(), args -> browser.networkEvents(optionalString(args, "filter"))));
         tools.add(SyncToolSpecification.builder()
                 .tool(Tool.builder().name("browser_screenshot")
                         .description("Take a PNG screenshot of the current Camoufox page.")
@@ -248,6 +252,11 @@ public final class ArgosTools {
             throw new IllegalArgumentException("Missing string field: " + name);
         }
         return text;
+    }
+
+    static boolean flag(Map<String, Object> arguments, String name) {
+        Object value = arguments.get(name);
+        return value instanceof Boolean b ? b : value instanceof String text && Boolean.parseBoolean(text);
     }
 
     static int number(Map<String, Object> args, String field, int fallback) {

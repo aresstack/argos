@@ -6,6 +6,8 @@ import java.net.UnknownHostException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
+import java.util.function.Supplier;
 
 /**
  * Decides per connection, on the resolved addresses, whether the browser may connect.
@@ -42,15 +44,34 @@ public final class NetworkPolicy {
 
     private final List<Rule> rules;
     private final List<String> text;
+    private final Supplier<Set<InetAddress>> localAddresses;
 
-    private NetworkPolicy(List<Rule> rules, List<String> text) {
+    private NetworkPolicy(List<Rule> rules, List<String> text, Supplier<Set<InetAddress>> localAddresses) {
         this.rules = List.copyOf(rules);
         this.text = List.copyOf(text);
+        this.localAddresses = localAddresses;
     }
 
     public static NetworkPolicy publicOnly() {
-        return new NetworkPolicy(List.of(), List.of());
+        return new NetworkPolicy(List.of(), List.of(), LocalAddresses.SYSTEM);
     }
+
+    /** The same rules with another source of this machine's interface addresses; for tests. */
+    public NetworkPolicy withLocalAddresses(Supplier<Set<InetAddress>> addresses) {
+        return new NetworkPolicy(rules, text, addresses);
+    }
+
+    /**
+     * Whether a rule admits loopback. Only for tests against local fixtures: the browser could then
+     * reach every loopback service, including Playwright's and Firefox' own ports.
+     */
+    public boolean admitsLoopback() {
+        return rules.stream().anyMatch(rule -> rule.range != null && (rule.range.contains(LOOPBACK_V4)
+                || rule.range.contains(LOOPBACK_V6)));
+    }
+
+    private static final byte[] LOOPBACK_V4 = {127, 0, 0, 1};
+    private static final byte[] LOOPBACK_V6 = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1};
 
     public static NetworkPolicy parse(String commaSeparated) {
         if (commaSeparated == null || commaSeparated.isBlank()) return publicOnly();
@@ -73,7 +94,7 @@ public final class NetworkPolicy {
             }
             text.add(entry);
         }
-        return new NetworkPolicy(rules, text);
+        return new NetworkPolicy(rules, text, LocalAddresses.SYSTEM);
     }
 
     /** The configured rules, normalized, for status output. */
@@ -89,7 +110,7 @@ public final class NetworkPolicy {
         if (addresses.isEmpty()) return Decision.blocked("no address for " + requestedHost);
         String host = normalizeHost(requestedHost);
         for (InetAddress address : addresses) {
-            AddressClass kind = AddressClass.of(address);
+            AddressClass kind = classify(address);
             if (kind == null || admitted(host, address, kind)) continue;
             return Decision.blocked(kind.name().toLowerCase(Locale.ROOT).replace('_', '-')
                     + " address " + address.getHostAddress()
@@ -150,6 +171,18 @@ public final class NetworkPolicy {
         }
         if (host == null || host.isBlank()) throw new IllegalArgumentException("URL has no host: " + url);
         return checkHost(host, resolver);
+    }
+
+    /** {@link AddressClass#of}, plus {@link AddressClass#LOCAL_INTERFACE} for this machine's addresses. */
+    public AddressClass classify(InetAddress address) {
+        AddressClass kind = AddressClass.of(address);
+        if (kind != null) return kind;
+        try {
+            InetAddress plain = InetAddress.getByAddress(address.getAddress());
+            return localAddresses.get().contains(plain) ? AddressClass.LOCAL_INTERFACE : null;
+        } catch (UnknownHostException impossible) {
+            return null;
+        }
     }
 
     private boolean admitted(String host, InetAddress address, AddressClass kind) {

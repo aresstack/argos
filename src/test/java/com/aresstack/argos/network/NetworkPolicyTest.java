@@ -40,7 +40,9 @@ class NetworkPolicyTest {
                 Map.entry("224.0.0.251", AddressClass.MULTICAST),
                 Map.entry("64:ff9b::7f00:1", AddressClass.LOOPBACK),          // NAT64 of 127.0.0.1
                 Map.entry("2002:a9fe:a9fe::1", AddressClass.METADATA),       // 6to4 of 169.254.169.254
-                Map.entry("::10.0.0.1", AddressClass.PRIVATE));              // IPv4-compatible
+                Map.entry("::10.0.0.1", AddressClass.PRIVATE),               // IPv4-compatible
+                Map.entry("::ffff:0:7f00:1", AddressClass.LOOPBACK),         // SIIT IPv4-translated
+                Map.entry("64:ff9b:1::a00:1", AddressClass.RESERVED));       // local-use NAT64
         for (var entry : expected.entrySet()) {
             assertEquals(entry.getValue(), AddressClass.of(ip(entry.getKey())), entry.getKey());
         }
@@ -119,6 +121,36 @@ class NetworkPolicyTest {
     }
 
     @Test
+    void ownInterfaceAddressesCountAsLocalEvenWhenPublic() throws Exception {
+        // E.g. the machine's global IPv6 address: reaches services bound to all interfaces.
+        InetAddress ownV6 = ip("2a01:4f8::10");
+        InetAddress ownV4 = ip("93.184.215.14");
+        NetworkPolicy policy = NetworkPolicy.publicOnly().withLocalAddresses(() -> java.util.Set.of(ownV6, ownV4));
+        assertEquals(AddressClass.LOCAL_INTERFACE, policy.classify(ip("2a01:4f8::10")));
+        assertFalse(policy.check("own.example", List.of(ip("93.184.215.14"))).allowed());
+        assertTrue(policy.check("other.example", List.of(ip("93.184.215.15"))).allowed());
+        assertTrue(NetworkPolicy.parse("93.184.215.14").withLocalAddresses(() -> java.util.Set.of(ownV4))
+                .check("own.example", List.of(ip("93.184.215.14"))).allowed(), "a range rule admits it explicitly");
+        assertFalse(NetworkPolicy.parse("own.example").withLocalAddresses(() -> java.util.Set.of(ownV4))
+                .check("own.example", List.of(ip("93.184.215.14"))).allowed(), "a host rule does not");
+        // The real machine: whatever its interfaces are, none of them counts as public.
+        NetworkPolicy system = NetworkPolicy.publicOnly();
+        for (var network : java.net.NetworkInterface.networkInterfaces().toList()) {
+            for (InetAddress address : network.inetAddresses().toList()) {
+                assertNotNull(system.classify(address), address.toString());
+            }
+        }
+    }
+
+    @Test
+    void reportsWhenRulesAdmitLoopback() {
+        assertTrue(NetworkPolicy.parse("127.0.0.1").admitsLoopback());
+        assertTrue(NetworkPolicy.parse("[::1]").admitsLoopback());
+        assertTrue(NetworkPolicy.parse("0.0.0.0/0").admitsLoopback());
+        assertFalse(NetworkPolicy.parse("10.0.0.0/8,wiki.firma.local").admitsLoopback());
+    }
+
+    @Test
     void rejectsMalformedRules() {
         assertThrows(IllegalArgumentException.class, () -> NetworkPolicy.parse("10.0.0.0/40"));
         assertThrows(IllegalArgumentException.class, () -> NetworkPolicy.parse("http://wiki/"));
@@ -143,6 +175,13 @@ class NetworkPolicyTest {
         assertEquals("user", proxy.username());
         assertEquals("s3cret", proxy.password());
         assertFalse(proxy.toString().contains("s3cret"));
+        for (String broken : List.of("http://user:s3cret@proxy.example:notaport", "socks5://user:s3cret@",
+                "http://us er:s3cret@proxy example:80", "ftp://user:s3cret@proxy.example:21")) {
+            IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+                    () -> UpstreamProxy.parse(broken, null, null));
+            String text = error.getMessage() + (error.getCause() == null ? "" : error.getCause().getMessage());
+            assertFalse(text.contains("s3cret"), text);
+        }
         UpstreamProxy launch = UpstreamProxy.parse("proxy.example:8080", "u", "p");
         assertEquals(UpstreamProxy.Kind.HTTP, launch.kind());
         assertEquals(8080, launch.port());
@@ -161,6 +200,9 @@ class NetworkPolicyTest {
         assertEquals(false, prefs.get("network.proxy.failover_direct"));
         assertEquals("", prefs.get("network.proxy.no_proxies_on"));
         assertEquals(5, prefs.get("network.trr.mode"));
+        // Every document, also about:blank/srcdoc frames without an HTTP channel, keeps WebRTC on the proxy.
+        assertEquals(true, prefs.get("media.peerconnection.ice.proxy_only"));
+        assertEquals(false, prefs.get("network.dns.force_use_https_rr"));
         // Page-observable through Resource Timing; Camoufox keeps the stock values.
         assertFalse(prefs.containsKey("network.dns.disablePrefetch"));
         assertFalse(prefs.containsKey("network.prefetch-next"));

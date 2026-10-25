@@ -17,8 +17,10 @@ public record UpstreamProxy(Kind kind, String host, int port, String username, S
         try {
             uri = URI.create(value);
         } catch (IllegalArgumentException invalid) {
-            throw new IllegalArgumentException("Invalid upstream proxy: " + server, invalid);
+            // No cause: URI's own message repeats the input, credentials included.
+            throw new IllegalArgumentException("Invalid upstream proxy: " + redacted(server));
         }
+        if (uri.getScheme() == null) throw new IllegalArgumentException("Invalid upstream proxy: " + redacted(server));
         String scheme = uri.getScheme().toLowerCase(Locale.ROOT);
         Kind kind = switch (scheme) {
             case "socks5", "socks5h", "socks" -> Kind.SOCKS5;
@@ -27,7 +29,7 @@ public record UpstreamProxy(Kind kind, String host, int port, String username, S
                     "Upstream proxy must be socks5:// or http://, not " + scheme + "://");
         };
         if (uri.getHost() == null || uri.getPort() < 1) {
-            throw new IllegalArgumentException("Upstream proxy needs host and port: " + server);
+            throw new IllegalArgumentException("Upstream proxy needs host and port: " + redacted(server));
         }
         String user = username;
         String secret = password;
@@ -39,6 +41,15 @@ public record UpstreamProxy(Kind kind, String host, int port, String username, S
         String host = uri.getHost().startsWith("[") ? uri.getHost().substring(1, uri.getHost().length() - 1) : uri.getHost();
         return new UpstreamProxy(kind, host, uri.getPort(),
                 user == null || user.isEmpty() ? null : user, secret == null ? "" : secret);
+    }
+
+    /** The proxy text with any {@code user:password@} part masked, for error messages. */
+    static String redacted(String server) {
+        String text = server.trim();
+        int scheme = text.indexOf("://");
+        int start = scheme < 0 ? 0 : scheme + 3;
+        int at = text.lastIndexOf('@');
+        return at < start ? text : text.substring(0, start) + "***@" + text.substring(at + 1);
     }
 
     public boolean authenticated() {

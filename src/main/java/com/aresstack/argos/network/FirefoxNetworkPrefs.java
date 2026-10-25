@@ -15,6 +15,10 @@ import java.util.Map;
  * {@code network.prefetch-next}, {@code network.http.speculative-parallel-limit}. They need no change:
  * speculative connections use the proxy like any other, and Firefox skips DNS prefetch behind a proxy
  * ({@code network.dns.prefetch_via_proxy=false}). {@code network.predictor.enabled} no longer exists.
+ *
+ * <p>HTTP/3 and WebTransport need no pref: with a SOCKS proxy Firefox ignores h3 Alt-Svc
+ * ({@code AltSvcCache::UpdateAltServiceMapping}) and opens TCP through the proxy even for h3
+ * connection info ({@code DnsAndConnectSocket}, only MASQUE proxies get QUIC).
  */
 public final class FirefoxNetworkPrefs {
     private FirefoxNetworkPrefs() {
@@ -40,8 +44,13 @@ public final class FirefoxNetworkPrefs {
         prefs.put("network.proxy.retry_failed_proxies", true);       // after refusals: retry proxy, never direct
         prefs.put("network.trr.mode", 5);                            // DoH off by choice, no resolver bypass
         prefs.put("network.dns.prefetch_via_proxy", false);
+        prefs.put("network.dns.force_use_https_rr", false);          // no local HTTPS RR lookups behind the proxy
         prefs.put("network.http.altsvc.proxy_checks", true);         // no Alt-Svc/HTTP3 (UDP) around the proxy
-        // Camoufox default: no ICE candidates that bypass a configured proxy (no UDP STUN leaves the box).
+        // WebRTC must never send UDP around the proxy. proxy_only_if_behind_proxy (Camoufox default) asks
+        // the document's HTTP channel and is false for about:blank/srcdoc frames, blob: and data:
+        // documents (PeerConnectionImpl::ShouldForceProxy), so those could send STUN to any host.
+        // proxy_only gives every document the path that proxied pages already take.
+        prefs.put("media.peerconnection.ice.proxy_only", true);
         prefs.put("media.peerconnection.ice.proxy_only_if_behind_proxy", true);
         return prefs;
     }

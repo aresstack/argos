@@ -32,6 +32,17 @@ import static org.junit.jupiter.api.Assertions.*;
 class CamoufoxNetworkBoundaryTest {
     @TempDir Path temporary;
 
+    private static InetAddress nonLoopbackIpv4() throws IOException {
+        for (var network : java.net.NetworkInterface.networkInterfaces().toList()) {
+            if (!network.isUp() || network.isLoopback()) continue;
+            for (InetAddress address : network.inetAddresses().toList()) {
+                if (address instanceof java.net.Inet4Address) return address;
+            }
+        }
+        System.err.println("No non-loopback IPv4 interface: WebRTC part of the boundary test skipped.");
+        return null;
+    }
+
     @Test @Timeout(value = 180, unit = TimeUnit.SECONDS)
     void refusesInternalTargetsThatThePageOrARedirectRequests() throws Exception {
         Assumptions.assumeTrue(Boolean.getBoolean("argos.testCamoufox"), "Opt-in real browser test");
@@ -67,7 +78,9 @@ class CamoufoxNetworkBoundaryTest {
         });
         site.start();
         String origin = "http://127.0.0.1:" + site.getAddress().getPort();
-        try (DatagramSocket stun = new DatagramSocket(0, InetAddress.getByName("127.0.0.1"));
+        // Firefox never uses loopback for ICE, so a loopback STUN server cannot see a leak.
+        InetAddress lan = nonLoopbackIpv4();
+        try (DatagramSocket stun = lan == null ? null : new DatagramSocket(0, lan);
              CamoufoxBrowser browser = new CamoufoxBrowser(new ArgosConfig(
                      "127.0.0.1", 0, local.executable(), local.launchOptions(),
                      temporary.resolve("profile"), true)
@@ -78,14 +91,27 @@ class CamoufoxNetworkBoundaryTest {
             assertThrows(IllegalStateException.class, () -> browser.navigate(origin + "/redirect"));
             assertEquals(0, canaryHits.get(), "redirect target must not be contacted");
 
-            // Test-only main-world script: ICE gathering against a loopback STUN server.
-            browser.navigate(origin + "/");
-            browser.evaluate("() => { const pc = new RTCPeerConnection({iceServers:[{urls:'stun:127.0.0.1:"
-                    + stun.getLocalPort() + "'}]}); pc.createDataChannel('x');"
-                    + " pc.createOffer().then(o => pc.setLocalDescription(o)); setTimeout(() => pc.close(), 4000); }");
-            stun.setSoTimeout(5_000);
-            assertThrows(SocketTimeoutException.class, () -> stun.receive(new DatagramPacket(new byte[512], 512)),
-                    "WebRTC must not send UDP around the proxy");
+            if (stun != null) {
+                // Test-only main-world script: ICE gathering against a STUN port on this machine's LAN
+                // address, in the proxied document and in an about:blank frame, which has no HTTP channel
+                // and so is not "behind the proxy" for ice.proxy_only_if_behind_proxy.
+                browser.navigate(origin + "/");
+                Object states = browser.evaluate("async () => { const frame = document.createElement('iframe');"
+                        + " document.body.append(frame);"
+                        + " const run = w => new Promise(resolve => { let finished = false;"
+                        + " const pc = new w.RTCPeerConnection({iceServers:[{urls:'stun:" + lan.getHostAddress()
+                        + ":" + stun.getLocalPort() + "'}]}); pc.createDataChannel('x');"
+                        + " const done = () => { if (finished) return; finished = true;"
+                        + " const state = pc.iceGatheringState; pc.close(); resolve(state); };"
+                        + " pc.onicegatheringstatechange = () => { if (pc.iceGatheringState === 'complete') done(); };"
+                        + " pc.createOffer().then(o => pc.setLocalDescription(o)); setTimeout(done, 8000); });"
+                        + " return Promise.all([run(window), run(frame.contentWindow)]); }");
+                // Not vacuous: both windows finished gathering before UDP is checked.
+                assertEquals(List.of("complete", "complete"), states);
+                stun.setSoTimeout(1_000);
+                assertThrows(SocketTimeoutException.class, () -> stun.receive(new DatagramPacket(new byte[512], 512)),
+                        "WebRTC must not send UDP around the proxy");
+            }
 
             List<Object> blocked = browser.networkEvents().stream()
                     .filter(event -> "blocked".equals(event.get("kind"))).map(event -> event.get("url")).toList();

@@ -1,26 +1,38 @@
 package com.aresstack.argos;
 
+import com.microsoft.playwright.ElementHandle;
 import com.microsoft.playwright.Locator;
 import com.microsoft.playwright.Page;
+import com.microsoft.playwright.PlaywrightException;
 import com.microsoft.playwright.options.BoundingBox;
 
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.WeakHashMap;
 import java.util.random.RandomGenerator;
 
 /**
- * Clicks and typing as genuine browser input: the element's bounding box is measured, the page is scrolled with
- * real mouse-wheel input until a random point of the element is visible and not covered, and the mouse is moved
- * there and pressed through WebDriver BiDi {@code input.performActions}. The page receives trusted events only.
+ * Clicks, scrolling and typing as genuine browser input: the element's bounding box is measured, the mouse wheel
+ * brings a random point of it into view, {@code elementFromPoint} confirms it is not covered, the mouse travels there
+ * on a human path and is pressed, keys go down and up one by one, all through WebDriver BiDi
+ * {@code input.performActions}. The page receives trusted events only. {@link HumanMotion} and {@link HumanTyping}
+ * decide where and when; this class only measures and plays.
  *
- * <p>Playwright's own actions (also trial clicks), {@code isEditable}, {@code getAttribute} and
+ * <p>Playwright's own actions (also trial clicks), {@code isEditable}, {@code inputValue}, {@code getAttribute} and
  * {@code scrollIntoView} dispatch {@code __playwright_mark_target__} events or scroll by script, which pages can
- * observe (playwright4j #38, #42). This class therefore uses only {@code boundingBox}, element handles and raw
- * mouse and keyboard input, which leave no such trace.
+ * observe (playwright4j #38, #42). This class therefore uses only {@code boundingBox}, element handles with
+ * transient read-only evaluations, and raw mouse and keyboard input, which leave no such trace.
  */
 final class RealInput {
     private static final double ACTION_TIMEOUT_MS = 10_000;
+    /** Pixels per wheel notch, as Firefox scrolls for one notch of a common mouse. */
+    private static final int WHEEL_NOTCH = 100;
+    private static final int MAX_WHEEL_BURSTS = 12;
     private static final double MARGIN = 4;
-    private static final int MAX_SCROLL_STEPS = 15;
     private static final String HITS = """
             ([element, x, y]) => {
               if (element.ownerDocument.defaultView !== window.top) return true;
@@ -31,65 +43,119 @@ final class RealInput {
             element => element.isContentEditable
               || (/^(INPUT|TEXTAREA)$/.test(element.tagName) && !element.disabled && !element.readOnly
                   && !/^(button|checkbox|radio|submit|reset|file|image|range|color|hidden)$/i.test(element.type || ''))""";
-    private final RandomGenerator random;
 
-    RealInput(RandomGenerator random) {
-        this.random = random;
+    private final HumanInputSettings settings;
+    private final HumanMotion motion;
+    private final HumanTyping typing;
+    /** Where the pointer of each tab was left: BiDi keeps one input state per browsing context. */
+    private final Map<Page, HumanMotion.Point> pointers = new WeakHashMap<>();
+    private HumanMotion.Box viewport;
+    /** Whether Playwright sends characters outside the US layout as real keys; null until first tried. */
+    private Boolean unicodeKeys;
+
+    RealInput(HumanInputSettings settings) {
+        this.settings = settings;
+        RandomGenerator random = settings.random();
+        this.motion = new HumanMotion(random, settings);
+        this.typing = new HumanTyping(random, settings);
+    }
+
+    /** The window's inner size from the Camoufox fingerprint, used for wheel scrolling and to keep paths on screen. */
+    void viewport(double width, double height) {
+        viewport = width > 0 && height > 0 ? new HumanMotion.Box(0, 0, width, height) : null;
     }
 
     /** Clicks a point inside the visible element, like a person would. */
     void click(Page page, Locator target) {
-        double[] point = reachablePoint(page, target);
-        page.mouse().move(point[0], point[1], new com.microsoft.playwright.Mouse.MoveOptions()
-                .setSteps(6 + random.nextInt(10)));
-        pause(page, 30, 140);
-        page.mouse().down();
-        pause(page, 40, 120);
-        page.mouse().up();
+        ElementHandle element = target.elementHandle(new Locator.ElementHandleOptions().setTimeout(ACTION_TIMEOUT_MS));
+        try {
+            click(page, element);
+        } finally {
+            element.dispose();
+        }
+    }
+
+    private void click(Page page, ElementHandle element) {
+        InputDevice device = InputDevice.of(page);
+        HumanMotion.Box box = stableBox(page, element);
+        HumanMotion.Point point = reachablePoint(page, device, element, box);
+        moveTo(page, device, point, Math.min(box.width(), box.height()));
+        device.sleep(motion.hoverBeforePress());
+        device.down();
+        device.sleep(motion.buttonHold());
+        device.up();
+    }
+
+    /** The element's box once it stops moving (animations, late layout), measured a few frames apart. */
+    private static HumanMotion.Box stableBox(Page page, ElementHandle element) {
+        HumanMotion.Box box = box(visibleBox(element));
+        for (int attempt = 0; attempt < 10; attempt++) {
+            page.waitForTimeout(50);
+            HumanMotion.Box again = box(visibleBox(element));
+            if (again.equals(box)) return box;
+            box = again;
+        }
+        return box;
     }
 
     /**
-     * A point inside the element, scrolled into the viewport by wheel input and confirmed with
-     * {@code elementFromPoint}: three random points in the inner half, then the center.
+     * A point inside the element, brought into the viewport by wheel input and confirmed with
+     * {@code elementFromPoint}: three points scattered around the middle, then the center.
      */
-    private double[] reachablePoint(Page page, Locator target) {
+    private HumanMotion.Point reachablePoint(Page page, InputDevice device, ElementHandle element, HumanMotion.Box box) {
         for (int attempt = 0; attempt < 4; attempt++) {
-            BoundingBox box = visibleBox(target);
-            double[] point = attempt < 3 ? pointInside(box) : new double[] {box.x + box.width / 2, box.y + box.height / 2};
-            double[] reached = scrollTo(page, target, point[0] - box.x, point[1] - box.y);
+            HumanMotion.Point point = attempt < 3 ? motion.clickPoint(box) : rounded(box.center());
+            HumanMotion.Point reached = scrollTo(page, device, element, point.x() - box.x(), point.y() - box.y());
             if (reached != null) return reached;
+            box = box(visibleBox(element));
         }
         throw new IllegalStateException("Element is covered by another element (for example a cookie banner) "
                 + "or cannot be scrolled into view");
     }
 
-    /** Wheels until {@code box + offset} lies inside the viewport; null if it stays covered or unreachable. */
-    private double[] scrollTo(Page page, Locator target, double offsetX, double offsetY) {
-        double[] lastPosition = null;
-        for (int step = 0; step < MAX_SCROLL_STEPS; step++) {
-            BoundingBox box = visibleBox(target);
-            double x = box.x + offsetX;
-            double y = box.y + offsetY;
-            double[] viewport = viewport(page);
-            double dx = x < MARGIN ? x - viewport[0] * 0.4 : x > viewport[0] - MARGIN ? x - viewport[0] * 0.6 : 0;
-            double dy = y < MARGIN ? y - viewport[1] * 0.4 : y > viewport[1] - MARGIN ? y - viewport[1] * 0.6 : 0;
-            if (dx == 0 && dy == 0) {
-                return hits(target, x, y) ? new double[] {x, y} : null;
+    /**
+     * Flicks of the wheel until {@code box + offset} lies in the upper middle of the viewport; null if it stays
+     * covered or unreachable. When the page does not move (the element is in a scrolling container), the pointer
+     * first travels over the element's projection, as a person would do, so that container scrolls.
+     */
+    private HumanMotion.Point scrollTo(Page page, InputDevice device, ElementHandle element,
+                                       double offsetX, double offsetY) {
+        HumanMotion.Box view = viewport(page);
+        HumanMotion.Point last = null;
+        boolean overContainer = false;
+        for (int burst = 0; burst < MAX_WHEEL_BURSTS; burst++) {
+            BoundingBox box = visibleBox(element);
+            HumanMotion.Point point = new HumanMotion.Point(Math.round(box.x + offsetX), Math.round(box.y + offsetY));
+            boolean insideX = point.x() >= MARGIN && point.x() <= view.width() - MARGIN;
+            boolean insideY = point.y() >= MARGIN && point.y() <= view.height() - MARGIN;
+            if (insideX && insideY) return hits(page, element, point) ? point : null;
+            if (point.equals(last)) {
+                if (overContainer) return null;
+                overContainer = true;
+                moveTo(page, device, new HumanMotion.Point(
+                        Math.round(Math.min(view.width() - 20, Math.max(20, point.x()))),
+                        Math.round(Math.min(view.height() - 20, Math.max(20, point.y())))), 40);
             }
-            if (lastPosition != null && lastPosition[0] == x && lastPosition[1] == y) return null;
-            lastPosition = new double[] {x, y};
-            // Wheel over the element's projection so its own scroll container scrolls, like a person would.
-            page.mouse().move(clamp(x, 10, viewport[0] - 10), clamp(y, 10, viewport[1] - 10),
-                    new com.microsoft.playwright.Mouse.MoveOptions().setSteps(3 + random.nextInt(4)));
-            // BiDi wheel deltas must be integers.
-            page.mouse().wheel(Math.round(clamp(dx, -700, 700)), Math.round(clamp(dy, -700, 700)));
-            pause(page, 120, 260);
+            last = point;
+            if (!pointers.containsKey(page)) enter(page, device, view.center());
+            double dy = insideY ? 0 : point.y() - motion.scrollAnchor(view.height());
+            double dx = insideX ? 0 : point.x() - view.width() / 2;
+            // Horizontal scrolling is rare for people; one notch-sized step per burst is enough.
+            if (dx != 0) device.wheel(Math.round(Math.max(-WHEEL_NOTCH * 3, Math.min(WHEEL_NOTCH * 3, dx))), 0);
+            if (dy != 0) {
+                for (long[] notch : motion.wheelBurst(dy, WHEEL_NOTCH)) {
+                    device.wheel(0, notch[0]);
+                    device.sleep(notch[1]);
+                }
+            }
+            device.sleep(motion.wheelPause());
         }
         return null;
     }
 
-    private static boolean hits(Locator target, double x, double y) {
-        return Boolean.TRUE.equals(onElement(target, HITS, List.of(x, y)));
+    /** Whether a click at {@code point} reaches the element: a transient, read-only main-world evaluation. */
+    private static boolean hits(Page page, ElementHandle element, HumanMotion.Point point) {
+        return Boolean.TRUE.equals(page.evaluate(HITS, List.of(element, point.x(), point.y())));
     }
 
     /**
@@ -98,11 +164,10 @@ final class RealInput {
      * handle dispatches no marker events. With {@code extra}, the function receives {@code [element, ...extra]}.
      */
     static Object onElement(Locator target, String function, List<?> extra) {
-        com.microsoft.playwright.ElementHandle handle = target.elementHandle(
-                new Locator.ElementHandleOptions().setTimeout(ACTION_TIMEOUT_MS));
+        ElementHandle handle = target.elementHandle(new Locator.ElementHandleOptions().setTimeout(ACTION_TIMEOUT_MS));
         try {
             if (extra == null) return handle.evaluate(function);
-            List<Object> arguments = new java.util.ArrayList<>();
+            List<Object> arguments = new ArrayList<>();
             arguments.add(handle);
             arguments.addAll(extra);
             return target.page().evaluate(function, arguments);
@@ -111,59 +176,163 @@ final class RealInput {
         }
     }
 
-    private static double[] viewport(Page page) {
-        // Camoufox runs without viewport emulation (setViewportSize(null)), so ask the window itself.
-        Object size = page.evaluate("() => [innerWidth, innerHeight]");
-        List<?> values = (List<?>) size;
-        return new double[] {((Number) values.get(0)).doubleValue(), ((Number) values.get(1)).doubleValue()};
+    private static HumanMotion.Point rounded(HumanMotion.Point point) {
+        return new HumanMotion.Point(Math.round(point.x()), Math.round(point.y()));
     }
 
-    private static BoundingBox visibleBox(Locator target) {
-        BoundingBox box = target.boundingBox(new Locator.BoundingBoxOptions().setTimeout(ACTION_TIMEOUT_MS));
+    /**
+     * The window's inner size: from the Camoufox fingerprint, or else read once with a transient, read-only
+     * evaluation (stealth tier 3) that leaves nothing behind in the page.
+     */
+    private HumanMotion.Box viewport(Page page) {
+        if (viewport == null) {
+            Object size = page.evaluate("() => [innerWidth, innerHeight]");
+            if (size instanceof List<?> values && values.size() == 2
+                    && values.get(0) instanceof Number width && values.get(1) instanceof Number height) {
+                viewport(width.doubleValue(), height.doubleValue());
+            }
+            if (viewport == null) throw new IllegalStateException("Viewport size is unknown");
+        }
+        return viewport;
+    }
+
+    /**
+     * Brings the pointer onto the page before its first movement in this tab: it enters across the top edge, as a
+     * hand coming from the address bar would, and travels on from there; it never appears out of nowhere.
+     */
+    private void enter(Page page, InputDevice device, HumanMotion.Point target) {
+        HumanMotion.Point start = motion.entryPoint(target, viewport);
+        device.move(start.x(), start.y());
+        pointers.put(page, start);
+    }
+
+    private void moveTo(Page page, InputDevice device, HumanMotion.Point point, double targetSize) {
+        if (!pointers.containsKey(page)) enter(page, device, point);
+        List<HumanMotion.Step> steps = motion.path(pointers.get(page), point, targetSize, viewport);
+        long start = device.now();
+        for (int i = 0; i < steps.size(); i++) {
+            HumanMotion.Step step = steps.get(i);
+            device.sleep(start + step.at() - device.now());
+            try {
+                device.move(step.x(), step.y());
+            } catch (PlaywrightException outside) {
+                // An arc may leave the real viewport near its edge; skip that sample, never the target itself.
+                if (i == steps.size() - 1) throw outside;
+            }
+        }
+        pointers.put(page, point);
+    }
+
+    private static BoundingBox visibleBox(ElementHandle element) {
+        BoundingBox box = element.boundingBox();
         if (box == null || box.width <= 0 || box.height <= 0) {
             throw new IllegalStateException("Element is not visible on the page");
         }
         return box;
     }
 
-    private static double clamp(double value, double min, double max) {
-        return Math.max(min, Math.min(max, value));
+    private static HumanMotion.Box box(BoundingBox box) {
+        return new HumanMotion.Box(box.x, box.y, box.width, box.height);
     }
 
-    /** Focuses the field by a real click, replaces its content and types {@code text} key by key. */
+    /**
+     * Focuses the field by a real click, replaces its content and types {@code text} key by key. Ctrl+A and
+     * Backspace are always pressed: reading the current value would go through Playwright's marked element reads.
+     */
     void replaceText(Page page, Locator target, String text) {
-        if (!Boolean.TRUE.equals(onElement(target, EDITABLE, null))) {
-            throw new IllegalStateException("Element is not an editable field");
+        rejectUntypeable(text);
+        ElementHandle element = target.elementHandle(new Locator.ElementHandleOptions().setTimeout(ACTION_TIMEOUT_MS));
+        try {
+            if (!Boolean.TRUE.equals(element.evaluate(EDITABLE))) {
+                throw new IllegalStateException("Element is not an editable field");
+            }
+            click(page, element);
+        } finally {
+            element.dispose();
         }
-        click(page, target);
-        page.keyboard().press("ControlOrMeta+A");
-        page.keyboard().press("Backspace");
-        type(page, text);
+        InputDevice device = InputDevice.of(page);
+        device.sleep(motion.reactionPause());
+        playKeys(device, typing.clearField(), false);
+        type(device, text);
     }
 
-    /** Types {@code text} with uneven delays. A trailing newline presses Enter. */
+    /** Types {@code text} into the focused element. A trailing newline presses Enter. */
     void type(Page page, String text) {
-        boolean submit = text.endsWith("\n");
-        String content = submit ? text.substring(0, text.length() - 1) : text;
-        // Long texts are typed faster so a tool call stays well below the browser timeout.
-        int min = content.length() > 80 ? 4 : 35;
-        int max = content.length() > 80 ? 15 : 110;
-        content.codePoints().forEach(codePoint -> {
-            page.keyboard().type(new String(Character.toChars(codePoint)));
-            pause(page, min, max);
-        });
-        if (submit) page.keyboard().press("Enter");
+        rejectUntypeable(text);
+        type(InputDevice.of(page), text);
     }
 
-    /** A point in the inner half of the box, so borders and rounded corners are never hit. */
-    double[] pointInside(BoundingBox box) {
-        double x = box.x + box.width * (0.25 + random.nextDouble() * 0.5);
-        double y = box.y + box.height * (0.25 + random.nextDouble() * 0.5);
-        return new double[] {x, y};
+    void type(InputDevice device, String text) {
+        rejectUntypeable(text);
+        playKeys(device, typing.type(text), true);
     }
 
-    private void pause(Page page, int minMillis, int maxMillis) {
-        // waitForTimeout keeps processing Playwright events on the driver thread.
-        page.waitForTimeout(minMillis + random.nextInt(Math.max(1, maxMillis - minMillis)));
+    /** Known before the first key: this Playwright refuses non-US characters and the policy forbids the fallback. */
+    private void rejectUntypeable(String text) {
+        if (!Boolean.FALSE.equals(unicodeKeys) || settings.unicode() == HumanInputSettings.UnicodePolicy.INSERT) {
+            return;
+        }
+        String checked = settings.unicode() == HumanInputSettings.UnicodePolicy.TRANSLITERATE
+                ? HumanTyping.transliterate(text) : text;
+        checked.codePoints().filter(c -> !HumanTyping.inLayout(c)).findFirst()
+                .ifPresent(c -> { throw untypeable(c, false); });
+    }
+
+    private void playKeys(InputDevice device, List<HumanTyping.KeyEvent> events, boolean countText) {
+        long start = device.now();
+        Set<String> inserted = new HashSet<>();
+        Set<String> pressed = new LinkedHashSet<>();
+        int typed = 0;
+        for (HumanTyping.KeyEvent event : events) {
+            device.sleep(start + event.at() - device.now());
+            String key = event.key();
+            if (event.kind() == HumanTyping.Kind.UP) {
+                if (inserted.remove(key)) continue;
+                device.keyUp(key);
+                pressed.remove(key);
+                continue;
+            }
+            if (!event.layout() && Boolean.FALSE.equals(unicodeKeys)) {
+                if (settings.unicode() != HumanInputSettings.UnicodePolicy.INSERT) {
+                    throw takeBack(device, pressed, typed, key);
+                }
+                device.insertText(key);
+                inserted.add(key);
+                typed++;
+                continue;
+            }
+            try {
+                device.keyDown(key);
+                if (!event.layout()) unicodeKeys = true;
+            } catch (PlaywrightException refused) {
+                if (event.layout() || !String.valueOf(refused.getMessage()).contains("Unknown key")) throw refused;
+                unicodeKeys = false;
+                if (settings.unicode() != HumanInputSettings.UnicodePolicy.INSERT) {
+                    throw takeBack(device, pressed, typed, key);
+                }
+                device.insertText(key);
+                inserted.add(key);
+                typed++;
+                continue;
+            }
+            pressed.add(key);
+            if (!countText) continue;
+            if ("Backspace".equals(key)) typed = Math.max(0, typed - 1);
+            else if (key.codePointCount(0, key.length()) == 1) typed++;
+        }
+    }
+
+    /** Releases held keys and erases what was typed, so a refused character leaves no half-typed text behind. */
+    private IllegalStateException takeBack(InputDevice device, Set<String> pressed, int typed, String key) {
+        for (String held : new ArrayList<>(pressed)) device.keyUp(held);
+        playKeys(device, typing.erase(typed), false);
+        return untypeable(key.codePointAt(0), typed > 0);
+    }
+
+    private static IllegalStateException untypeable(int codePoint, boolean erased) {
+        return new IllegalStateException("Cannot type '" + new String(Character.toChars(codePoint))
+                + "' as a real key: Playwright Core sends characters outside the US layout only through a page"
+                + " script (playwright4j#36)." + (erased ? " The text typed so far was erased." : "")
+                + " Set ARGOS_INPUT_UNICODE=transliterate (ä -> ae) or insert (visible to the page).");
     }
 }

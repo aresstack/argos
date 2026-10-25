@@ -11,7 +11,7 @@ class SearchPageGuardsTest {
     void consentPrefersRejectAndYieldsASelectorForTheTrustedClick() {
         Document page = Jsoup.parse(SerpFixtures.html("consent-google.html"), "https://consent.google.com/ml");
 
-        var control = SearchPageGuards.findConsentControl(page).orElseThrow();
+        var control = SearchPageGuards.findConsentControl(page, false).orElseThrow();
 
         assertEquals(SearchPageGuards.ConsentAction.REJECT_ALL, control.action());
         assertEquals("Alle ablehnen", page.selectFirst(control.selector()).text());
@@ -21,7 +21,7 @@ class SearchPageGuardsTest {
     void resultPagesOfferNoConsentControlAndNoChallenge() {
         Document page = Jsoup.parse(SerpFixtures.html("duckduckgo-html.html"), "https://html.duckduckgo.com/html/");
 
-        assertTrue(SearchPageGuards.findConsentControl(page).isEmpty());
+        assertTrue(SearchPageGuards.findConsentControl(page, false).isEmpty());
         assertTrue(SearchPageGuards.findChallenge(page, page.location(), page.text()).isEmpty());
     }
 
@@ -36,10 +36,20 @@ class SearchPageGuardsTest {
     }
 
     @Test
+    void acceptAllIsNeverChosenWithoutOptIn() {
+        Document page = Jsoup.parse(SerpFixtures.html("consent-accept-only.html"), "https://www.google.com/");
+
+        assertTrue(SearchPageGuards.findConsentControl(page, false).isEmpty());
+        assertTrue(SearchPageGuards.offersOnlyAcceptance(page));
+        assertEquals(SearchPageGuards.ConsentAction.ACCEPT_ALL,
+                SearchPageGuards.findConsentControl(page, true).orElseThrow().action());
+    }
+
+    @Test
     void hiddenConsentControlsAreIgnored() {
         Document page = Jsoup.parse("<div style='display:none' class='cookie'>"
                 + "<button id='onetrust-reject-all-handler'>Reject all</button></div>");
 
-        assertTrue(SearchPageGuards.findConsentControl(page).isEmpty());
+        assertTrue(SearchPageGuards.findConsentControl(page, false).isEmpty());
     }
 }

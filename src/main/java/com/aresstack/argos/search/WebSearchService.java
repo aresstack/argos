@@ -19,11 +19,14 @@ import java.util.Set;
  * Runs one web search across the configured engines (port of AskAI's engine-navigation loop in
  * PlaywrightBrowserSession). Engines are tried in order until one delivers organic results; an
  * engine's endpoints are fallbacks for the same provider. Per result page: extract first, and only
- * when that fails resolve a consent banner (one trusted click) and look for a challenge. A challenged
+ * when that fails resolve a consent banner (one trusted click, never "accept all" without opt-in) and
+ * look for a challenge. A challenged
  * engine family is locked for a while instead of being retried, which would only escalate the block.
  */
 public final class WebSearchService {
-    public enum AttemptOutcome { ORGANIC_RESULTS, NO_ORGANIC_RESULTS, EXTRACTION_FAILED, CHALLENGE_PENDING, NAVIGATION_FAILED }
+    public enum AttemptOutcome {
+        ORGANIC_RESULTS, NO_ORGANIC_RESULTS, EXTRACTION_FAILED, CHALLENGE_PENDING, CONSENT_REQUIRED, NAVIGATION_FAILED
+    }
 
     public record Hit(int rank, String title, String url, String snippet) {
     }
@@ -41,6 +44,16 @@ public final class WebSearchService {
             providerHosts = List.copyOf(providerHosts);
             attempts = List.copyOf(attempts);
             challenges = List.copyOf(challenges);
+        }
+
+        /**
+         * ORGANIC_RESULTS with hits; NO_ORGANIC_RESULTS only when an engine explicitly reported none;
+         * otherwise EXTRACTION_FAILED: nothing readable came back, which is a failure, not "no results".
+         */
+        public SearchOutcome outcome() {
+            if (!hits.isEmpty()) return SearchOutcome.ORGANIC_RESULTS;
+            return attempts.stream().anyMatch(attempt -> attempt.outcome() == AttemptOutcome.NO_ORGANIC_RESULTS)
+                    ? SearchOutcome.NO_ORGANIC_RESULTS : SearchOutcome.EXTRACTION_FAILED;
         }
     }
 
@@ -109,6 +122,11 @@ public final class WebSearchService {
                     attempts.add(new Attempt(host, AttemptOutcome.CHALLENGE_PENDING, verdict.challenge().get().evidence()));
                     break; // never retry a challenged provider through its other endpoints
                 }
+                if (verdict.consentRequired()) {
+                    attempts.add(new Attempt(host, AttemptOutcome.CONSENT_REQUIRED,
+                            "consent banner offers only 'accept all' (ARGOS_SEARCH_CONSENT_ACCEPT=true allows it)"));
+                    break; // controlled stop for this provider; its other endpoints show the same wall
+                }
                 SearchResultExtractor.Extraction extraction = verdict.extraction();
                 attempts.add(new Attempt(host, AttemptOutcome.valueOf(extraction.outcome().name()), lastDiagnostic(extraction)));
                 if (extraction.outcome() == SearchOutcome.ORGANIC_RESULTS) {
@@ -125,8 +143,7 @@ public final class WebSearchService {
             }
             if (delivered) break;
         }
-        if (!anyReached && challenges.isEmpty() && attempts.stream()
-                .noneMatch(attempt -> attempt.outcome() == AttemptOutcome.CHALLENGE_PENDING)) {
+        if (!anyReached && attempts.stream().noneMatch(attempt -> attempt.outcome() == AttemptOutcome.CHALLENGE_PENDING)) {
             throw new SearchUnavailableException("No search engine was reachable: " + attempts.stream()
                     .map(attempt -> attempt.host() + " " + attempt.detail()).toList());
         }
@@ -134,7 +151,10 @@ public final class WebSearchService {
     }
 
     private record PageVerdict(SearchPageBrowser.LoadedPage page, SearchResultExtractor.Extraction extraction,
-                               Optional<SearchPageGuards.Challenge> challenge) {
+                               Optional<SearchPageGuards.Challenge> challenge, boolean consentRequired) {
+        PageVerdict(SearchPageBrowser.LoadedPage page, SearchResultExtractor.Extraction extraction) {
+            this(page, extraction, Optional.empty(), false);
+        }
     }
 
     /** Extract; if that fails, resolve a consent banner once and re-read; then check for a challenge. */
@@ -142,17 +162,16 @@ public final class WebSearchService {
                                  SearchEngine.Endpoint endpoint) {
         SearchDocumentReader.Read read = reader.read(page, endpoint, ++generation);
         SearchResultExtractor.Extraction extraction = extractor.extract(read.serp(), query, endpoint, engine.chromeDomains());
-        if (extraction.outcome() == SearchOutcome.ORGANIC_RESULTS) return new PageVerdict(page, extraction, Optional.empty());
-        Optional<SearchPageGuards.ConsentControl> consent = SearchPageGuards.findConsentControl(read.html());
+        if (extraction.outcome() == SearchOutcome.ORGANIC_RESULTS) return new PageVerdict(page, extraction);
+        Optional<SearchPageGuards.ConsentControl> consent =
+                SearchPageGuards.findConsentControl(read.html(), settings.acceptAllConsent());
         if (consent.isPresent()) {
             try {
                 if (browser.click(consent.get().selector())) {
                     page = browser.current();
                     read = reader.read(page, endpoint, ++generation);
                     extraction = extractor.extract(read.serp(), query, endpoint, engine.chromeDomains());
-                    if (extraction.outcome() == SearchOutcome.ORGANIC_RESULTS) {
-                        return new PageVerdict(page, extraction, Optional.empty());
-                    }
+                    if (extraction.outcome() == SearchOutcome.ORGANIC_RESULTS) return new PageVerdict(page, extraction);
                 }
             } catch (Exception consentFailed) {
                 // The page stays as it is; extraction and challenge checks below decide.
@@ -160,7 +179,9 @@ public final class WebSearchService {
         }
         Optional<SearchPageGuards.Challenge> challenge =
                 SearchPageGuards.findChallenge(read.html(), page.url(), read.serp().visibleText());
-        return new PageVerdict(page, extraction, challenge);
+        boolean consentRequired = challenge.isEmpty() && consent.isEmpty()
+                && SearchPageGuards.offersOnlyAcceptance(read.html());
+        return new PageVerdict(page, extraction, challenge, consentRequired);
     }
 
     private boolean isLocked(String family) {

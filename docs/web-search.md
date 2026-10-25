@@ -52,7 +52,7 @@ Format wie in AskAI, nur Treffer zuerst. `BrowserWebSearch` implementiert den Po
 | `SearchResultBlockDetector`, `DomStructureClusterer`, `PrimaryResultLinkResolver`, `SnippetExtractor` | `ResultBlockDetector` | portiert |
 | `LegacySearchResultExtractor` (Outcomes, Link-Harvest, KI-Pfad) | `SearchResultExtractor` | portiert, Harvest verschärft |
 | `SearchRedirectResolver` (Bing `/ck/`, Google `/url`, DDG `/l/`) | `SearchRedirects` | portiert |
-| `SearchPageGuards` (Consent-Priorität Reject → Necessary → Accept → Close, Challenge-Marker) | `SearchPageGuards` | Logik portiert, Ausführung neu |
+| `SearchPageGuards` (Consent: Reject → Necessary → Close, Accept nur mit Opt-in; Challenge-Marker) | `SearchPageGuards` | Logik portiert, Ausführung neu |
 | `RenderedPageDocumentCapture` (In-Page-Skript) | `SerpDocumentParser` (jsoup) | **neu geschrieben** |
 | `AiSearchPageLayoutResolver` | `SearchLayoutResolver` (Port, Standard `NONE`) | nur Vertrag + Validierung |
 | `BrowserSearchEngineCatalog` (DDG, Bing) | `SearchEngine` | + Google, + bekannte Ergebnis-Selektoren |

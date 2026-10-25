@@ -110,19 +110,64 @@ class WebSearchServiceTest {
     }
 
     @Test
-    void compactOutputNumbersHitsAndAppendsDiagnostics() throws Exception {
+    void consentWallWithOnlyAcceptAllIsAControlledStopWithoutOptIn() throws Exception {
+        browser.serve(GOOGLE, "consent-accept-only.html");
+        browser.afterClick = "google.html";
+        browser.serve(BING, "bing.html");
+
+        var report = service("google,bing").search("camoufox");
+
+        assertTrue(browser.clicked.isEmpty());
+        assertEquals(WebSearchService.AttemptOutcome.CONSENT_REQUIRED, report.attempts().get(0).outcome());
+        assertEquals("https://w3.org/TR/webdriver-bidi/", report.hits().get(0).url());
+    }
+
+    @Test
+    void acceptAllIsClickedOnlyWithExplicitOptIn() throws Exception {
+        browser.serve(GOOGLE, "consent-accept-only.html");
+        browser.afterClick = "google.html";
+        WebSearchService optedIn = new WebSearchService(browser, new SearchSettings(SearchEngine.byIds("google"), 10,
+                Duration.ofMinutes(10), true), SearchLayoutResolver.NONE, clock);
+
+        var report = optedIn.search("camoufox");
+
+        assertEquals(1, browser.clicked.size());
+        assertEquals("https://www.researchgate.net/", report.hits().get(0).url());
+    }
+
+    @Test
+    void unreadableResultPagesAreAFailureNotNoResults() {
+        browser.serve(DDG, "unknown-layout.html");
+        browser.serve(DDG_LITE, "unknown-layout.html");
+
+        var failure = assertThrows(BrowserWebSearch.SearchFailedException.class,
+                () -> new BrowserWebSearch(service("duckduckgo")).search("camoufox"));
+
+        assertTrue(failure.getMessage().contains("ATTEMPT: html.duckduckgo.com EXTRACTION_FAILED"), failure.getMessage());
+        assertTrue(failure.getMessage().contains("ATTEMPT: lite.duckduckgo.com EXTRACTION_FAILED"));
+    }
+
+    @Test
+    void portReportsHitsAndDiagnostics() throws Exception {
         browser.serve(DDG, "no-results.html");
         browser.serve(BING, "bing.html");
 
         SearchResults results = new BrowserWebSearch(service("duckduckgo,bing")).search("camoufox");
-        String text = BrowserWebSearch.format(results);
 
-        assertTrue(text.startsWith("1: WebDriver BiDi - W3C — https://w3.org/TR/webdriver-bidi/\n"
-                + "   This document specifies a bidirectional protocol"), text);
-        assertTrue(text.contains("\n3: Browser | Playwright — https://playwright.dev/docs/api/class-browser\n"));
-        assertTrue(text.contains("PROVIDER: www.bing.com"));
-        assertTrue(text.contains("ATTEMPT: html.duckduckgo.com NO_ORGANIC_RESULTS"));
-        assertTrue(text.endsWith("ATTEMPT: www.bing.com ORGANIC_RESULTS"));
+        assertEquals("WebDriver BiDi - W3C", results.hits().get(0).title());
+        assertEquals(3, results.hits().size());
+        assertEquals(List.of("PROVIDER: html.duckduckgo.com", "PROVIDER: www.bing.com",
+                "ATTEMPT: html.duckduckgo.com NO_ORGANIC_RESULTS", "ATTEMPT: www.bing.com ORGANIC_RESULTS"),
+                results.notes());
+    }
+
+    @Test
+    void explicitlyEmptySearchIsNoResultsNotAFailure() throws Exception {
+        browser.serve(DDG, "no-results.html");
+
+        SearchResults results = new BrowserWebSearch(service("duckduckgo")).search("camoufox");
+
+        assertTrue(results.hits().isEmpty());
     }
 
     private WebSearchService service(String engines) {

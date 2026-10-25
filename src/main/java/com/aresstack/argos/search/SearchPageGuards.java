@@ -69,15 +69,29 @@ final class SearchPageGuards {
     private SearchPageGuards() {
     }
 
-    static Optional<ConsentControl> findConsentControl(Document document) {
+    /**
+     * The control to click, minimal consent first: reject all, only necessary, close. "Accept all" is
+     * returned only when the caller explicitly allows it; otherwise a banner that offers nothing but
+     * acceptance is reported via {@link #offersOnlyAcceptance(Document)} and left alone.
+     */
+    static Optional<ConsentControl> findConsentControl(Document document, boolean allowAcceptAll) {
         List<Element> buttons = visible(document.select(BUTTONS));
-        Optional<ConsentControl> found = bySelector(document, REJECT_SELECTORS, ConsentAction.REJECT_ALL)
+        Optional<ConsentControl> minimal = bySelector(document, REJECT_SELECTORS, ConsentAction.REJECT_ALL)
                 .or(() -> byText(buttons, REJECT_TEXTS, ConsentAction.REJECT_ALL))
                 .or(() -> byText(buttons, ONLY_NECESSARY_TEXTS, ConsentAction.ONLY_NECESSARY))
-                .or(() -> bySelector(document, ACCEPT_SELECTORS, ConsentAction.ACCEPT_ALL))
-                .or(() -> byText(buttons, ACCEPT_TEXTS, ConsentAction.ACCEPT_ALL))
                 .or(() -> bySelector(document, CLOSE_SELECTORS, ConsentAction.CLOSE));
-        return found;
+        return minimal.isPresent() || !allowAcceptAll ? minimal : acceptControl(document, buttons);
+    }
+
+    /** True when a consent banner can only be passed by accepting everything. */
+    static boolean offersOnlyAcceptance(Document document) {
+        return findConsentControl(document, false).isEmpty()
+                && acceptControl(document, visible(document.select(BUTTONS))).isPresent();
+    }
+
+    private static Optional<ConsentControl> acceptControl(Document document, List<Element> buttons) {
+        return bySelector(document, ACCEPT_SELECTORS, ConsentAction.ACCEPT_ALL)
+                .or(() -> byText(buttons, ACCEPT_TEXTS, ConsentAction.ACCEPT_ALL));
     }
 
     /**

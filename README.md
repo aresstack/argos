@@ -99,6 +99,21 @@ Die öffentliche Adresse wird ausschließlich im AresStack Webserver konfigurier
 
 `browser_network` entfernt Query-Parameter und Benutzerinformationen aus den protokollierten URLs. Bis zu 200 Ereignisse bleiben im Speicher. `browser_evaluate` kann Webseiten verändern und ist deshalb nur für ausdrücklich autorisierte Nutzer über das gesicherte MCP-Plugin bestimmt.
 
+## GitHub Actions und Releases
+
+Der Workflow [Build and Release Argos](.github/workflows/build-release.yml) läuft bei jedem Push auf `main`, bei Pull Requests und manuell über **Actions → Build and Release Argos → Run workflow**. Er baut Playwright4J aus einem **festgepinnten Commit** selbst in Maven Local, führt die Java-Tests aus und erstellt das plattformübergreifende `argos-package.zip`. Anschließend prüft ein separater Windows-Job, dass die entpackte JAR startet und der MCP-Handshake sowie die Browserwerkzeugliste funktionieren. Die Browser-Funktionstests mit echter Camoufox-Binärdatei bleiben lokal, da der Runner diese nicht mitbringt.
+
+**Ein GitHub Release wird ausschließlich beim Push eines Versionstags veröffentlicht**, und nur wenn Linux- und Windows-Jobs erfolgreich waren. Ein Push auf `main` oder ein manueller Workflow-Lauf veröffentlicht **kein** Release.
+
+Beispiel für eine spätere explizite Release-Freigabe:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+Im GitHub Release liegt `argos-package.zip` mit `argos.jar` und `lib/`. Das ZIP enthält **keine Camoufox-Binärdatei, Fingerprint-Konfiguration oder Benutzerprofile**; diese werden auf dem Zielrechner gesondert eingerichtet. Für den Betrieb als Managed JAR ist das ZIP zu entpacken.
+
 ## Tests und Stand
 
 ```powershell

@@ -2,6 +2,7 @@ package com.aresstack.argos.web;
 
 import com.aresstack.argos.fetch.WebAddress;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -19,6 +20,9 @@ import java.util.regex.Pattern;
  * number such as "2" refers to the list the agent saw last: web_search shows results,
  * web_links shows links. Anything that cannot be resolved fails with a clear message.
  *
+ * <p>web_find searches the whole text of the page for a phrase and answers with the match count and short
+ * snippets, each naming its web_read part, so a long page can be searched without reading every part.
+ *
  * <p>The session follows the browser: a page another tool opened (expert profile: browser_navigate,
  * a click, a tab switch; any profile: the page web_research loaded last) is read by web_read and
  * web_links as well. Only the search provider's own page after web_search is not a page to read;
@@ -27,6 +31,11 @@ import java.util.regex.Pattern;
 public final class WebSession {
     public static final int DEFAULT_PART_CHARACTERS = 12_000;
     public static final int DEFAULT_MAX_LINKS = 150;
+    /** web_find shows at most this many snippets of at most this many characters. */
+    static final int MAX_FIND_SNIPPETS = 10;
+    static final int FIND_SNIPPET_CHARACTERS = 200;
+    /** Dashes a page may use where a model types '-' (e.g. U+2011 non-breaking hyphen). */
+    private static final Pattern DASHES = Pattern.compile("[\\u2010-\\u2015\\u2212]");
     private static final Pattern TARGET = Pattern.compile(
             "^\\[?\\s*(link|result)?\\s*[-_ #]?\\s*(\\d{1,4})\\s*]?$");
     private static final String NO_PAGE = "No page is open yet. Call web_open or web_search first.";
@@ -111,6 +120,67 @@ public final class WebSession {
     public synchronized String read(int part) {
         requireShownPage();
         return show(accept(browser.current()), part);
+    }
+
+    /**
+     * Finds {@code query} in the text of the page the browser shows: the same text web_read hands out in
+     * parts, read once like web_read. Only the match count and short snippets go back, each with the
+     * web_read part it is in, so a long page never has to enter the context as a whole. Case, runs of
+     * whitespace and dash variants do not matter.
+     */
+    public synchronized String find(String query) {
+        if (query == null || query.isBlank()) throw new IllegalArgumentException("Empty search text.");
+        requireShownPage();
+        PageCapture capture = accept(browser.current());
+        String text = capture.text().strip();
+        String searched = DASHES.matcher(text).replaceAll("-");
+        StringBuilder phrase = new StringBuilder();
+        for (String word : DASHES.matcher(query.strip()).replaceAll("-").split("\\s+")) {
+            if (!phrase.isEmpty()) phrase.append("\\s+");
+            phrase.append(Pattern.quote(word));
+        }
+        Matcher match = Pattern.compile(phrase.toString(),
+                Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE | Pattern.UNICODE_CHARACTER_CLASS).matcher(searched);
+        int parts = Math.max(1, (text.length() + partCharacters - 1) / partCharacters);
+        int count = 0;
+        int shownUntil = -1;
+        List<String> snippets = new ArrayList<>();
+        while (match.find()) {
+            count++;
+            // A match inside the previous snippet is counted but not shown twice.
+            if (match.start() < shownUntil || snippets.size() == MAX_FIND_SNIPPETS) continue;
+            int[] window = snippetWindow(text, match.start(), match.end());
+            shownUntil = window[1];
+            String snippet = text.substring(window[0], window[1]).replaceAll("\\s+", " ").strip();
+            snippets.add("hit " + (snippets.size() + 1) + " (part " + (match.start() / partCharacters + 1) + "): "
+                    + (window[0] > 0 ? "…" : "") + snippet + (window[1] < text.length() ? "…" : ""));
+        }
+        String quoted = "\"" + query.strip() + "\"";
+        StringBuilder out = new StringBuilder().append("URL: ").append(capture.url()).append('\n');
+        if (count == 0) {
+            return out.append("No matches for ").append(quoted).append(" on this page. Try a shorter or different word.")
+                    .toString();
+        }
+        out.append("FOUND: ").append(count).append(count == 1 ? " match" : " matches").append(" for ").append(quoted);
+        if (count > snippets.size()) out.append(" (showing ").append(snippets.size()).append(')');
+        out.append('\n');
+        snippets.forEach(snippet -> out.append(snippet).append('\n'));
+        if (parts > 1) out.append("Read a whole part with web_read part=N.\n");
+        return out.toString().stripTrailing();
+    }
+
+    /** At most {@link #FIND_SNIPPET_CHARACTERS} around the match, cut at word boundaries where possible. */
+    private static int[] snippetWindow(String text, int start, int end) {
+        int context = Math.max(0, (FIND_SNIPPET_CHARACTERS - (end - start)) / 2);
+        int from = Math.max(0, start - context);
+        int to = Math.min(text.length(), end + context);
+        for (int i = from; from > 0 && i < start; i++) {
+            if (Character.isWhitespace(text.charAt(i))) { from = i + 1; break; }
+        }
+        for (int i = to; to < text.length() && i > end; i--) {
+            if (Character.isWhitespace(text.charAt(i))) { to = i; break; }
+        }
+        return new int[] {from, to};
     }
 
     /**

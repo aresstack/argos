@@ -14,7 +14,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class ArgosToolsTest {
     private static final List<String> COMPACT = List.of(
-            "web_search", "web_open", "web_read", "web_links", "web_follow", "web_back");
+            "web_search", "web_open", "web_read", "web_find", "web_links", "web_follow", "web_back");
 
     @TempDir Path temp;
 
@@ -52,7 +52,7 @@ class ArgosToolsTest {
         }
     }
 
-    @Test void compactProfilePublishesOnlyTheSixShortAskAiTools() {
+    @Test void compactProfilePublishesOnlyTheShortWebTools() {
         try (CamoufoxBrowser browser = browser()) {
             var tools = new ArgosTools(browser).forProfile(ToolProfile.COMPACT);
             assertEquals(COMPACT, tools.stream().map(spec -> spec.tool().name()).toList());

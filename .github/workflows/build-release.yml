@@ -28,9 +28,9 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: aresstack/playwright4j
-          # Known-working revision, not the moving master branch. A manual run can name another one, e.g.
-          # refs/pull/59/head, to build Argos against a Playwright4J fix under test.
-          ref: ${{ inputs.playwright4j_ref || 'fad3590748a38059cf133d329d7d69b2984dd166' }}
+          # Pin the Playwright4J 0.3.0 release commit; never follow moving master.
+          # A manual run can override this ref to test a specific Playwright4J pull request.
+          ref: ${{ inputs.playwright4j_ref || '2e889ce9fdfa7cc360c1c3c4434d926e30f79784' }}
           path: playwright4j-source
 
       - name: Set up Java 21
@@ -42,11 +42,11 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Install Playwright4J SNAPSHOT in Maven Local
+      - name: Install Playwright4J 0.3.0 in Maven Local
         working-directory: playwright4j-source
         run: |
           chmod +x gradlew
-          ./gradlew publishToMavenLocal -Pversion=0.2.2-SNAPSHOT --no-daemon --console=plain
+          ./gradlew publishToMavenLocal -Pversion=0.3.0 --no-daemon --console=plain
 
       - name: Select artifact version
         id: version

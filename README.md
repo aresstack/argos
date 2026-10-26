@@ -28,7 +28,7 @@ Die MCP-Implementierung nutzt `io.modelcontextprotocol.sdk:mcp:0.18.4` und einge
 
 ## Bauen (Windows)
 
-Voraussetzung: Java 21 sowie **Playwright4J-Commit `fad3590748a38059cf133d329d7d69b2984dd166` oder neuer** (enthält Fix #32 und die echten Unicode-Tasten aus #59). Die alte, lokal veröffentlichte `0.2.2-SNAPSHOT` ohne Fix #32 startet den Treiber aus einer ausführbaren JAR nicht. Die CI baut die geprüfte Revision selbst; lokal kann sie in `.argos-build/maven/` veröffentlicht werden (das Verzeichnis ist Git-ignoriert).
+Voraussetzung: Java 21 sowie **Playwright4J `0.3.0`**, basierend auf Commit [`2e889ce9fdfa7cc360c1c3c4434d926e30f79784`](https://github.com/aresstack/playwright4j/commit/2e889ce9fdfa7cc360c1c3c4434d926e30f79784). Diese Version enthält die geprüfte Unicode-Tastatureingabe aus #73. Der lokale Build löst `com.aresstack:playwright4j:0.3.0` über Maven Local auf; nach Veröffentlichung ist Maven Central ebenfalls verfügbar. Die CI baut genau diesen Playwright4J-Commit und veröffentlicht ihn vor dem Argos-Build in das Maven-Local-Repository des Runners. Für Integrationstests gegen einen anderen Playwright4J-Quellstand kann `-Pplaywright4jSource=<checkout>` verwendet werden.
 
 ```powershell
 .\gradlew.bat test packageArgos argosZip

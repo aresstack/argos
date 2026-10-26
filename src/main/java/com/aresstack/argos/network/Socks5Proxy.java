@@ -33,7 +33,9 @@ import java.util.concurrent.Semaphore;
  */
 public final class Socks5Proxy implements AutoCloseable {
     private static final int MAX_BLOCKED_EVENTS = 200;
-    private static final int MAX_CONNECTIONS = 512;
+    // Above Firefox' own network.http.max-connections (900), so the proxy never refuses a browser socket.
+    private static final int MAX_CONNECTIONS = 1024;
+    private static final int LOG_LINES_PER_MINUTE = 20;
     private static final int HANDSHAKE_TIMEOUT_MS = 10_000;
     private static final int CONNECT_TIMEOUT_MS = 15_000;
     private static final int REPLY_OK = 0, REPLY_FAILURE = 1, REPLY_NOT_ALLOWED = 2,
@@ -47,6 +49,9 @@ public final class Socks5Proxy implements AutoCloseable {
     private final Set<Socket> open = ConcurrentHashMap.newKeySet();
     private final Deque<Map<String, Object>> blocked = new ArrayDeque<>();
     private final Semaphore slots = new Semaphore(MAX_CONNECTIONS);
+    private long logWindowStart = System.nanoTime();
+    private int loggedInWindow;
+    private int suppressedInWindow;
     private volatile boolean closed;
 
     private Socks5Proxy(NetworkSettings settings, HostResolver resolver) throws IOException {
@@ -54,6 +59,14 @@ public final class Socks5Proxy implements AutoCloseable {
         this.resolver = resolver;
         this.server = new ServerSocket(0, 128, InetAddress.getByName("127.0.0.1"));
         protectedLoopbackPorts.add(server.getLocalPort());
+        if (settings.policy().admitsLoopback()) {
+            System.err.println("ARGOS_INTRANET_ALLOW admits loopback: pages can reach local services, including "
+                    + "the browser's own automation ports. Use this only for tests against local fixtures.");
+        }
+        if (settings.upstream() != null && settings.upstreamDns() == NetworkSettings.UpstreamDns.REMOTE) {
+            System.err.println("ARGOS_UPSTREAM_DNS=remote: the upstream proxy resolves again, so the policy "
+                    + "cannot see where it connects (DNS rebinding at the upstream is possible).");
+        }
         this.acceptor = Thread.ofPlatform().daemon().name("argos-network-proxy").start(this::acceptLoop);
     }
 
@@ -186,7 +199,9 @@ public final class Socks5Proxy implements AutoCloseable {
             return refuse(out, host, port, resolution.decision().reason(), REPLY_HOST_UNREACHABLE);
         }
         for (InetAddress address : addresses) {
-            if (AddressClass.of(address) == AddressClass.LOOPBACK && protectedLoopbackPorts.contains(port)) {
+            AddressClass kind = settings.policy().classify(address);
+            boolean local = kind == AddressClass.LOOPBACK || kind == AddressClass.LOCAL_INTERFACE;
+            if (local && protectedLoopbackPorts.contains(port)) {
                 return refuse(out, host, port, "Argos-internal port " + port, REPLY_NOT_ALLOWED);
             }
         }
@@ -215,12 +230,27 @@ public final class Socks5Proxy implements AutoCloseable {
 
     private Socket refuse(OutputStream out, String host, int port, String reason, int code) throws IOException {
         String target = (host.contains(":") ? "[" + host + "]" : host) + ":" + port;
+        String line;
         synchronized (blocked) {
             if (blocked.size() >= MAX_BLOCKED_EVENTS) blocked.removeFirst();
             blocked.addLast(Map.of("at", Instant.now().toString(), "kind", "blocked", "method", "CONNECT",
                     "url", target, "status", 0, "reason", reason));
+            // A page can trigger refusals in a loop; keep the service log bounded.
+            long now = System.nanoTime();
+            if (now - logWindowStart > 60_000_000_000L) {
+                reportSuppressedRefusals();
+                logWindowStart = now;
+                loggedInWindow = 0;
+            }
+            if (loggedInWindow < LOG_LINES_PER_MINUTE) {
+                loggedInWindow++;
+                line = "Argos network policy blocked " + target + ": " + reason;
+            } else {
+                suppressedInWindow++;
+                line = null;
+            }
         }
-        System.err.println("Argos network policy blocked " + target + ": " + reason);
+        if (line != null) System.err.println(line);
         reply(out, code);
         return null;
     }
@@ -327,12 +357,14 @@ public final class Socks5Proxy implements AutoCloseable {
         // Byte by byte so no tunnel data after the header is consumed.
         InputStream in = socket.getInputStream();
         ByteArrayOutputStream header = new ByteArrayOutputStream();
+        int tail = 0;
         while (header.size() < 16_384) {
             int next = in.read();
             if (next < 0) throw new UpstreamRefusal(REPLY_FAILURE);
             header.write(next);
-            String text = header.toString(StandardCharsets.ISO_8859_1);
-            if (text.endsWith("\r\n\r\n")) {
+            tail = (tail << 8) | next;
+            if (tail == 0x0d0a0d0a) {
+                String text = header.toString(StandardCharsets.ISO_8859_1);
                 String[] status = text.substring(0, text.indexOf("\r\n")).split(" ");
                 if (status.length >= 2 && status[1].equals("200")) return;
                 throw new UpstreamRefusal(status.length >= 2 && status[1].equals("403") ? REPLY_NOT_ALLOWED : REPLY_FAILURE);
@@ -388,6 +420,18 @@ public final class Socks5Proxy implements AutoCloseable {
         closeQuietly(server);
         open.forEach(Socks5Proxy::closeQuietly);
         open.clear();
+        reportSuppressedRefusals();
+    }
+
+    /** The count of refusals the bounded log left out, at the end of a window and when the proxy stops. */
+    private void reportSuppressedRefusals() {
+        synchronized (blocked) {
+            if (suppressedInWindow > 0) {
+                System.err.println("Argos network policy: " + suppressedInWindow
+                        + " further refused connections not logged");
+                suppressedInWindow = 0;
+            }
+        }
     }
 
     /** The upstream proxy refused; carries the SOCKS reply code for the browser. */

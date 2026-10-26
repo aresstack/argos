@@ -68,6 +68,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
+import java.util.regex.Pattern;
 
 /**
  * Owns one persistent Camoufox browser and serializes every Playwright API call
@@ -104,9 +105,6 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
     private volatile CountDownLatch browserStopped;
     private Socks5Proxy proxy;
     private final HostResolver resolver;
-    private static final long LOADING_GRACE_MILLIS = 8_000;
-    private static final java.util.regex.Pattern LOADING_HINT = java.util.regex.Pattern.compile(
-            "(?iu)\\b(loading|wird geladen|lädt|bitte warten|please wait)\\b");
     private BrowserContext context;
     /** True while a download or batch runs its own background tabs on the driver thread. */
     private boolean backgroundWork;
@@ -628,11 +626,6 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
     }
 
     @Override
-    public String currentAddress() {
-        return currentUrl();
-    }
-
-    @Override
     public String currentUrl() {
         return onBrowser(() -> tabs.current().map(this::shownUrl).orElse(""));
     }
@@ -700,10 +693,39 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
         return onBrowser(() -> captureWhenLoaded(activePage()));
     }
 
+    private static final long LOADING_GRACE_MILLIS = 8_000;
+    private static final Pattern LOADING_HINT = Pattern.compile(
+            "(?iu)\\b(loading|wird geladen|lädt|bitte warten|please wait)\\b");
+
+    /**
+     * A page that still says it is loading while its own requests are in flight (a single-page app waiting
+     * for its data) is read again once those requests finished, at most {@link #LOADING_GRACE_MILLIS} later.
+     * Only protocol events are watched; the second read happens only for such pages. Small models otherwise
+     * read "Loading…" and give up (Phase 7 evaluation, task dynamic-page; ported from #13 commit 3701fd0).
+     */
+    private PageCapture captureWhenLoaded(Page p) {
+        PageCapture capture = capture(p);
+        if (!LOADING_HINT.matcher(capture.text()).find()) return capture;
+        NetworkActivity activity = document(p).activity;
+        if (activity.inflight() == 0) return capture;
+        long deadline = System.currentTimeMillis() + LOADING_GRACE_MILLIS;
+        while (activity.inflight() > 0 && System.currentTimeMillis() < deadline) p.waitForTimeout(150);
+        // Rendering the arrived data takes a moment after the response.
+        p.waitForTimeout(200);
+        return capture(p);
+    }
+
     @Override
     public PageCapture back() {
         return onBrowser(() -> {
             Page p = activePage();
+            if (document(p).saved != null) {
+                // As in traverse("back"): the saved feed is no history entry of its own, back returns to the
+                // page the tab shows behind it.
+                leaveSavedDocument(p);
+                controlSnapshots.remove(p);
+                return capture(p);
+            }
             Response previous = p.goBack(new Page.GoBackOptions()
                     .setWaitUntil(WaitUntilState.DOMCONTENTLOADED).setTimeout(45_000));
             return previous == null ? null : capture(p);
@@ -716,24 +738,6 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
             activePage().navigate("about:blank");
             return null;
         });
-    }
-
-    /**
-     * A page that still says it is loading while its own requests are in flight (a single-page app waiting for
-     * its data) is read again once those requests finished, at most {@link #LOADING_GRACE_MILLIS} later. Only
-     * protocol events are watched; the second read happens only for such pages. Small models otherwise read
-     * "Loading…" and give up (Phase 7 evaluation, task dynamic-page).
-     */
-    private PageCapture captureWhenLoaded(Page p) {
-        PageCapture capture = capture(p);
-        if (!LOADING_HINT.matcher(capture.text()).find()) return capture;
-        NetworkActivity activity = document(p).activity;
-        long deadline = System.currentTimeMillis() + LOADING_GRACE_MILLIS;
-        if (activity.inflight() == 0) return capture;
-        while (activity.inflight() > 0 && System.currentTimeMillis() < deadline) p.waitForTimeout(150);
-        // Rendering the arrived data takes a moment after the response.
-        p.waitForTimeout(200);
-        return capture(p);
     }
 
     private PageCapture capture(Page p) {
@@ -892,8 +896,8 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
     }
 
     /**
-     * Text of a saved source document: the charset of the Content-Type header, else for XML a byte order mark or
-     * the encoding of the XML declaration, else UTF-8.
+     * Text of a saved source document: the charset of the Content-Type header, else a byte order mark, else for
+     * XML the encoding of the XML declaration, else UTF-8.
      */
     static String decode(byte[] bytes, String contentType, DocumentType type) {
         java.nio.charset.Charset declared = charset(contentType);

@@ -13,6 +13,8 @@ final class HttpPageBrowser implements BrowserPagePort {
             .followRedirects(HttpClient.Redirect.NORMAL).proxy(HttpClient.Builder.NO_PROXY).build();
     private final Deque<String> history = new ArrayDeque<>();
     String lastReferer;
+    /** How often a page was read (open, current, back): each stands for one content() read. */
+    int reads;
 
     @Override
     public PageCapture open(String url, String referer) {
@@ -28,8 +30,18 @@ final class HttpPageBrowser implements BrowserPagePort {
     }
 
     @Override
-    public String currentAddress() {
-        return history.isEmpty() ? "about:blank" : history.peek();
+    public String currentUrl() {
+        return history.isEmpty() ? "" : history.peek();
+    }
+
+    /** Another tool (browser_navigate, a click, a tab switch) moves the browser; the web session is not told. */
+    void moveTo(String url) {
+        history.push(fetch(url, null).url());
+    }
+
+    /** The browser shows {@code url} without a fetch: a fragment move, a blob: document, a srcdoc frame. */
+    void show(String url) {
+        history.push(url);
     }
 
     @Override
@@ -45,6 +57,7 @@ final class HttpPageBrowser implements BrowserPagePort {
     }
 
     private PageCapture fetch(String url, String referer) {
+        reads++;
         try {
             HttpRequest.Builder request = HttpRequest.newBuilder(URI.create(url));
             if (referer != null) request.header("Referer", referer);

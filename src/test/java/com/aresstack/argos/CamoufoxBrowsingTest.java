@@ -1,5 +1,7 @@
 package com.aresstack.argos;
 
+import com.aresstack.argos.web.UrlPolicy;
+import com.aresstack.argos.web.WebSession;
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
@@ -61,6 +63,11 @@ class CamoufoxBrowsingTest {
             </script></body></html>""";
     private static final String SECOND = """
             <html><head><title>Zweite</title></head><body><h1>Zweite Seite</h1></body></html>""";
+    /** A single-page app: the document says it is loading until its own request answers. */
+    private static final String LOADING = """
+            <html><head><title>Daten</title></head><body><p id="d">Wird geladen …</p>
+            <script>fetch('/data').then(r => r.text()).then(t => { document.getElementById('d').textContent = t; });</script>
+            </body></html>""";
 
     @Test @Timeout(value = 240, unit = TimeUnit.SECONDS)
     void browsesWithTabsHistoryControlsAndExtraction() throws Exception {
@@ -69,12 +76,22 @@ class CamoufoxBrowsingTest {
         local.requireBrowserConfiguration();
         HttpServer site = HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0);
         site.createContext("/", exchange -> {
-            byte[] body = (exchange.getRequestURI().getPath().startsWith("/second") ? SECOND : FORM)
+            String path = exchange.getRequestURI().getPath();
+            if (path.equals("/data")) {
+                try { Thread.sleep(1_200); } catch (InterruptedException ignored) { }
+                byte[] data = "Messwerte geladen: 42".getBytes(StandardCharsets.UTF_8);
+                exchange.getResponseHeaders().add("Content-Type", "text/plain; charset=utf-8");
+                exchange.sendResponseHeaders(200, data.length);
+                try (var out = exchange.getResponseBody()) { out.write(data); }
+                return;
+            }
+            byte[] body = (path.startsWith("/second") ? SECOND : path.startsWith("/loading") ? LOADING : FORM)
                     .getBytes(StandardCharsets.UTF_8);
             exchange.getResponseHeaders().add("Content-Type", "text/html; charset=utf-8");
             exchange.sendResponseHeaders(200, body.length);
             try (var out = exchange.getResponseBody()) { out.write(body); }
         });
+        site.setExecutor(java.util.concurrent.Executors.newCachedThreadPool());
         site.start();
         try (CamoufoxBrowser browser = new CamoufoxBrowser(new ArgosConfig(
                 "127.0.0.1", 0, local.executable(), local.launchOptions(), temporary.resolve("profile"), true)
@@ -161,6 +178,14 @@ class CamoufoxBrowsingTest {
             Map<String, Object> newTab = browser.newTab(base + "/");
             assertEquals("t3", newTab.get("tab"));
             assertEquals("Formular", newTab.get("title"));
+            // web_* share the tab with browser_*: web_read adopts the page another tool opened (expert profile).
+            WebSession web = new WebSession(browser, UrlPolicy.from(TestNetworks.LOOPBACK), null);
+            String adopted = web.read(1);
+            assertTrue(adopted.startsWith("URL: " + base + "/\nTITLE: Formular\nLINKS: "), adopted);
+            // A page that says it is loading is read again once its own request answered (#13, dynamic-page).
+            String loaded = web.open(base + "/loading");
+            assertTrue(loaded.contains("Messwerte geladen: 42"), loaded);
+            assertFalse(loaded.contains("Wird geladen"), loaded);
         } finally {
             site.stop(0);
         }

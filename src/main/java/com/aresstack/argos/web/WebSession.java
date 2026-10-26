@@ -1,5 +1,7 @@
 package com.aresstack.argos.web;
 
+import com.aresstack.argos.fetch.WebAddress;
+
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -16,12 +18,21 @@ import java.util.regex.Pattern;
  * <p>Search results (result-N) and page links (link-N) are separate snapshots. A bare
  * number such as "2" refers to the list the agent saw last: web_search shows results,
  * web_links shows links. Anything that cannot be resolved fails with a clear message.
+ *
+ * <p>The session follows the browser: a page another tool opened (expert profile: browser_navigate,
+ * a click, a tab switch; any profile: the page web_research loaded last) is read by web_read and
+ * web_links as well. Only the search provider's own page after web_search is not a page to read;
+ * a result has to be opened first.
  */
 public final class WebSession {
     public static final int DEFAULT_PART_CHARACTERS = 12_000;
     public static final int DEFAULT_MAX_LINKS = 150;
     private static final Pattern TARGET = Pattern.compile(
             "^\\[?\\s*(link|result)?\\s*[-_ #]?\\s*(\\d{1,4})\\s*]?$");
+    private static final String NO_PAGE = "No page is open yet. Call web_open or web_search first.";
+    private static final String AFTER_SEARCH = "No page is open since the last web_search. "
+            + "Open a result first, e.g. web_follow link_id=\"result-1\".";
+    private static final String NO_WEB_PAGE = "The browser shows no http(s) page (%s). Call web_open or web_search first.";
 
     private enum Listing { RESULTS, LINKS }
 
@@ -35,8 +46,8 @@ public final class WebSession {
     private List<SearchHit> results = List.of();
     private Listing lastListing = Listing.LINKS;
     private PageCapture page;
-    /** What the browser showed when the session last lost its page (search results page, blocked target). */
-    private String abandonedAddress;
+    /** Where the browser stood after the last web_search: the provider's page, which is not adopted. */
+    private String searchPage = "";
 
     public WebSession(BrowserPagePort browser, UrlPolicy policy, WebSearchPort search) {
         this(browser, policy, search, DEFAULT_PART_CHARACTERS, DEFAULT_MAX_LINKS);
@@ -59,7 +70,13 @@ public final class WebSession {
 
     public synchronized String search(String query) throws Exception {
         if (query == null || query.isBlank()) throw new IllegalArgumentException("Empty search query.");
-        SearchResults found = search.search(query.trim());
+        SearchResults found;
+        try {
+            found = search.search(query.trim());
+        } catch (Exception failed) {
+            leaveProviderPage();
+            throw failed;
+        }
         Map<String, SearchHit> byUrl = new LinkedHashMap<>();
         for (SearchHit hit : found.hits()) {
             if (byUrl.size() < maxLinks) byUrl.putIfAbsent(hit.url(), hit);
@@ -69,7 +86,7 @@ public final class WebSession {
         // The search provider navigated the browser; the previous page and its link ids are gone.
         page = null;
         links.clear();
-        abandonedAddress = browser.currentAddress();
+        searchPage = browser.currentUrl();
         StringBuilder out = new StringBuilder();
         for (int i = 0; i < results.size(); i++) {
             SearchHit hit = results.get(i);
@@ -92,16 +109,17 @@ public final class WebSession {
     }
 
     public synchronized String read(int part) {
-        requirePage();
+        requireShownPage();
         return show(accept(browser.current()), part);
     }
 
-    /** Links of the last capture; no extra browser read (web_read refreshes late-loaded links). */
+    /**
+     * Links of the last capture; no extra browser read (web_read refreshes late-loaded links) unless
+     * another tool moved the browser since, because the ids belong to the page it shows.
+     */
     public synchronized String links() {
-        requirePage();
-        String shown = browser.currentAddress();
-        // Another tool moved on (browser_navigate, web_click): list the links of the page shown now.
-        if (shown != null && shown.regionMatches(true, 0, "http", 0, 4) && !shown.equals(page.url())) {
+        String shown = requireShownPage();
+        if (page == null || !WebAddress.withoutFragment(page.url()).equals(WebAddress.withoutFragment(shown))) {
             accept(browser.current());
         }
         lastListing = Listing.LINKS;
@@ -142,7 +160,7 @@ public final class WebSession {
     }
 
     public synchronized String back() {
-        requirePage();
+        requireShownPage();
         PageCapture previous = browser.back();
         if (previous == null) throw new IllegalStateException("No previous page in history.");
         return show(accept(previous), 1);
@@ -156,35 +174,11 @@ public final class WebSession {
             page = null;
             links.clear();
             browser.clear();
-            abandonedAddress = null;
             throw new IllegalArgumentException("Blocked after redirect: " + blocked.getMessage());
         }
         page = capture;
         links.update(capture.url(), extractor.extract(capture.html(), capture.url()));
         return capture;
-    }
-
-    /**
-     * A web page another tool opened (browser_navigate, web_click, a tab switch) since the session lost its own:
-     * web_read and web_links continue there instead of claiming that no page is open (Phase 7 evaluation,
-     * expert profile). The search results page and anything the policy refuses are never adopted.
-     */
-    private PageCapture pageOpenedElsewhere() {
-        String address;
-        try {
-            address = browser.currentAddress();
-        } catch (RuntimeException unavailable) {
-            return null;
-        }
-        if (address == null || !address.regionMatches(true, 0, "http", 0, 4) || address.equals(abandonedAddress)) {
-            return null;
-        }
-        try {
-            policy.check(address);
-        } catch (IllegalArgumentException refused) {
-            return null;
-        }
-        return browser.current();
     }
 
     private String show(PageCapture capture, int part) {
@@ -207,17 +201,53 @@ public final class WebSession {
         return out.append('\n').append(slice).toString();
     }
 
-    private void requirePage() {
-        if (page != null) return;
-        PageCapture opened = pageOpenedElsewhere();
-        if (opened != null) {
-            accept(opened);
-            return;
+    /**
+     * A failed search (consent wall, challenge, no engine) may have left the browser on the provider's page;
+     * then the previous page is gone like after a successful search. If the browser did not move, the page
+     * the agent had stays readable.
+     */
+    private void leaveProviderPage() {
+        String shown = browser.currentUrl();
+        if (page != null && page.url().equals(shown)) return;
+        page = null;
+        links.clear();
+        searchPage = shown;
+    }
+
+    /**
+     * The address the browser shows, which web_* read even when another tool opened it (expert profile:
+     * browser_navigate, clicks, tab switches). A blank tab or a non-http(s) document (blob:, srcdoc) is
+     * nothing to read and is left untouched; the search provider's page after web_search is left to
+     * web_follow, also when the search found nothing.
+     */
+    private String requireShownPage() {
+        String shown = browser.currentUrl();
+        if (shown.isBlank() || "about:blank".equals(shown)) {
+            forgetPage();
+            throw new IllegalStateException(results.isEmpty() ? NO_PAGE : AFTER_SEARCH);
         }
-        if (!results.isEmpty()) {
-            throw new IllegalStateException("No page is open since the last web_search. "
-                    + "Open a result first, e.g. web_follow link_id=\"result-1\".");
+        if (!isWeb(shown)) {
+            forgetPage();
+            throw new IllegalStateException(String.format(NO_WEB_PAGE, shown));
         }
-        throw new IllegalStateException("No page is open yet. Call web_open or web_search first.");
+        if (page == null && sameDocument(shown, searchPage)) {
+            throw new IllegalStateException(results.isEmpty() ? NO_PAGE : AFTER_SEARCH);
+        }
+        return shown;
+    }
+
+    /** Same scheme, host and path: a results page that rewrites its query or fragment later is still the results page. */
+    private static boolean sameDocument(String a, String b) {
+        return !b.isEmpty() && a.split("[?#]", 2)[0].equalsIgnoreCase(b.split("[?#]", 2)[0]);
+    }
+
+    private void forgetPage() {
+        page = null;
+        links.clear();
+    }
+
+    private static boolean isWeb(String url) {
+        String lower = url.toLowerCase(Locale.ROOT);
+        return lower.startsWith("http://") || lower.startsWith("https://");
     }
 }

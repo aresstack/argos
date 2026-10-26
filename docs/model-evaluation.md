@@ -167,10 +167,12 @@ gpt-oss:20b@expert 7/8. Changes from it:
   now have `.test` domains, and the default system prompt says neutrally that every address in the question may be
   opened (`-Peval.prompt=plain` for the A/B comparison without it).
 - **web_read after browser_navigate** (expert) answered "No page is open yet". `web_read` and `web_links` now
-  continue on a page another tool opened (never on the search results page or a refused address).
+  follow the page the browser shows, whichever tool opened it (never the search provider's page); fixed on the
+  integration branch (#12).
 - **dynamic-page:** `web_open` returned "Loading events…" while the page's data request was still open, and both
   compact runs failed there. `web_open` and `web_read` now read such a page once more when its open requests have
-  finished (at most 8 s, protocol events only, no page script). The self-test solves it with a single `web_open`.
+  finished (at most 8 s, protocol events only, no page script), also on the integration branch (#12). The
+  self-test solves it with a single `web_open`.
 - **long-page:** reading all three parts of the archive takes about 8,600 tokens with the questions and tools, more
   than `num_ctx` 8192, so Ollama drops earlier messages, possibly the question itself. This matches the
   `empty_answer` endings. Smaller parts do not help when a model reads every part; options are 16K context

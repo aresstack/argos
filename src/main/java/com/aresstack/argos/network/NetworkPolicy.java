@@ -6,6 +6,8 @@ import java.net.UnknownHostException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
+import java.util.function.Supplier;
 
 /**
  * Decides per connection, on the resolved addresses, whether the browser may connect.
@@ -42,14 +44,35 @@ public final class NetworkPolicy {
 
     private final List<Rule> rules;
     private final List<String> text;
+    private final Supplier<Set<InetAddress>> localAddresses;
 
-    private NetworkPolicy(List<Rule> rules, List<String> text) {
+    private NetworkPolicy(List<Rule> rules, List<String> text, Supplier<Set<InetAddress>> localAddresses) {
         this.rules = List.copyOf(rules);
         this.text = List.copyOf(text);
+        this.localAddresses = localAddresses;
     }
 
     public static NetworkPolicy publicOnly() {
-        return new NetworkPolicy(List.of(), List.of());
+        return new NetworkPolicy(List.of(), List.of(), LocalAddresses.SYSTEM);
+    }
+
+    /** The same rules with another source of this machine's interface addresses; for tests. */
+    public NetworkPolicy withLocalAddresses(Supplier<Set<InetAddress>> addresses) {
+        return new NetworkPolicy(rules, text, addresses);
+    }
+
+    /**
+     * Whether a rule admits loopback. Only for tests against local fixtures: the browser could then
+     * reach every loopback service, including Playwright's and Firefox' own ports.
+     */
+    public boolean admitsLoopback() {
+        return rules.stream().anyMatch(rule -> rule.range != null
+                && AddressClass.LOOPBACK.ranges().stream().anyMatch(loopback -> overlap(rule.range, loopback)));
+    }
+
+    /** Whether two ranges share an address: either one holds the other's first address. */
+    private static boolean overlap(IpRange a, IpRange b) {
+        return a.contains(b.network()) || b.contains(a.network());
     }
 
     public static NetworkPolicy parse(String commaSeparated) {
@@ -73,7 +96,7 @@ public final class NetworkPolicy {
             }
             text.add(entry);
         }
-        return new NetworkPolicy(rules, text);
+        return new NetworkPolicy(rules, text, LocalAddresses.SYSTEM);
     }
 
     /** The configured rules, normalized, for status output. */
@@ -89,11 +112,15 @@ public final class NetworkPolicy {
         if (addresses.isEmpty()) return Decision.blocked("no address for " + requestedHost);
         String host = normalizeHost(requestedHost);
         for (InetAddress address : addresses) {
-            AddressClass kind = AddressClass.of(address);
+            AddressClass kind = classify(address);
             if (kind == null || admitted(host, address, kind)) continue;
+            String hint = kind.neverAllowed() ? ""
+                    : kind == AddressClass.LOCAL_INTERFACE ? " (this machine's own address; a host rule is not enough,"
+                            + " allow it with a range rule such as " + host + "@" + address.getHostAddress() + "/"
+                            + (address.getAddress().length == 4 ? 32 : 128) + ")"
+                    : " (allow it explicitly with ARGOS_INTRANET_ALLOW)";
             return Decision.blocked(kind.name().toLowerCase(Locale.ROOT).replace('_', '-')
-                    + " address " + address.getHostAddress()
-                    + (kind.neverAllowed() ? "" : " (allow it explicitly with ARGOS_INTRANET_ALLOW)"));
+                    + " address " + address.getHostAddress() + hint);
         }
         return Decision.ALLOWED;
     }
@@ -150,6 +177,22 @@ public final class NetworkPolicy {
         }
         if (host == null || host.isBlank()) throw new IllegalArgumentException("URL has no host: " + url);
         return checkHost(host, resolver);
+    }
+
+    /**
+     * {@link AddressClass#of}, plus {@link AddressClass#LOCAL_INTERFACE} for this machine's own addresses,
+     * public or intranet: a connection to them is local and reaches services bound to all interfaces past
+     * the host firewall, so like loopback they need a range rule; a host rule never admits them.
+     */
+    public AddressClass classify(InetAddress address) {
+        AddressClass kind = AddressClass.of(address);
+        if (kind != null && !kind.intranet()) return kind;
+        try {
+            InetAddress plain = InetAddress.getByAddress(address.getAddress());
+            return localAddresses.get().contains(plain) ? AddressClass.LOCAL_INTERFACE : kind;
+        } catch (UnknownHostException impossible) {
+            return kind;
+        }
     }
 
     private boolean admitted(String host, InetAddress address, AddressClass kind) {

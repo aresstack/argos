@@ -52,7 +52,7 @@ class HumanTypingTest {
     @Test void shiftIsHeldExactlyAroundShiftedCharacters() {
         for (long seed = 1; seed <= 20; seed++) {
             boolean shift = false;
-            for (HumanTyping.KeyEvent event : typing(seed).type("aBC d!e")) {
+            for (HumanTyping.KeyEvent event : typing(seed).type("aBC d!e Äö")) {
                 if (event.key().equals("Shift")) {
                     shift = event.kind() == HumanTyping.Kind.DOWN;
                 } else if (event.kind() == HumanTyping.Kind.DOWN) {

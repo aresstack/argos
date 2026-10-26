@@ -13,14 +13,8 @@ public interface BrowserPagePort {
     /** Read the current document again without navigating. */
     PageCapture current();
 
-    /**
-     * The address the browser shows now, without reading the page. Other tools (e.g. browser_navigate,
-     * web_click) can change it behind the web session's back.
-     */
-    default String currentAddress() {
-        PageCapture current = current();
-        return current == null ? "" : current.url();
-    }
+    /** The address the browser shows ({@code about:blank} for a blank tab), or "" before it started. */
+    String currentUrl();
 
     /** Go back one history entry. @return the previous page, or null without history. */
     PageCapture back();

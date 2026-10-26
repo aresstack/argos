@@ -117,7 +117,111 @@ class WebSessionTest {
     }
 
     @Test void requiresAPageBeforeReading() {
-        assertThrows(IllegalStateException.class, () -> web.read(1));
+        var error = assertThrows(IllegalStateException.class, () -> web.read(1));
+        assertTrue(error.getMessage().startsWith("No page is open yet"), error.getMessage());
+    }
+
+    @Test void readsThePageAnotherToolOpened() {
+        browser.moveTo(base + "/article");                 // browser_navigate in the expert profile
+        String answer = web.read(1);
+        assertTrue(answer.startsWith("URL: " + base + "/article\nTITLE: Article\nLINKS: 1"), answer);
+        assertEquals("link-1: Home — " + base + "/", web.links());
+        assertTrue(web.follow("link-1").contains("TITLE: Start"));
+        assertEquals(base + "/article", browser.lastReferer, "the adopted page is the referer");
+    }
+
+    @Test void linkIdsFollowTheBrowserWhenAnotherToolMovedIt() {
+        web.open(base + "/");
+        browser.moveTo(base + "/article");
+        assertEquals("link-1: Home — " + base + "/", web.links(), "ids belong to the page the browser shows");
+        browser.clear();                                   // a blank tab is nothing to read
+        var error = assertThrows(IllegalStateException.class, web::links);
+        assertTrue(error.getMessage().startsWith("No page is open yet"), error.getMessage());
+    }
+
+    @Test void aResultsPageThatRewritesItsQueryLaterIsStillTheProvidersPage() throws Exception {
+        WebSearchPort engine = query -> {
+            browser.moveTo(base + "/about?q=camoufox");
+            return new SearchResults(List.of(new SearchHit("Article", base + "/article", "")), List.of());
+        };
+        WebSession searching = new WebSession(browser, UrlPolicy.off(), engine);
+        searching.search("camoufox");
+        browser.show(base + "/about?q=camoufox&ia=web#top");    // history.replaceState by the engine's script
+        var error = assertThrows(IllegalStateException.class, () -> searching.read(1));
+        assertTrue(error.getMessage().contains("web_follow link_id=\"result-1\""), error.getMessage());
+        browser.moveTo(base + "/");                               // another path on the same host is a page
+        assertTrue(searching.read(1).contains("TITLE: Start"));
+    }
+
+    @Test void aSearchWithoutResultsStillLeavesTheProvidersPageAlone() throws Exception {
+        WebSearchPort engine = query -> {
+            browser.moveTo(base + "/about");
+            return new SearchResults(List.of(), List.of("ATTEMPT: local NO_ORGANIC_RESULTS"));
+        };
+        WebSession searching = new WebSession(browser, UrlPolicy.off(), engine);
+        assertTrue(searching.search("nothing").startsWith("No results."));
+        int reads = browser.reads;
+        var error = assertThrows(IllegalStateException.class, () -> searching.read(1));
+        assertTrue(error.getMessage().startsWith("No page is open yet"), error.getMessage());
+        assertEquals(reads, browser.reads, "the provider's page is not read");
+        browser.moveTo(base + "/article");
+        assertTrue(searching.read(1).contains("TITLE: Article"));
+    }
+
+    @Test void aFailedSearchOnTheProvidersPageIsNotAdoptedEither() {
+        web.open(base + "/");
+        WebSession stuck = new WebSession(browser, UrlPolicy.off(), query -> {
+            throw new IllegalStateException("No search engine answered.");
+        });
+        assertThrows(IllegalStateException.class, () -> stuck.search("x"));
+        WebSession walled = new WebSession(browser, UrlPolicy.off(), query -> {
+            browser.moveTo(base + "/about");                   // consent wall on the provider's page
+            throw new IllegalStateException("Consent wall.");
+        });
+        walled.open(base + "/");
+        assertThrows(IllegalStateException.class, () -> walled.search("x"));
+        var error = assertThrows(IllegalStateException.class, () -> walled.read(1));
+        assertTrue(error.getMessage().startsWith("No page is open yet"), error.getMessage());
+    }
+
+    @Test void aFailedSearchThatDidNotMoveTheBrowserKeepsThePage() {
+        WebSession stuck = new WebSession(browser, UrlPolicy.off(), query -> {
+            throw new IllegalStateException("No search engine answered.");
+        });
+        stuck.open(base + "/");
+        assertThrows(IllegalStateException.class, () -> stuck.search("x"));
+        assertTrue(stuck.read(1).contains("TITLE: Start"), "the browser never left the page");
+    }
+
+    @Test void nonWebDocumentsAreReportedWithoutTouchingTheTab() {
+        web.open(base + "/");
+        browser.show("blob:" + base + "/3f2a");                 // a preview the page opened in the same tab
+        var error = assertThrows(IllegalStateException.class, () -> web.read(1));
+        assertTrue(error.getMessage().startsWith("The browser shows no http(s) page (blob:"), error.getMessage());
+        assertEquals("blob:" + base + "/3f2a", browser.currentUrl(), "web_* must not clear a tab another tool built");
+        assertThrows(IllegalStateException.class, web::links);
+    }
+
+    @Test void aFragmentMoveDoesNotMakeLinksReadThePageAgain() {
+        web.open(base + "/");
+        browser.show(base + "/#part-2");
+        int reads = browser.reads;
+        assertTrue(web.links().startsWith("link-1: Read the article"));
+        assertEquals(reads, browser.reads, "same document, same links");
+    }
+
+    @Test void theSearchProvidersPageIsNotAdoptedButALaterNavigationIs() throws Exception {
+        WebSearchPort engine = query -> {
+            browser.moveTo(base + "/about");               // the provider leaves the browser on its results page
+            return new SearchResults(List.of(new SearchHit("Article", base + "/article", "")), List.of());
+        };
+        WebSession searching = new WebSession(browser, UrlPolicy.off(), engine);
+        searching.search("camoufox");
+        var error = assertThrows(IllegalStateException.class, () -> searching.read(1));
+        assertTrue(error.getMessage().contains("web_follow link_id=\"result-1\""), error.getMessage());
+        browser.moveTo(base + "/article");                 // browser_navigate after the search
+        assertTrue(searching.read(1).contains("TITLE: Article"));
+        assertTrue(searching.follow("result-1").contains("TITLE: Article"), "results stay valid");
     }
 
     @Test void strictPolicyBlocksLoopbackAndNonWebUrls() {
@@ -140,6 +244,7 @@ class WebSessionTest {
                 return new PageCapture("http://127.0.0.1/admin", "Router", "secret", "");
             }
             @Override public PageCapture current() { return open(null, null); }
+            @Override public String currentUrl() { return cleared[0] ? "about:blank" : "http://127.0.0.1/admin"; }
             @Override public PageCapture back() { return null; }
             @Override public void clear() { cleared[0] = true; }
         };
@@ -187,31 +292,6 @@ class WebSessionTest {
         assertTrue(searching.follow("result-2").contains("TITLE: About"), "results survive page navigation");
         var unknown = assertThrows(IllegalArgumentException.class, () -> searching.follow("result-7"));
         assertTrue(unknown.getMessage().contains("result-1 to result-2"), unknown.getMessage());
-    }
-
-    @Test void readAndLinksContinueOnAPageAnotherToolOpened() throws Exception {
-        HttpPageBrowser shared = new HttpPageBrowser();
-        WebSession session = new WebSession(shared, UrlPolicy.off(), null);
-        shared.open(base + "/about", null);           // e.g. browser_navigate in the expert profile
-
-        assertTrue(session.read(1).contains("TITLE: About"), "no 'No page is open yet' after browser_navigate");
-        session.open(base + "/");
-        shared.open(base + "/article", null);         // e.g. web_click followed a link
-        assertTrue(session.links().contains("link-1: Home"), session.links());
-        assertTrue(session.follow("link-1").contains("TITLE: Start"));
-    }
-
-    @Test void theSearchResultsPageIsNeverAdopted() throws Exception {
-        HttpPageBrowser shared = new HttpPageBrowser();
-        WebSearchPort engine = query -> {
-            shared.open(base + "/", null);            // the provider shows its results page in the browser
-            return new SearchResults(List.of(new SearchHit("Article", base + "/article", "")), List.of());
-        };
-        WebSession session = new WebSession(shared, UrlPolicy.off(), engine);
-        session.search("camoufox");
-
-        var error = assertThrows(IllegalStateException.class, () -> session.read(1));
-        assertTrue(error.getMessage().contains("web_follow link_id=\"result-1\""), error.getMessage());
     }
 
     @Test void pageLinkIdsAreInvalidAfterANewSearch() throws Exception {

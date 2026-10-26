@@ -1,5 +1,8 @@
 package com.aresstack.argos;
 
+import com.aresstack.argos.page.ReadinessPolicy;
+import com.aresstack.argos.network.NetworkSettings;
+
 import java.io.IOException;
 import java.io.Reader;
 import java.net.URI;
@@ -12,13 +15,44 @@ import java.util.Properties;
 /** Environment-first configuration compatible with AresStack / Pyloros. */
 public record ArgosConfig(
         String host, int port, Path executable, Path launchOptions, Path profile, boolean headless,
-        String publicOrigin, String securityMode, String centralOauthIssuer, String requiredScope) {
+        String publicOrigin, String securityMode, String centralOauthIssuer, String requiredScope,
+        ToolProfile toolProfile, ReadinessPolicy readiness, NetworkSettings network,
+        boolean networkBodies) {
+
+    public ArgosConfig {
+        toolProfile = toolProfile == null ? ToolProfile.LEGACY : toolProfile;
+        if (readiness == null) readiness = ReadinessPolicy.balanced();
+        network = network == null ? NetworkSettings.strict() : network;
+    }
 
     // Direct browser-test construction remains independent of server configuration.
     public ArgosConfig(String host, int port, Path executable, Path launchOptions,
                        Path profile, boolean headless) {
         this(host, port, executable, launchOptions, profile, headless,
-                null, "central-oauth", null, "argos");
+                null, "central-oauth", null, "argos", ToolProfile.LEGACY, ReadinessPolicy.balanced(),
+                NetworkSettings.strict(), false);
+    }
+
+    public ArgosConfig(String host, int port, Path executable, Path launchOptions, Path profile,
+                       boolean headless, String publicOrigin, String securityMode,
+                       String centralOauthIssuer, String requiredScope) {
+        this(host, port, executable, launchOptions, profile, headless, publicOrigin, securityMode,
+                centralOauthIssuer, requiredScope, ToolProfile.LEGACY, ReadinessPolicy.balanced(),
+                NetworkSettings.strict(), false);
+    }
+
+    public ArgosConfig(String host, int port, Path executable, Path launchOptions, Path profile,
+                       boolean headless, String publicOrigin, String securityMode, String centralOauthIssuer,
+                       String requiredScope, ToolProfile toolProfile, ReadinessPolicy readiness) {
+        this(host, port, executable, launchOptions, profile, headless, publicOrigin, securityMode,
+                centralOauthIssuer, requiredScope, toolProfile, readiness,
+                NetworkSettings.strict(), false);
+    }
+
+    public ArgosConfig withNetwork(NetworkSettings settings) {
+        return new ArgosConfig(host, port, executable, launchOptions, profile, headless, publicOrigin,
+                securityMode, centralOauthIssuer, requiredScope, toolProfile, readiness,
+                settings, networkBodies);
     }
 
     public static ArgosConfig fromEnvironment() throws IOException {
@@ -28,6 +62,11 @@ public record ArgosConfig(
         Properties desktop = readProperties(Path.of(System.getProperty("user.home"),
                 ".browser-event-hub", "desktop", "camoufox.properties"));
 
+        if (setting("ARGOS_ALLOW_PRIVATE_NETWORKS", application, "browser.allow-private-networks", null) != null) {
+            // One security logic for all tools: the proxy's NetworkPolicy. No second, looser switch.
+            throw new IllegalArgumentException("ARGOS_ALLOW_PRIVATE_NETWORKS was replaced by the network boundary: "
+                    + "admit intranet targets with ARGOS_INTRANET_ALLOW, or debug with ARGOS_NETWORK_POLICY=off.");
+        }
         String portText = setting("SERVER_PORT", application, "server.port", null);
         if (portText == null) {
             throw new IllegalArgumentException(
@@ -75,7 +114,17 @@ public record ArgosConfig(
                 options == null ? null : Path.of(options).toAbsolutePath(),
                 Path.of(profile).toAbsolutePath(),
                 Boolean.parseBoolean(setting("ARGOS_HEADLESS", application, "browser.headless", "false")),
-                publicOrigin, securityMode, issuer, requiredScope);
+                publicOrigin, securityMode, issuer, requiredScope,
+                ToolProfile.parse(setting("ARGOS_TOOL_PROFILE", application, "tools.profile", null)),
+                ReadinessPolicy.from(name -> setting(name, application, propertyKey(name), null)),
+                // Every browser connection passes Argos' local proxy and its policy (analysis 5.4).
+                NetworkSettings.parse(
+                        setting("ARGOS_NETWORK_POLICY", application, "network.policy", null),
+                        setting("ARGOS_INTRANET_ALLOW", application, "network.intranet-allow", null),
+                        setting("ARGOS_UPSTREAM_PROXY", application, "network.upstream-proxy", null),
+                        setting("ARGOS_UPSTREAM_DNS", application, "network.upstream-dns", null)),
+                // Opt-in: eagerly keeps (masked) document/XHR/fetch bodies for browser_network_detail.
+                Boolean.parseBoolean(setting("ARGOS_NETWORK_BODIES", application, "network.bodies", "false")));
     }
 
     private static Properties readProperties(Path path) throws IOException {
@@ -93,6 +142,11 @@ public record ArgosConfig(
         if (env != null && !env.isBlank()) return env.trim();
         String property = properties.getProperty(key);
         return property != null && !property.isBlank() ? property.trim() : fallback;
+    }
+
+    /** ARGOS_READY_DOM_STABLE_MS → ready.dom.stable.ms in argos.properties. */
+    private static String propertyKey(String environment) {
+        return environment.replaceFirst("^ARGOS_", "").toLowerCase(Locale.ROOT).replace('_', '.');
     }
 
     private static String normalizeOrigin(String value) {

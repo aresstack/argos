@@ -1,5 +1,6 @@
 package com.aresstack.argos;
 
+import com.aresstack.argos.network.NetworkSettings;
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
@@ -9,7 +10,12 @@ import java.net.InetSocketAddress;
 import java.net.InetAddress;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
+import com.aresstack.argos.page.DocumentType;
+import com.aresstack.argos.page.PageSnapshot;
+import com.aresstack.argos.page.ReadinessReport;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -33,11 +39,13 @@ class CamoufoxBrowserTest {
         site.start();
         try (CamoufoxBrowser browser = new CamoufoxBrowser(new ArgosConfig(
                 "127.0.0.1", 0, local.executable(), local.launchOptions(),
-                temporary.resolve("profile"), true))) {
+                temporary.resolve("profile"), true)
+                // The smoke site is on loopback, which the strict network policy only admits by rule.
+                .withNetwork(NetworkSettings.parse("strict", "127.0.0.1,::1", null, null)))) {
             String url = "http://localhost:" + site.getAddress().getPort() + "/";
             Map<String,Object> navigated = browser.navigate(url);
             assertEquals("Argos smoke", navigated.get("title"));
-            assertTrue(browser.snapshot(8000).get("text").toString().contains("Browser research"));
+            assertTrue(browser.snapshot(8000).text().contains("Browser research"));
             assertFalse(browser.inspect("#subject", 5).isEmpty());
             assertTrue(browser.screenshot().length > 500);
             browser.fill("#search", "inspection");
@@ -47,8 +55,210 @@ class CamoufoxBrowserTest {
             assertEquals("Clicked successfully", browser.evaluate(
                     "() => document.querySelector('#subject').textContent"));
             assertFalse(browser.networkEvents().isEmpty());
+            var web = new com.aresstack.argos.web.WebSession(browser,
+                    com.aresstack.argos.web.UrlPolicy.allowing("127.0.0.1,::1"), null);
+            assertTrue(web.open(url).contains("TITLE: Argos smoke"));
+            assertTrue(web.read(1).contains("Browser research"));
         } finally {
             site.stop(0);
         }
+    }
+
+    @Test @Timeout(value=240,unit=TimeUnit.SECONDS)
+    void readsEveryDocumentTypeAndWaitsForDynamicContent() throws Exception {
+        Assumptions.assumeTrue(Boolean.getBoolean("argos.testCamoufox"), "Opt-in real browser smoke");
+        ArgosConfig local = ArgosConfig.fromEnvironment();
+        local.requireBrowserConfiguration();
+        try (FixtureServer site = new FixtureServer();
+             CamoufoxBrowser browser = new CamoufoxBrowser(new ArgosConfig(
+                     "127.0.0.1", 0, local.executable(), local.launchOptions(),
+                     temporary.resolve("profile"), true).withNetwork(TestNetworks.LOOPBACK))) {
+            // A2: the SPA renders its results 1.2 s after DOMContentLoaded behind a spinner.
+            Map<String,Object> spa = browser.navigate(site.url("/spa.html"));
+            ReadinessReport readiness = (ReadinessReport) spa.get("readiness");
+            assertEquals(ReadinessReport.READY, readiness.state(), readiness.toString());
+            assertEquals(java.util.List.of("network-quiet"), readiness.met());
+            Map<String,Object> waited = browser.waitFor(null, "second", 10_000);
+            assertEquals(ReadinessReport.READY, ((ReadinessReport) waited.get("readiness")).state());
+            assertTrue(browser.snapshot(8000).text().contains("Search results"));
+            // A permanent error is reported as such, not as a readiness timeout.
+            assertThrows(IllegalStateException.class, () -> browser.waitFor("div[", null, 5_000));
+
+            try (CamoufoxBrowser thorough = new CamoufoxBrowser(new ArgosConfig(
+                    "127.0.0.1", 0, local.executable(), local.launchOptions(), temporary.resolve("thorough"),
+                    true, null, "none", null, "argos", ToolProfile.LEGACY,
+                    com.aresstack.argos.page.ReadinessPolicy.thorough()).withNetwork(TestNetworks.LOOPBACK))) {
+                ReadinessReport settled = (ReadinessReport) thorough.navigate(site.url("/spa.html")).get("readiness");
+                assertEquals(ReadinessReport.READY, settled.state(), settled.toString());
+                assertTrue(thorough.snapshot(8000).text().contains("Search results"), settled.toString());
+                // Heavy DOM: 20 000 articles built in ten chunks; settles once the last chunk is in.
+                ReadinessReport heavy = (ReadinessReport) thorough.navigate(site.url("/heavy.html")).get("readiness");
+                assertEquals(ReadinessReport.READY, heavy.state(), heavy.toString());
+                PageSnapshot big = thorough.snapshot(60_000);
+                assertTrue(big.truncated() && big.text().contains("Result 0"), String.valueOf(big.characters()));
+            }
+
+            // A1: the Springer case — an RSS document has no HTML body.
+            Map<String,Object> feed = browser.navigate(site.url("/springer-feed.rss"));
+            assertEquals(DocumentType.FEED, feed.get("documentType"), feed.toString());
+            PageSnapshot rss = browser.snapshot(8000);
+            assertEquals(DocumentType.FEED, rss.documentType());
+            assertTrue(rss.text().contains("1. Robust page readiness for research agents"), rss.text());
+
+            browser.navigate(site.url("/sitemap.xml"));
+            assertTrue(browser.snapshot(8000).text().contains("https://example.org/papers/1"));
+
+            browser.navigate(site.url("/data.json"));
+            PageSnapshot json = browser.snapshot(8000);
+            assertEquals(DocumentType.JSON, json.documentType());
+            assertTrue(json.text().contains("second"), json.text());
+
+            browser.navigate(site.url("/notes.txt"));
+            PageSnapshot text = browser.snapshot(8000);
+            assertEquals(DocumentType.TEXT, text.documentType());
+            assertTrue(text.text().contains("indented line two"), text.text());
+
+            Map<String,Object> pdf = browser.navigate(site.url("/paper.pdf"));
+            assertEquals(DocumentType.BINARY, pdf.get("documentType"), pdf.toString());
+            assertEquals(DocumentType.BINARY, browser.snapshot(8000).documentType());
+        }
+    }
+
+    @Test @Timeout(value=160,unit=TimeUnit.SECONDS)
+    void recordsMaskedNetworkDetailsWithoutTouchingThePage() throws Exception {
+        Assumptions.assumeTrue(Boolean.getBoolean("argos.testCamoufox"), "Opt-in real browser smoke");
+        ArgosConfig local = ArgosConfig.fromEnvironment();
+        local.requireBrowserConfiguration();
+        byte[] html = ("<html><head><title>Network</title></head><body><p id='out'>…</p><script>"
+                + "fetch('/api/data?q=x&token=abc').then(r=>r.json()).then(d=>document.querySelector('#out').textContent=d.name)"
+                + "</script></body></html>").getBytes(StandardCharsets.UTF_8);
+        byte[] json = "{\"name\":\"Ada\",\"access_token\":\"top-secret\"}".getBytes(StandardCharsets.UTF_8);
+        HttpServer site = HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0);
+        site.createContext("/", exchange -> {
+            boolean api = exchange.getRequestURI().getPath().startsWith("/api/");
+            byte[] body = api ? json : html;
+            exchange.getResponseHeaders().add("Content-Type", api ? "application/json" : "text/html; charset=utf-8");
+            if (api) exchange.getResponseHeaders().add("Set-Cookie", "sid=cookie-secret; Path=/; HttpOnly");
+            exchange.sendResponseHeaders(200, body.length);
+            try (var out = exchange.getResponseBody()) { out.write(body); }
+        });
+        site.start();
+        try (CamoufoxBrowser browser = new CamoufoxBrowser(new ArgosConfig(
+                "127.0.0.1", 0, local.executable(), local.launchOptions(),
+                temporary.resolve("profile"), true, null, "none", null, "argos", ToolProfile.EXPERT,
+                com.aresstack.argos.page.ReadinessPolicy.balanced(), TestNetworks.LOOPBACK, true))) {
+            browser.navigate("http://localhost:" + site.getAddress().getPort() + "/");
+            assertEquals("Ada", browser.evaluate("() => document.querySelector('#out').textContent"));
+            var api = browser.networkEvents("/api/data");
+            assertEquals(1, api.size());
+            String id = (String) api.get(0).get("id");
+            Map<String, Object> detail = browser.networkDetail(id, true);
+            assertEquals("application/json", detail.get("mime"));
+            String rendered = detail.toString() + browser.networkHar(50);
+            assertTrue(rendered.contains("Ada"));
+            assertFalse(rendered.contains("top-secret"));
+            assertFalse(rendered.contains("cookie-secret"));
+            assertFalse(rendered.contains("token=abc"));
+            var data = browser.networkJson(null, 20);
+            assertEquals(id, data.get(0).get("id"));
+            assertEquals("{name, access_token}", data.get(0).get("shape"));
+        } finally {
+            site.stop(0);
+        }
+    }
+
+    /**
+     * Heavy page: 60 JSON fetches, a 1.5 MB JSON body, a response that finishes only after
+     * 4 s and one that sends headers plus a partial body and then never finishes.
+     * The network tools must stay fast and the browser must remain usable afterwards.
+     */
+    @Test @Timeout(value=180,unit=TimeUnit.SECONDS)
+    void networkToolsKeepTheBrowserUsableWithStalledAndHeavyResponses() throws Exception {
+        Assumptions.assumeTrue(Boolean.getBoolean("argos.testCamoufox"), "Opt-in real browser smoke");
+        ArgosConfig local = ArgosConfig.fromEnvironment();
+        local.requireBrowserConfiguration();
+        byte[] html = ("<html><head><title>Heavy</title></head><body><p id='done'>loading</p><script>"
+                + "fetch('/api/stall').catch(()=>{});"
+                + "const jobs=[...Array(60).keys()].map(i=>fetch('/api/item?i='+i).then(r=>r.json()));"
+                + "jobs.push(fetch('/api/big').then(r=>r.json()));"
+                + "jobs.push(fetch('/api/slow').then(r=>r.json()));"
+                + "Promise.all(jobs).then(()=>document.querySelector('#done').textContent='done');"
+                + "</script></body></html>").getBytes(StandardCharsets.UTF_8);
+        StringBuilder big = new StringBuilder("{\"rows\":[");
+        for (int i = 0; i < 30_000; i++) big.append(i == 0 ? "" : ",").append("{\"n\":").append(i).append(",\"t\":\"row\"}");
+        byte[] bigJson = big.append("]}").toString().getBytes(StandardCharsets.UTF_8);
+        assertTrue(bigJson.length > 500_000 && bigJson.length < 2_000_000);
+        CountDownLatch release = new CountDownLatch(1);
+        HttpServer site = HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0);
+        // Concurrent handlers, otherwise the stalled response would block every other request.
+        site.setExecutor(Executors.newCachedThreadPool());
+        site.createContext("/", exchange -> {
+            String path = exchange.getRequestURI().getPath();
+            try (var out = exchange.getResponseBody()) {
+                if (path.equals("/api/stall")) {
+                    exchange.getResponseHeaders().add("Content-Type", "application/json");
+                    exchange.sendResponseHeaders(200, 0);
+                    out.write("{\"partial\":".getBytes(StandardCharsets.UTF_8));
+                    out.flush();
+                    release.await(150, TimeUnit.SECONDS);
+                    return;
+                }
+                if (path.equals("/api/slow")) Thread.sleep(4_000);
+                byte[] body = path.equals("/") ? html : path.equals("/api/big") ? bigJson
+                        : "{\"ok\":true}".getBytes(StandardCharsets.UTF_8);
+                exchange.getResponseHeaders().add("Content-Type", path.equals("/") ? "text/html" : "application/json");
+                exchange.sendResponseHeaders(200, body.length);
+                out.write(body);
+            } catch (InterruptedException | java.io.IOException stopped) {
+                // Client went away or the test released the stall.
+            }
+        });
+        site.start();
+        try (CamoufoxBrowser browser = new CamoufoxBrowser(new ArgosConfig(
+                "127.0.0.1", 0, local.executable(), local.launchOptions(),
+                temporary.resolve("profile"), true, null, "none", null, "argos", ToolProfile.EXPERT,
+                com.aresstack.argos.page.ReadinessPolicy.balanced(), TestNetworks.LOOPBACK, false))) {
+            String origin = "http://localhost:" + site.getAddress().getPort();
+            browser.navigate(origin + "/");
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
+            while (!"done".equals(browser.evaluate("() => document.querySelector('#done').textContent"))) {
+                assertTrue(System.nanoTime() < deadline, "page fetches did not complete");
+                Thread.sleep(250);
+            }
+
+            // Repeated listing loads the remaining bodies within the per-call budget.
+            for (int round = 0; round < 4; round++) {
+                long started = System.nanoTime();
+                var rows = browser.networkJson(null, 20);
+                assertFalse(rows.isEmpty());
+                assertTrue(millisSince(started) < 10_000, "browser_network_json took " + millisSince(started) + " ms");
+            }
+
+            var stalled = browser.networkEvents("/api/stall");
+            assertEquals(1, stalled.size());
+            long started = System.nanoTime();
+            Map<String, Object> stalledDetail = browser.networkDetail((String) stalled.get(0).get("id"), true);
+            assertEquals("still loading", stalledDetail.get("bodyUnavailable"));
+            assertTrue(millisSince(started) < 5_000, "detail on stalled response took " + millisSince(started) + " ms");
+
+            String bigId = (String) browser.networkEvents("/api/big").get(0).get("id");
+            started = System.nanoTime();
+            Map<String, Object> bigDetail = browser.networkDetail(bigId, true);
+            assertEquals(true, bigDetail.get("bodyTruncated"));
+            assertTrue(millisSince(started) < 10_000, "detail on large response took " + millisSince(started) + " ms");
+
+            // The single driver thread is still responsive.
+            started = System.nanoTime();
+            assertEquals(2, ((Number) browser.evaluate("() => 1 + 1")).intValue());
+            assertTrue(millisSince(started) < 5_000);
+            assertEquals("Heavy", browser.navigate(origin + "/").get("title"));
+        } finally {
+            release.countDown();
+            site.stop(0);
+        }
+    }
+
+    private static long millisSince(long startedNanos) {
+        return (System.nanoTime() - startedNanos) / 1_000_000;
     }
 }

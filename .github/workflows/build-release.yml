@@ -7,6 +7,11 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      playwright4j_ref:
+        description: 'Playwright4J commit, branch or refs/pull/<n>/head to build against (default: the verified pin)'
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -23,8 +28,9 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: aresstack/playwright4j
-          # Known-working revision, not the moving master branch.
-          ref: 1c11fe9c2eb39eca1ca6abbc4ce0ffe3f183aa8c
+          # Known-working revision, not the moving master branch. A manual run can name another one, e.g.
+          # refs/pull/59/head, to build Argos against a Playwright4J fix under test.
+          ref: ${{ inputs.playwright4j_ref || '1c11fe9c2eb39eca1ca6abbc4ce0ffe3f183aa8c' }}
           path: playwright4j-source
 
       - name: Set up Java 21

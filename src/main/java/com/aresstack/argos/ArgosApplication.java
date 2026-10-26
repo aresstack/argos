@@ -1,5 +1,9 @@
 package com.aresstack.argos;
 
+import com.aresstack.argos.research.ResearchSettings;
+import com.aresstack.argos.search.BrowserWebSearch;
+import com.aresstack.argos.web.UrlPolicy;
+import com.aresstack.argos.web.WebSession;
 import io.modelcontextprotocol.server.McpServer;
 import io.modelcontextprotocol.server.McpSyncServer;
 import io.modelcontextprotocol.server.transport.HttpServletStreamableServerTransportProvider;
@@ -13,7 +17,11 @@ import org.eclipse.jetty.ee10.servlet.FilterHolder;
 import jakarta.servlet.DispatcherType;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import com.aresstack.argos.document.DocumentStore;
+import io.modelcontextprotocol.server.McpServerFeatures.SyncToolSpecification;
+
 import java.util.EnumSet;
+import java.util.List;
 import java.util.Map;
 import org.eclipse.jetty.server.Server;
 
@@ -39,13 +47,20 @@ public final class ArgosApplication {
         }
         ArgosConfig config = ArgosConfig.fromEnvironment();
         CamoufoxBrowser browser = new CamoufoxBrowser(config);
+        // One security logic: every early URL check delegates to the proxy's NetworkPolicy.
+        UrlPolicy urlPolicy = UrlPolicy.from(config.network());
+        ResearchDocuments documents = new ResearchDocuments(browser, new DocumentStore(), urlPolicy);
+        List<SyncToolSpecification> tools = new ArgosTools(browser,
+                new WebSession(browser, urlPolicy, new BrowserWebSearch(browser)),
+                ResearchSettings.fromEnvironment(), new DocumentAndBatchTools(documents))
+                .forProfile(config.toolProfile());
         HttpServletStreamableServerTransportProvider transport =
                 HttpServletStreamableServerTransportProvider.builder()
                         .mcpEndpoint("/").build();
         McpSyncServer mcp = McpServer.sync(transport)
-                .serverInfo("argos", "0.1.0")
+                .serverInfo("argos", ArgosTools.VERSION)
                 .capabilities(ServerCapabilities.builder().tools(true).build())
-                .tools(new ArgosTools(browser).all()).build();
+                .tools(tools).build();
 
         Server server = new Server(new InetSocketAddress(config.host(), config.port()));
         ServletContextHandler context = new ServletContextHandler();
@@ -68,12 +83,14 @@ public final class ArgosApplication {
             }
             mcp.close();
             browser.close();
+            documents.close();
         }));
 
         server.start();
         System.out.println("Argos ready: http://" + config.host() + ":"
                 + ((org.eclipse.jetty.server.ServerConnector) server.getConnectors()[0]).getLocalPort()
-                + "/ (MCP root, health: /health)");
+                + "/ (MCP root, health: /health, tool profile: "
+                + config.toolProfile().name().toLowerCase(java.util.Locale.ROOT) + ")");
         server.join();
     }
 

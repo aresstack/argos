@@ -23,6 +23,7 @@ $env:SERVER_PORT = [string]$port
 $env:SECURITY_MODE = 'none' # isolated loopback smoke test only; production uses central-oauth
 $env:ARGOS_PROFILE_DIR = Join-Path $work 'profile'
 $env:ARGOS_HEADLESS = 'true'
+$env:ARGOS_INTRANET_ALLOW = '127.0.0.1' # the smoke site is on loopback; Argos' own port stays blocked
 $backend = $null
 $website = $null
 $url = 'http://127.0.0.1:' + $port + '/'

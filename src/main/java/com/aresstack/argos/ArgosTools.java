@@ -114,7 +114,9 @@ public final class ArgosTools {
                         + "Use the id with web_follow. Call web_read first if the page loaded more content. Example: {}",
                 Map.of(), List.of(), args -> web.links()));
         tools.add(text("web_follow", "Open a link by its id: link-3 from web_links or result-2 from web_search. "
-                        + "A bare number uses the list you saw last. Example: {\"link_id\": \"link-3\"}",
+                        + "A bare number uses the list you saw last. "
+                        + "An 'HTTP error:' line marks a page the server could not deliver; then try another result or link. "
+                        + "Example: {\"link_id\": \"link-3\"}",
                 Map.of("link_id", field("string", "Id such as link-3 or result-2")), List.of("link_id"),
                 args -> web.follow(string(args, "link_id"))));
         tools.add(text("web_back", "Go back to the previous page and return its text. Example: {}",

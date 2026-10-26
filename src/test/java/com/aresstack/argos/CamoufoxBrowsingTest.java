@@ -197,6 +197,10 @@ class CamoufoxBrowsingTest {
             assertTrue(broken.contains("TITLE: 500 Internal Server Error\nHTTP error: 500 Internal Server Error \u2014"), broken);
             assertTrue(broken.contains("The archive is unavailable."), broken);
             assertTrue(web.read(1).contains("\nHTTP error: 500 Internal Server Error \u2014"), "web_read keeps the status");
+            // Playwright strips the fragment from the response URL; the shown address keeps it.
+            String fragment = web.open(base + "/broken#detail");
+            assertTrue(fragment.contains("\nHTTP error: 500 Internal Server Error \u2014"), fragment);
+            assertTrue(fragment.startsWith("URL: " + base + "/broken#detail\n"), fragment);
         } finally {
             site.stop(0);
         }

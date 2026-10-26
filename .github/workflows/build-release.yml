@@ -30,7 +30,7 @@ jobs:
           repository: aresstack/playwright4j
           # Known-working revision, not the moving master branch. A manual run can name another one, e.g.
           # refs/pull/59/head, to build Argos against a Playwright4J fix under test.
-          ref: ${{ inputs.playwright4j_ref || '1c11fe9c2eb39eca1ca6abbc4ce0ffe3f183aa8c' }}
+          ref: ${{ inputs.playwright4j_ref || 'f187ff696cb7cfe64b8e3235d9c3a16e95dd59ea' }}
           path: playwright4j-source
 
       - name: Set up Java 21

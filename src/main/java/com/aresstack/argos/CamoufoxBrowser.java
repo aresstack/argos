@@ -20,6 +20,7 @@ import com.aresstack.argos.network.NetworkSettings;
 import com.aresstack.argos.network.Socks5Proxy;
 import com.aresstack.argos.network.UpstreamProxy;
 import com.aresstack.argos.fetch.BrowserContextAccess;
+import com.aresstack.argos.fetch.WebAddress;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.microsoft.playwright.BrowserContext;
@@ -669,14 +670,16 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
             Page.NavigateOptions options = new Page.NavigateOptions()
                     .setWaitUntil(WaitUntilState.DOMCONTENTLOADED).setTimeout(45_000);
             if (referer != null && !referer.isBlank()) options.setReferer(referer);
-            p.navigate(url, options);
-            return captureWhenLoaded(p);
+            // The navigation's own final response (after redirects) is protocol data already in hand; its
+            // status serves when no recorded response matches the shown address.
+            Response response = p.navigate(url, options);
+            return captureWhenLoaded(p, response == null ? 0 : response.status());
         });
     }
 
     @Override
     public PageCapture current() {
-        return onBrowser(() -> captureWhenLoaded(activePage()));
+        return onBrowser(() -> captureWhenLoaded(activePage(), 0));
     }
 
     private static final long LOADING_GRACE_MILLIS = 8_000;
@@ -689,8 +692,8 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
      * Only protocol events are watched; the second read happens only for such pages. Small models otherwise
      * read "Loading…" and give up (Phase 7 evaluation, task dynamic-page; ported from #13 commit 3701fd0).
      */
-    private PageCapture captureWhenLoaded(Page p) {
-        PageCapture capture = capture(p);
+    private PageCapture captureWhenLoaded(Page p, int navigatedStatus) {
+        PageCapture capture = capture(p, navigatedStatus);
         if (!LOADING_HINT.matcher(capture.text()).find()) return capture;
         NetworkActivity activity = document(p).activity;
         if (activity.inflight() == 0) return capture;
@@ -698,7 +701,7 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
         while (activity.inflight() > 0 && System.currentTimeMillis() < deadline) p.waitForTimeout(150);
         // Rendering the arrived data takes a moment after the response.
         p.waitForTimeout(200);
-        return capture(p);
+        return capture(p, navigatedStatus);
     }
 
     @Override
@@ -727,25 +730,38 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
     }
 
     private PageCapture capture(Page p) {
+        return capture(p, 0);
+    }
+
+    /** @param navigatedStatus the status of the navigation that led here, 0 when there was none */
+    private PageCapture capture(Page p, int navigatedStatus) {
         // Feeds, XML, JSON and plain text are read from the response body (protocol data, invisible to
         // the page); a binary document has no page text. Both use the classification of browser_snapshot.
         SavedDocument saved = document(p).saved;
         if (saved != null) return new PageCapture(saved.url(), "", sourceText(saved.contentType(), saved.url(),
-                saved.text()), "");
+                saved.text()), "", saved.status());
         MainDocument main = document(p).mainDocument;
-        if (main != null && main.url().equals(p.url())) {
+        boolean shown = main != null && main.url().equals(p.url());
+        // The status of the document's own response (a protocol event Argos already records for the
+        // document type and readiness); web_* report it to the agent for error pages. Playwright strips
+        // the fragment from request and response URLs, so "#…" in the shown address still names the
+        // document main answered. Without a recorded response for the shown address (the page changed
+        // its address by script after loading) the navigation's own response decides, else 0 = unknown.
+        int status = main != null && WebAddress.withoutFragment(main.url()).equals(WebAddress.withoutFragment(p.url()))
+                ? main.status() : navigatedStatus;
+        if (shown) {
             DocumentType type = DocumentType.classify(main.contentType(), main.url());
             if (type == DocumentType.BINARY) {
                 return new PageCapture(p.url(), "", "Binary document (" + DocumentType.mimeType(main.contentType())
-                        + "). It has no page text; use the document tools to download and read it.", "");
+                        + "). It has no page text; use the document tools to download and read it.", "", status);
             }
             Optional<String> body = type.isSourceDocument() ? main.body() : Optional.empty();
             if (body.isPresent()) return new PageCapture(p.url(), "", sourceText(main.contentType(), main.url(),
-                    body.get()), "");
+                    body.get()), "", status);
         }
         // Every in-page read is a protocol evaluation (with user activation, see
         // playwright4j #37), so take one content() call and avoid title()/innerText()/count().
-        return PageText.capture(p.url(), p.content());
+        return PageText.capture(p.url(), p.content(), status);
     }
 
     private static String sourceText(String contentType, String url, String source) {

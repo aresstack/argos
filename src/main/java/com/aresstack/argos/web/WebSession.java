@@ -33,6 +33,8 @@ public final class WebSession {
     private static final String AFTER_SEARCH = "No page is open since the last web_search. "
             + "Open a result first, e.g. web_follow link_id=\"result-1\".";
     private static final String NO_WEB_PAGE = "The browser shows no http(s) page (%s). Call web_open or web_search first.";
+    /** Follows the status of an error page (Angelo's wording); the agent should look for the content elsewhere. */
+    static final String ERROR_STATUS_NOTE = " \u2014 the requested content may not be available on this page.";
 
     private enum Listing { RESULTS, LINKS }
 
@@ -181,6 +183,39 @@ public final class WebSession {
         return capture;
     }
 
+    /** The line that marks an error page: {@code HTTP error: 404 Not Found — the requested content ...}. */
+    static String errorLine(int status) {
+        String reason = reasonPhrase(status);
+        return "HTTP error: " + status + (reason.isEmpty() ? "" : " " + reason) + ERROR_STATUS_NOTE;
+    }
+
+    /** The standard reason phrase (RFC 9110) for the codes agents meet; "" for the rest. */
+    private static String reasonPhrase(int status) {
+        return switch (status) {
+            case 400 -> "Bad Request";
+            case 401 -> "Unauthorized";
+            case 402 -> "Payment Required";
+            case 403 -> "Forbidden";
+            case 404 -> "Not Found";
+            case 405 -> "Method Not Allowed";
+            case 406 -> "Not Acceptable";
+            case 408 -> "Request Timeout";
+            case 409 -> "Conflict";
+            case 410 -> "Gone";
+            case 413 -> "Content Too Large";
+            case 414 -> "URI Too Long";
+            case 415 -> "Unsupported Media Type";
+            case 429 -> "Too Many Requests";
+            case 451 -> "Unavailable For Legal Reasons";
+            case 500 -> "Internal Server Error";
+            case 501 -> "Not Implemented";
+            case 502 -> "Bad Gateway";
+            case 503 -> "Service Unavailable";
+            case 504 -> "Gateway Timeout";
+            default -> "";
+        };
+    }
+
     private String show(PageCapture capture, int part) {
         String text = capture.text().strip();
         int parts = Math.max(1, (text.length() + partCharacters - 1) / partCharacters);
@@ -191,8 +226,13 @@ public final class WebSession {
         String slice = text.substring(start, Math.min(text.length(), start + partCharacters));
         StringBuilder out = new StringBuilder()
                 .append("URL: ").append(capture.url()).append('\n')
-                .append("TITLE: ").append(capture.title()).append('\n')
-                .append("LINKS: ").append(links.links().size()).append(" (see web_links)").append('\n');
+                .append("TITLE: ").append(capture.title()).append('\n');
+        if (capture.isError()) {
+            // Small models read "TITLE: 500 Internal Server Error" plus the server's text as a page and keep
+            // trying the same address (Phase 7, broken-link). Name the failure plainly, so they move on.
+            out.append(errorLine(capture.status())).append('\n');
+        }
+        out.append("LINKS: ").append(links.links().size()).append(" (see web_links)").append('\n');
         if (parts > 1) {
             out.append("PART: ").append(part).append(" of ").append(parts);
             if (part < parts) out.append(" (next: web_read part=").append(part + 1).append(')');

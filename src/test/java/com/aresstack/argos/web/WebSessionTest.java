@@ -31,6 +31,14 @@ class WebSessionTest {
                 exchange.close();
                 return;
             }
+            if (path.equals("/broken")) {
+                byte[] body = "<title>500 Internal Server Error</title><h1>Internal Server Error</h1><p>Try again later.</p>"
+                        .getBytes(StandardCharsets.UTF_8);
+                exchange.getResponseHeaders().add("Content-Type", "text/html; charset=utf-8");
+                exchange.sendResponseHeaders(500, body.length);
+                try (var out = exchange.getResponseBody()) { out.write(body); }
+                return;
+            }
             byte[] body = pages.getOrDefault(path, "<title>Missing</title><p>Not found</p>")
                     .getBytes(StandardCharsets.UTF_8);
             exchange.getResponseHeaders().add("Content-Type", "text/html; charset=utf-8");
@@ -57,6 +65,44 @@ class WebSessionTest {
         String answer = web.open(base + "/");
         assertTrue(answer.startsWith("URL: " + base + "/\nTITLE: Start\nLINKS: 2"), answer);
         assertTrue(answer.contains("Welcome"));
+        assertFalse(answer.contains("HTTP error:"), "a delivered page carries no error line: " + answer);
+    }
+
+    @Test void anErrorPageIsMarkedWithItsHttpStatus() {
+        String answer = web.open(base + "/broken");
+        assertTrue(answer.startsWith("URL: " + base + "/broken\nTITLE: 500 Internal Server Error\n"
+                + "HTTP error: 500 Internal Server Error \u2014 the requested content may not be available on this page.\n"
+                + "LINKS: 0"), answer);
+        assertTrue(answer.contains("Try again later."), "the server's message is still shown: " + answer);
+        assertTrue(web.read(1).contains("\nHTTP error: 500 Internal Server Error \u2014"), "web_read keeps the status");
+        assertFalse(web.open(base + "/about").contains("HTTP error:"), "a delivered page carries no error line");
+        // The double fetches again on back(); Camoufox reloads the document too (bfcache off), so the status is known.
+        assertTrue(web.back().contains("\nHTTP error: 500 Internal Server Error \u2014"), "going back marks it again");
+        pages.put("/", "<title>Start</title><a href='/missing'>Gone</a> <a href='/about'>About us</a>");
+        web.open(base + "/");
+        assertTrue(web.follow("link-1").contains("TITLE: Missing\nHTTP error: 404 Not Found \u2014 the requested"),
+                "a followed 404 is marked");
+        assertFalse(web.back().contains("HTTP error:"), "the start page carries no error line");
+        assertTrue(web.follow("link-2").startsWith("URL: " + base + "/about\nTITLE: About\nLINKS: 0"));
+        assertEquals("HTTP error: 599 \u2014 the requested content may not be available on this page.",
+                WebSession.errorLine(599), "an unknown code is shown without a reason phrase");
+    }
+
+    @Test void aCaptureWithoutAKnownStatusRendersAsBefore() {
+        // Status 0: no response recorded for the shown address, or a port that does not know the status.
+        BrowserPagePort unknown = new BrowserPagePort() {
+            @Override public PageCapture open(String url, String referer) {
+                return new PageCapture("http://h.example/", "Start", "Welcome", "");
+            }
+            @Override public PageCapture current() { return open(null, null); }
+            @Override public String currentUrl() { return "http://h.example/"; }
+            @Override public PageCapture back() { return null; }
+            @Override public void clear() { }
+        };
+        assertEquals("URL: http://h.example/\nTITLE: Start\nLINKS: 0 (see web_links)\n\nWelcome",
+                new WebSession(unknown, UrlPolicy.off(), null).open("http://h.example/"));
+        assertFalse(new PageCapture("u", "t", "x", "", 399).isError(), "399 is not an error");
+        assertTrue(new PageCapture("u", "t", "x", "", 400).isError(), "400 is");
     }
 
     @Test void listsLinksWithShortIdsAndFollowsThem() {

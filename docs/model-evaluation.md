@@ -235,9 +235,27 @@ What the transcripts show:
   is in the last part; the run is flagged context-full (estimate 8,945 tokens). Its long-page success is therefore
   fragile, not an effect of `web_find`.
 
-Focused rerun on the tool set of `main` (with #16, without `web_find`; `hide-tools` removes it from the offered
-tools, everything else is `main`'s code):
-`.\gradlew.bat evalModels "-Peval.runs=gemma4:e2b@compact,gpt-oss:20b@compact" "-Peval.tasks=broken-link" "-Peval.repeat=3" "-Peval.num-gpu=16" "-Peval.hide-tools=web_find"`
+### gemma4:e2b on `broken-link` after #15 and #16 were merged
+
+Angelo, `main` at `a15559f` (#15 and #16 merged; harness bound in locally), `repeat=3`, num_ctx 8192, temperature 0,
+seed 42, **GPU offloading left to Ollama** (an attempt with `num_gpu` 16 stopped at gemma's warm-up with a
+`GGML_ASSERT` and ran no task; the report correctly said INCOMPLETE):
+
+| gemma4:e2b / compact, `broken-link` | Success | Tool calls | Tool errors | Recovery | Invalid |
+|---|---|---|---|---|---|
+| `adf049d` (before #16), num_gpu 16 | 0/3 | 3 per run | 0 | 1 per run | 0 |
+| `2953272` (#16 and #15 code), num_gpu 16 | 0/3 | 3 per run | 0 | 1 per run | 0 |
+| `a15559f` (`main`), Ollama default offloading | **3/3** | 3 per run | 0 | 1 per run | 0 |
+
+In the passing runs gemma follows result 2 (the mirror) right after the HTTP error line; it never calls `web_find`.
+
+What changed between the failing `2953272` run and the passing one is **not the tools**: the tool list, the tool
+descriptions and every answer gemma saw are the same (`ArgosTools` is unchanged; #15's later fix only bounds
+`web_find` snippets, which gemma did not call). What differs is GPU offloading (16 layers vs Ollama's default),
+which changes the floating-point path, and the fixture port in the addresses. At temperature 0 the three
+repetitions of one evaluation are nearly identical, so 0/3 and 3/3 are each closer to one observation than to three.
+gemma's recovery on `broken-link` is therefore on a knife edge: possible with the error line, not reliable.
+`eval.hide-tools=web_find` would not isolate anything here, because both runs offered `web_find`.
 
 Decision (Angelo): `broken-link` stays a real failure for gemma4:e2b and stays in its success rate. The tools are not
 tailored to one model; the HTTP error line is a general, correct signal, and deriving the next step from it is the

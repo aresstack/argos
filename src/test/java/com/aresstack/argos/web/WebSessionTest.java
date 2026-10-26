@@ -184,6 +184,23 @@ class WebSessionTest {
         assertFalse(answer.contains("web_read part=N"), "a one-part page needs no hint");
     }
 
+    @Test void aPhraseLongerThanTheSnippetLimitStillGivesAShortSnippet() {
+        String sentence = "The observatory dome was rebuilt after the storm of 1974 with a lighter frame and new shutters. ";
+        String phrase = sentence.repeat(4).strip();                          // ~390 characters
+        pages.put("/longphrase", "<title>Dome</title><p>Intro words before. " + phrase + " Words after.</p>");
+        web.open(base + "/longphrase");
+        String answer = web.find(phrase);
+        assertTrue(answer.contains("FOUND: 1 match for \"" + phrase.substring(0, WebSession.MAX_ECHOED_PHRASE) + "…\""),
+                answer);
+        String hit = answer.lines().filter(line -> line.startsWith("hit 1 (part ")).findFirst().orElseThrow();
+        String snippet = hit.substring(hit.indexOf("): ") + 3);
+        assertTrue(snippet.startsWith("…The observatory dome"), "shown from the start of the match: " + snippet);
+        assertTrue(snippet.endsWith("…"), snippet);
+        String text = snippet.substring(1, snippet.length() - 1);
+        assertTrue(text.length() <= WebSession.FIND_SNIPPET_CHARACTERS, text.length() + ": " + text);
+        assertTrue(phrase.startsWith(text), "cut at a word boundary inside the match: " + text);
+    }
+
     @Test void findIgnoresDashVariantsAndReportsMisses() {
         pages.put("/dash", "<title>Dash</title><p>The state\u2011of\u2011the\u2011art telescope.</p>");
         web.open(base + "/dash");

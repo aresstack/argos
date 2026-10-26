@@ -34,6 +34,7 @@ public final class WebSession {
     /** web_find shows at most this many snippets of at most this many characters. */
     static final int MAX_FIND_SNIPPETS = 10;
     static final int FIND_SNIPPET_CHARACTERS = 200;
+    static final int MAX_ECHOED_PHRASE = 80;
     /** Dashes a page may use where a model types '-' (e.g. U+2011 non-breaking hyphen). */
     private static final Pattern DASHES = Pattern.compile("[\\u2010-\\u2015\\u2212]");
     private static final Pattern TARGET = Pattern.compile(
@@ -157,7 +158,10 @@ public final class WebSession {
             snippets.add("hit " + (snippets.size() + 1) + " (part " + (match.start() / partCharacters + 1) + "): "
                     + (window[0] > 0 ? "…" : "") + snippet + (window[1] < text.length() ? "…" : ""));
         }
-        String quoted = "\"" + query.strip() + "\"";
+        String phraseShown = query.strip();
+        // The answer echoes the phrase, but never a whole pasted paragraph.
+        if (phraseShown.length() > MAX_ECHOED_PHRASE) phraseShown = phraseShown.substring(0, MAX_ECHOED_PHRASE) + "…";
+        String quoted = "\"" + phraseShown + "\"";
         StringBuilder out = new StringBuilder().append("URL: ").append(capture.url()).append('\n');
         if (count == 0) {
             return out.append("No matches for ").append(quoted).append(" on this page. Try a shorter or different word.")
@@ -171,9 +175,20 @@ public final class WebSession {
         return out.toString().stripTrailing();
     }
 
-    /** At most {@link #FIND_SNIPPET_CHARACTERS} around the match, cut at word boundaries where possible. */
+    /**
+     * At most {@link #FIND_SNIPPET_CHARACTERS} around the match, cut at word boundaries where possible. A match
+     * longer than that (a very long search phrase) is shown from its start, cut after the limit like any other
+     * snippet; the "…" markers are not counted.
+     */
     private static int[] snippetWindow(String text, int start, int end) {
-        int context = Math.max(0, (FIND_SNIPPET_CHARACTERS - (end - start)) / 2);
+        if (end - start >= FIND_SNIPPET_CHARACTERS) {
+            int to = start + FIND_SNIPPET_CHARACTERS;
+            for (int i = to; i > start; i--) {
+                if (Character.isWhitespace(text.charAt(i))) { to = i; break; }
+            }
+            return new int[] {start, to};
+        }
+        int context = (FIND_SNIPPET_CHARACTERS - (end - start)) / 2;
         int from = Math.max(0, start - context);
         int to = Math.min(text.length(), end + context);
         for (int i = from; from > 0 && i < start; i++) {

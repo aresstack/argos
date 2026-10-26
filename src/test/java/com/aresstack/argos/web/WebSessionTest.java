@@ -31,7 +31,7 @@ class WebSessionTest {
                 exchange.close();
                 return;
             }
-            if (path.equals("/broken")) {
+            if (path.equals("/broken") || path.equals("/broken-alternative")) {
                 byte[] body = "<title>500 Internal Server Error</title><h1>Internal Server Error</h1><p>Try again later.</p>"
                         .getBytes(StandardCharsets.UTF_8);
                 exchange.getResponseHeaders().add("Content-Type", "text/html; charset=utf-8");
@@ -72,6 +72,7 @@ class WebSessionTest {
         String answer = web.open(base + "/broken");
         assertTrue(answer.startsWith("URL: " + base + "/broken\nTITLE: 500 Internal Server Error\n"
                 + "HTTP error: 500 Internal Server Error \u2014 the requested content may not be available on this page.\n"
+                + "NEXT ACTION: Do not retry this failed URL immediately. Call web_search with a query for the same information from an alternative source.\n"
                 + "LINKS: 0"), answer);
         assertTrue(answer.contains("Try again later."), "the server's message is still shown: " + answer);
         assertTrue(web.read(1).contains("\nHTTP error: 500 Internal Server Error \u2014"), "web_read keeps the status");
@@ -88,6 +89,35 @@ class WebSessionTest {
                 WebSession.errorLine(599), "an unknown code is shown without a reason phrase");
     }
 
+    @Test void anHttp500ProvidesTheNextUntriedSearchResultAsAnExplicitAction() throws Exception {
+        WebSearchPort engine = query -> new SearchResults(List.of(
+                new SearchHit("Broken official", base + "/broken", ""),
+                new SearchHit("Broken mirror", base + "/broken-alternative", ""),
+                new SearchHit("Working mirror", base + "/article", "")), List.of());
+        WebSession searching = new WebSession(browser, UrlPolicy.off(), engine);
+        searching.search("observatory dark-sky zone");
+
+        String firstFailure = searching.follow("result-1");
+        assertTrue(firstFailure.contains("NEXT ACTION: Do not retry this failed URL. Open the next untried search result now: result-2. Call web_follow link_id=\"result-2\"."),
+                firstFailure);
+
+        String secondFailure = searching.follow("result-2");
+        assertTrue(secondFailure.contains("NEXT ACTION: Do not retry this failed URL. Open the next untried search result now: result-3. Call web_follow link_id=\"result-3\"."),
+                secondFailure);
+        assertTrue(searching.follow("result-3").contains("TITLE: Article"));
+    }
+
+    @Test void anHttp500SuggestsANewSearchWhenAllResultsHaveBeenTried() throws Exception {
+        WebSession searching = new WebSession(browser, UrlPolicy.off(), query -> new SearchResults(
+                List.of(new SearchHit("Broken official", base + "/broken", "")), List.of()));
+        searching.search("observatory dark-sky zone");
+
+        String failure = searching.follow("result-1");
+
+        assertTrue(failure.contains("NEXT ACTION: No untried result remains from the last search. Call web_search query=\"observatory dark-sky zone alternative source\""),
+                failure);
+        assertFalse(failure.contains("Call web_follow link_id=\"result-1\""), failure);
+    }
     @Test void aCaptureWithoutAKnownStatusRendersAsBefore() {
         // Status 0: no response recorded for the shown address, or a port that does not know the status.
         BrowserPagePort unknown = new BrowserPagePort() {

@@ -3,10 +3,12 @@ package com.aresstack.argos.web;
 import com.aresstack.argos.fetch.WebAddress;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -56,6 +58,9 @@ public final class WebSession {
     private final LinkExtractor extractor = new LinkExtractor();
     private final LinkRegistry links;
     private List<SearchHit> results = List.of();
+    /** Search results already opened during the current search; avoid recommending them again. */
+    private final Set<String> attemptedResultUrls = new HashSet<>();
+    private String lastSearchQuery = "";
     private Listing lastListing = Listing.LINKS;
     private PageCapture page;
     /** Where the browser stood after the last web_search: the provider's page, which is not adopted. */
@@ -94,6 +99,8 @@ public final class WebSession {
             if (byUrl.size() < maxLinks) byUrl.putIfAbsent(hit.url(), hit);
         }
         results = List.copyOf(byUrl.values());
+        attemptedResultUrls.clear();
+        lastSearchQuery = query.trim();
         lastListing = Listing.RESULTS;
         // The search provider navigated the browser; the previous page and its link ids are gone.
         page = null;
@@ -116,13 +123,17 @@ public final class WebSession {
 
     public synchronized String open(String url) {
         policy.check(url);
+        String requestedUrl = url.trim();
+        markResultAttempted(requestedUrl);
         String referer = page == null ? null : page.url();
-        return show(accept(browser.open(url.trim(), referer)), 1);
+        PageCapture capture = accept(browser.open(requestedUrl, referer));
+        return show(capture, 1, requestedUrl);
     }
 
     public synchronized String read(int part) {
         requireShownPage();
-        return show(accept(browser.current()), part);
+        PageCapture capture = accept(browser.current());
+        return show(capture, part, capture.url());
     }
 
     /**
@@ -250,7 +261,8 @@ public final class WebSession {
         requireShownPage();
         PageCapture previous = browser.back();
         if (previous == null) throw new IllegalStateException("No previous page in history.");
-        return show(accept(previous), 1);
+        PageCapture capture = accept(previous);
+        return show(capture, 1, capture.url());
     }
 
     /** Re-checks the final URL after redirects and refreshes the link ids. */
@@ -301,7 +313,7 @@ public final class WebSession {
         };
     }
 
-    private String show(PageCapture capture, int part) {
+    private String show(PageCapture capture, int part, String requestedUrl) {
         String text = capture.text().strip();
         int parts = Math.max(1, (text.length() + partCharacters - 1) / partCharacters);
         if (part < 1 || part > parts) {
@@ -313,9 +325,8 @@ public final class WebSession {
                 .append("URL: ").append(capture.url()).append('\n')
                 .append("TITLE: ").append(capture.title()).append('\n');
         if (capture.isError()) {
-            // Small models read "TITLE: 500 Internal Server Error" plus the server's text as a page and keep
-            // trying the same address (Phase 7, broken-link). Name the failure plainly, so they move on.
             out.append(errorLine(capture.status())).append('\n');
+            appendRecoveryInstruction(out, capture, requestedUrl);
         }
         out.append("LINKS: ").append(links.links().size()).append(" (see web_links)").append('\n');
         if (parts > 1) {
@@ -326,6 +337,60 @@ public final class WebSession {
         return out.append('\n').append(slice).toString();
     }
 
+    /**
+     * Give the model one concrete next action derived from the current search state.
+     * Do not make it infer a recovery strategy from the status code alone.
+     */
+    private void appendRecoveryInstruction(StringBuilder out, PageCapture capture, String requestedUrl) {
+        String failedUrl = requestedUrl == null || requestedUrl.isBlank() ? capture.url() : requestedUrl;
+        markResultAttempted(failedUrl);
+        int nextResult = nextUntriedResult(failedUrl);
+        if (nextResult >= 0) {
+            int resultNumber = nextResult + 1;
+            out.append("NEXT ACTION: Do not retry this failed URL. Open the next untried search result now: result-")
+                    .append(resultNumber).append(". Call web_follow link_id=\"result-")
+                    .append(resultNumber).append("\".").append('\n');
+            return;
+        }
+        if (!lastSearchQuery.isBlank()) {
+            out.append("NEXT ACTION: No untried result remains from the last search. Call web_search query=\"")
+                    .append(escapeToolArgument(lastSearchQuery + " alternative source"))
+                    .append("\" to find an alternative source. Do not reopen the failed URL.").append('\n');
+            return;
+        }
+        out.append("NEXT ACTION: Do not retry this failed URL immediately. Call web_search with a query for the same information from an alternative source.")
+                .append('\n');
+    }
+
+    private void markResultAttempted(String url) {
+        String key = resultKey(url);
+        if (key.isEmpty()) return;
+        for (SearchHit result : results) {
+            if (resultKey(result.url()).equals(key)) {
+                attemptedResultUrls.add(key);
+                return;
+            }
+        }
+    }
+
+    private int nextUntriedResult(String failedUrl) {
+        String failedKey = resultKey(failedUrl);
+        for (int i = 0; i < results.size(); i++) {
+            String candidateKey = resultKey(results.get(i).url());
+            if (candidateKey.isEmpty() || candidateKey.equals(failedKey)
+                    || attemptedResultUrls.contains(candidateKey)) continue;
+            return i;
+        }
+        return -1;
+    }
+
+    private static String resultKey(String url) {
+        return url == null || url.isBlank() ? "" : WebAddress.withoutFragment(url.trim());
+    }
+
+    private static String escapeToolArgument(String value) {
+        return value.replace("\\", "\\\\").replace("\"", "\\\"");
+    }
     /**
      * A failed search (consent wall, challenge, no engine) may have left the browser on the provider's page;
      * then the previous page is gone like after a successful search. If the browser did not move, the page

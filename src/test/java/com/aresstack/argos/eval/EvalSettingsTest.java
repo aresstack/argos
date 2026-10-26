@@ -36,6 +36,14 @@ class EvalSettingsTest {
     }
 
     @Test
+    void toolsCanBeHiddenForAComparisonWithAnOlderToolSet() {
+        assertEquals(java.util.Set.of(), EvalSettings.from(Map.<String, String>of()::get).hiddenTools());
+        EvalSettings settings = EvalSettings.from(Map.of("hide-tools", "web_find, web_back")::get);
+        assertEquals(java.util.Set.of("web_find", "web_back"), settings.hiddenTools());
+        assertTrue(settings.describe().contains("hideTools=web_back web_find"), settings.describe());
+    }
+
+    @Test
     void offloadPromptAndPartSizeAreSettable() {
         EvalSettings settings = EvalSettings.from(Map.of("num-gpu", "16", "prompt", "plain", "part-chars", "6000")::get);
 

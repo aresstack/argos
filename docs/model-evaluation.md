@@ -64,6 +64,7 @@ Every setting is `-Peval.<name>=...` or the environment variable `ARGOS_EVAL_<NA
 | `reasoning-effort` | server default | OpenAI-compatible `reasoning_effort` |
 | `num-gpu` | Ollama decides | Ollama `num_gpu`: model layers on the GPU, the rest on the CPU (e.g. `16` for gpt-oss:20b on a 16 GB card with 8K context) |
 | `prompt` | `authorized` | `authorized` adds one neutral sentence that every address in the question may be opened; `plain` leaves it out (A/B) |
+| `hide-tools` | – | Published tools the model is not offered (comma-separated), e.g. `web_find` to measure the tool set of `main` without it |
 | `part-chars` | `12000` | `web_read` part size (Argos default), for A/B runs against small context lengths |
 | `max-turns` | `15` | Model turns per task before it counts as `max_steps` |
 | `task-time-limit-s` | `600` | Wall clock per task |
@@ -233,6 +234,10 @@ What the transcripts show:
   inside 8K. gemma4:e2b never calls it: it reads all three parts (`open read read`) and passes only because the answer
   is in the last part; the run is flagged context-full (estimate 8,945 tokens). Its long-page success is therefore
   fragile, not an effect of `web_find`.
+
+Focused rerun on the tool set of `main` (with #16, without `web_find`; `hide-tools` removes it from the offered
+tools, everything else is `main`'s code):
+`.\gradlew.bat evalModels "-Peval.runs=gemma4:e2b@compact,gpt-oss:20b@compact" "-Peval.tasks=broken-link" "-Peval.repeat=3" "-Peval.num-gpu=16" "-Peval.hide-tools=web_find"`
 
 Decision (Angelo): `broken-link` stays a real failure for gemma4:e2b and stays in its success rate. The tools are not
 tailored to one model; the HTTP error line is a general, correct signal, and deriving the next step from it is the

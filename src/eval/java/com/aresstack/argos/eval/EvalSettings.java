@@ -5,6 +5,8 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
+import java.util.TreeSet;
 import java.util.function.Function;
 
 /**
@@ -17,8 +19,8 @@ import java.util.function.Function;
  */
 public record EvalSettings(String api, String baseUrl, String apiKey, List<Target> targets, String tasks,
                            int repeat, int maxTurns, Duration taskTimeLimit, Duration requestTimeout,
-                           GenerationSettings generation, String prompt, int partCharacters, boolean headless,
-                           Path outputDirectory) {
+                           GenerationSettings generation, String prompt, int partCharacters, Set<String> hiddenTools,
+                           boolean headless, Path outputDirectory) {
 
     /** Same tasks for both local models with the compact tools first, then the larger one with expert. */
     public static final String DEFAULT_RUNS = "gemma4:e2b@compact,gpt-oss:20b@compact,gpt-oss:20b@expert";
@@ -32,6 +34,7 @@ public record EvalSettings(String api, String baseUrl, String apiKey, List<Targe
 
     public EvalSettings {
         targets = List.copyOf(targets);
+        hiddenTools = Set.copyOf(hiddenTools);
     }
 
     public static EvalSettings load() {
@@ -64,6 +67,7 @@ public record EvalSettings(String api, String baseUrl, String apiKey, List<Targe
                 Duration.ofSeconds(integer(settings, "request-timeout-s", 300, 5, 3600)),
                 generation, prompt,
                 integer(settings, "part-chars", com.aresstack.argos.web.WebSession.DEFAULT_PART_CHARACTERS, 1000, 100_000),
+                Set.copyOf(split(value(settings, "hide-tools", ""))),
                 !"false".equalsIgnoreCase(value(settings, "headless", "true")),
                 Path.of(value(settings, "out", "build/eval")));
     }
@@ -106,6 +110,7 @@ public record EvalSettings(String api, String baseUrl, String apiKey, List<Targe
         return "api=" + api + ", baseUrl=" + baseUrl + ", runs=" + String.join(" ",
                 targets.stream().map(Target::id).toList()) + ", tasks=" + tasks + ", repeat=" + repeat
                 + ", maxTurns=" + maxTurns + ", prompt=" + prompt + ", partChars=" + partCharacters
+                + (hiddenTools.isEmpty() ? "" : ", hideTools=" + String.join(" ", new TreeSet<>(hiddenTools)))
                 + ", " + generation.describe()
                 + ", apiKey=" + (apiKey == null ? "none" : "set");
     }

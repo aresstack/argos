@@ -101,6 +101,13 @@ class EvalHarnessCamoufoxTest {
                     report.add(record, transcript, world.requests());
                 }
             }
+            // eval.hide-tools: the model is offered the compact tools as published on main before web_find.
+            try (ArgosUnderTest.Session session = argos.startSession(EvalProfile.COMPACT, false);
+                 McpToolGateway gateway = new McpToolGateway(session.url(), Duration.ofSeconds(120),
+                         java.util.Set.of("web_find"))) {
+                assertEquals(List.of("web_search", "web_open", "web_read", "web_links", "web_follow", "web_back"),
+                        gateway.tools().stream().map(ToolDefinition::name).toList());
+            }
             // Expert profile: web_read continues on the page browser_navigate opened (first Windows run, PR #13).
             try (ArgosUnderTest.Session session = argos.startSession(EvalProfile.EXPERT, false);
                  McpToolGateway gateway = new McpToolGateway(session.url(), Duration.ofSeconds(120))) {

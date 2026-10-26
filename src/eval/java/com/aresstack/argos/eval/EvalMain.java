@@ -87,7 +87,7 @@ public final class EvalMain {
         List<ChatMessage> transcript = new ArrayList<>();
         RunRecord record;
         try (ArgosUnderTest.Session session = argos.startSession(target.profile(), task.live());
-             McpToolGateway gateway = new McpToolGateway(session.url(), Duration.ofSeconds(180))) {
+             McpToolGateway gateway = new McpToolGateway(session.url(), Duration.ofSeconds(180), settings.hiddenTools())) {
             report.addTools(target.profile().id(), gateway.tools().stream().map(ToolDefinition::name).toList());
             record = new AgentLoop(model, gateway, settings.maxTurns(), settings.taskTimeLimit(),
                     "ollama".equals(settings.api()) ? settings.generation().contextLength() : null,

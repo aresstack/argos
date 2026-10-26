@@ -11,6 +11,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /** Calls Argos as a real MCP client over Streamable HTTP, exactly as a chat client would. */
 public final class McpToolGateway implements ToolGateway, AutoCloseable {
@@ -19,12 +20,18 @@ public final class McpToolGateway implements ToolGateway, AutoCloseable {
     private final List<ToolDefinition> tools;
 
     public McpToolGateway(String baseUrl, Duration requestTimeout) {
+        this(baseUrl, requestTimeout, Set.of());
+    }
+
+    /** {@code hidden}: published tools the model is not offered, for A/B runs against an older tool set. */
+    public McpToolGateway(String baseUrl, Duration requestTimeout, Set<String> hidden) {
         client = McpClient.sync(HttpClientStreamableHttpTransport.builder(baseUrl).endpoint("/").build())
                 .requestTimeout(requestTimeout)
                 .clientInfo(new McpSchema.Implementation("argos-eval", "1.0")).build();
         client.initialize();
         List<ToolDefinition> listed = new ArrayList<>();
         for (McpSchema.Tool tool : client.listTools().tools()) {
+            if (hidden.contains(tool.name())) continue;
             listed.add(new ToolDefinition(tool.name(), tool.description() == null ? "" : tool.description(),
                     schemaOf(tool.inputSchema())));
         }

@@ -82,6 +82,7 @@ public final class ArgosTools {
                 // Tabs, history, semantic controls, extraction. browsing.compact() (web_controls,
                 // web_click, web_fill) joins COMPACT only after it has been tested with small models.
                 tools.addAll(browsing.expert());
+                tools.addAll(new ParallelPageTools(browser).expertTools());
                 tools.addAll(expertTools());
                 tools.addAll(new NetworkTools(browser).expertTools());
                 if (documents != null) tools.addAll(documents.all());

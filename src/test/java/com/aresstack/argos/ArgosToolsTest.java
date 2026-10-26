@@ -1,6 +1,9 @@
 package com.aresstack.argos;
 
 import io.modelcontextprotocol.server.McpServerFeatures.SyncToolSpecification;
+import io.modelcontextprotocol.spec.McpSchema.CallToolRequest;
+import io.modelcontextprotocol.spec.McpSchema.CallToolResult;
+import io.modelcontextprotocol.spec.McpSchema.TextContent;
 import com.aresstack.argos.research.ResearchBudget;
 import com.aresstack.argos.research.ResearchSettings;
 import com.aresstack.argos.web.SearchResults;
@@ -8,6 +11,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 import static org.junit.jupiter.api.Assertions.*;
@@ -73,6 +77,23 @@ class ArgosToolsTest {
             assertTrue(names.containsAll(COMPACT));
             assertTrue(names.contains("browser_evaluate"));
             assertTrue(names.contains("browser_inspect"));
+            assertTrue(names.containsAll(Set.of("browser_pages_navigate", "browser_pages_snapshot",
+                    "browser_pages_inspect")));
+        }
+    }
+
+    @Test void parallelPageToolsRejectDuplicateTabMutationsBeforeLaunchingBrowser() {
+        try (CamoufoxBrowser browser = browser()) {
+            SyncToolSpecification navigate = new ParallelPageTools(browser).expertTools().stream()
+                    .filter(specification -> specification.tool().name().equals("browser_pages_navigate"))
+                    .findFirst().orElseThrow();
+            CallToolResult result = navigate.callHandler().apply(null, new CallToolRequest("browser_pages_navigate",
+                    Map.of("pages", List.of(
+                            Map.of("tab", "t1", "url", "https://example.org/"),
+                            Map.of("tab", "1", "url", "https://example.net/")))));
+            assertTrue(result.isError());
+            String message = ((TextContent) result.content().get(0)).text();
+            assertTrue(message.contains("A tab may appear only once"), message);
         }
     }
 

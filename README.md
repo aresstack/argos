@@ -264,7 +264,9 @@ web_open url="https://example.org/"   → URL, TITLE, LINKS: 12, Seitentext (lan
                                          Fehlerseite (HTTP 400+): zusätzlich HTTP error: 500 Internal Server Error —
                                          the requested content may not be available on this page.
 web_find text="founding director"      → FOUND: 2 matches, je Treffer ein Ausschnitt (höchstens 200 Zeichen,
-                                         höchstens 10 Treffer) mit dem web_read-Teil, in dem er steht
+                                         höchstens 10 Treffer) mit dem web_read-Teil, in dem er steht; ist die
+                                         gefundene Phrase selbst länger, zeigt der Ausschnitt ihre ersten 200 Zeichen
+                                         (an einer Wortgrenze gekürzt), die Phrase wird höchstens 80 Zeichen lang zitiert
 web_links                              → link-1: Text — https://…   (IDs bleiben auf derselben Seite stabil)
                                          Suchtreffer (result-N) und Seitenlinks (link-N) sind getrennt; eine
                                          bloße Zahl bezieht sich auf die zuletzt gezeigte Liste

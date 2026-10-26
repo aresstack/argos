@@ -1,12 +1,13 @@
 package com.aresstack.argos;
 
-import com.microsoft.playwright.Browser;
+import com.microsoft.playwright.BrowserContext;
 import com.microsoft.playwright.BrowserType;
 import com.microsoft.playwright.Page;
 import com.microsoft.playwright.Playwright;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Path;
 import java.util.List;
@@ -22,6 +23,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * a curve, the page must scroll by wheel, capitals must carry Shift, and Playwright must not mark targets.
  */
 class HumanInputBrowserTest {
+    @TempDir Path temporary;
+
     private static final String PAGE = """
             <html><head><title>Human</title></head><body style="margin:0">
             <input id="q" style="margin:40px">
@@ -43,14 +46,17 @@ class HumanInputBrowserTest {
     void pageSeesOnlyTrustedHumanInput() {
         String executable = System.getProperty("argos.testHumanBrowser", "");
         Assumptions.assumeFalse(executable.isBlank(), "Opt-in real browser test");
+        // Launch a persistent context to reuse Camoufox's initial tab instead of opening an unsupported window.
+        Path profile = temporary.resolve("profile");
         try (Playwright playwright = Playwright.create()) {
             boolean chromium = Path.of(executable).getFileName().toString().toLowerCase().contains("chrom");
             BrowserType type = chromium ? playwright.chromium() : playwright.firefox();
-            BrowserType.LaunchOptions options = new BrowserType.LaunchOptions()
-                    .setExecutablePath(Path.of(executable)).setHeadless(true);
+            BrowserType.LaunchPersistentContextOptions options = new BrowserType.LaunchPersistentContextOptions()
+                    .setExecutablePath(Path.of(executable)).setHeadless(true).setViewportSize(1200, 700);
             if (!chromium) options.setChannel("moz-firefox");
-            try (Browser browser = type.launch(options)) {
-                Page page = browser.newPage(new Browser.NewPageOptions().setViewportSize(1200, 700));
+            try (BrowserContext context = type.launchPersistentContext(profile, options)) {
+                assertTrue(!context.pages().isEmpty(), "Camoufox should expose its start tab");
+                Page page = context.pages().get(0);
                 RealInput input = new RealInput(new HumanInputSettings(
                         HumanInputSettings.Mode.NATURAL, 1, 0, 2026L, HumanInputSettings.UnicodePolicy.STRICT));
                 input.probeUnicode(page);

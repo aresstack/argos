@@ -101,6 +101,7 @@ public final class ArgosTools {
                 Map.of("query", field("string", "What to search for")), List.of("query"),
                 args -> web.search(string(args, "query"))));
         tools.add(text("web_open", "Open a web page and return its title and text. "
+                        + "An 'HTTP error:' line marks a page the server could not deliver; then try another page or result. "
                         + "Example: {\"url\": \"https://en.wikipedia.org/wiki/Firefox\"}",
                 Map.of("url", field("string", "Full http(s) URL")), List.of("url"),
                 args -> web.open(string(args, "url"))));

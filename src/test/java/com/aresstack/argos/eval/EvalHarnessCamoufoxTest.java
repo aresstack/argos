@@ -61,7 +61,7 @@ class EvalHarnessCamoufoxTest {
             "broken-link", steps -> {
                 String results = steps.tool("web_search", "{\"query\": \"Kestrel Valley Observatory dark-sky zone\"}");
                 String official = steps.tool("web_follow", "{\"link_id\": \"" + idOf(results, "protection zone map") + "\"}");
-                assertTrue(official.contains("Internal Server Error"), official);
+                assertTrue(official.contains("HTTP error: 500 Internal Server Error"), official);
                 String mirror = steps.tool("web_follow", "{\"link_id\": \"" + idOf(results, "(mirror)") + "\"}");
                 return "It is the " + find(mirror, "named the (\\w+ Dark-Sky Zone)");
             },

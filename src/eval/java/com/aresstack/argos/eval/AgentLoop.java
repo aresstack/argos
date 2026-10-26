@@ -31,7 +31,7 @@ public final class AgentLoop {
     private static final ObjectMapper JSON = new ObjectMapper();
     /** HTTP error pages as Argos shows them: the page text, near the top. */
     private static final Pattern ERROR_PAGE = Pattern.compile(
-            "(?i)\\b(500 internal server error|503 service unavailable|404 not found|internal server error|"
+            "(?i)(^|\\n)HTTP error: |\\b(500 internal server error|503 service unavailable|404 not found|internal server error|"
                     + "service unavailable)\\b");
 
     private final ChatModel model;

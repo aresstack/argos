@@ -204,7 +204,9 @@ Approved by Angelo after the run above; measured apart from it (the numbers abov
 - **`web_find`** (PR #15, compact and expert): searches the open page's text and returns the match count and
   short snippets with their `web_read` part. The self-test solves `long-page` with `web_open` + `web_find` at an
   estimated 4,400 prompt tokens, instead of about 8,600 for reading every part.
-- **HTTP status line** for error pages in `web_open`, `web_follow` and `web_read` (separate change).
+- **HTTP status line** (PR #16): `web_open`, `web_follow`, `web_read` and `web_back` add
+  `HTTP error: 500 Internal Server Error — the requested content may not be available on this page.` when the
+  main document answers 400 or higher. The self-test requires it on `broken-link`.
 
 Rerun for the comparison:
 `.\gradlew.bat evalModels "-Peval.repeat=3" "-Peval.num-gpu=16" "-Peval.tasks=broken-link,long-page"`

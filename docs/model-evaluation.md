@@ -208,8 +208,31 @@ Approved by Angelo after the run above; measured apart from it (the numbers abov
   `HTTP error: 500 Internal Server Error — the requested content may not be available on this page.` when the
   main document answers 400 or higher. The self-test requires it on `broken-link`.
 
-Rerun for the comparison:
-`.\gradlew.bat evalModels "-Peval.repeat=3" "-Peval.num-gpu=16" "-Peval.tasks=broken-link,long-page"`
+### Before and after (Angelo, Windows, `repeat=3`, num_ctx 8192, num_gpu 16)
+
+Before: `adf049d`, judged with the hyphen fix. After: `2953272` (`web_find` and the HTTP error line), all eight
+fixture tasks again.
+
+| Model / profile | Before | After | broken-link before → after | long-page before → after |
+|---|---|---|---|---|
+| gemma4:e2b / compact | 15/21 | **18/21** | 0/3 → 0/3 | 0/3 → 3/3 |
+| gpt-oss:20b / compact | 15/21 | **21/21** | 0/3 → 3/3 | 0/3 → 3/3 |
+| gpt-oss:20b / expert | 21/24 | **23/23 valid**, 1 invalid | 3/3 → 2/2 valid | 0/3 → 3/3 |
+
+The "after" run is formally INCOMPLETE: expert `broken-link` run 1 ended with an Ollama `std::bad_alloc` (HTTP 500
+from the model server, not a task failure). A separate expert-only `broken-link` run passed 3/3; it does not replace
+the full report. The other five tasks did not change.
+
+What the transcripts show:
+
+- **HTTP error line:** gpt-oss:20b in compact now leaves the broken page and reaches the mirror in every run (nine
+  calls). gemma4:e2b sees the line too, but still searches once more with nearly the same words, gets the same list
+  and answers that it "was unable to read the content", without opening result 2 (three calls, all three runs
+  identical).
+- **web_find:** gpt-oss:20b uses it in both profiles (`search follow find read`, `open find read`) and stays well
+  inside 8K. gemma4:e2b never calls it: it reads all three parts (`open read read`) and passes only because the answer
+  is in the last part; the run is flagged context-full (estimate 8,945 tokens). Its long-page success is therefore
+  fragile, not an effect of `web_find`.
 
 ## Observations from the self-test
 

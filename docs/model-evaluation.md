@@ -204,7 +204,7 @@ Approved by Angelo after the run above; measured apart from it (the numbers abov
 - **`web_find`** (PR #15, compact and expert): searches the open page's text and returns the match count and
   short snippets with their `web_read` part. The self-test solves `long-page` with `web_open` + `web_find` at an
   estimated 4,400 prompt tokens, instead of about 8,600 for reading every part.
-- **HTTP status line** (PR #16): `web_open`, `web_follow`, `web_read` and `web_back` add
+- **HTTP status line** (PR #16, merged into `main` as `2f49339`; the "after" run used the same code, `d09267a`): `web_open`, `web_follow`, `web_read` and `web_back` add
   `HTTP error: 500 Internal Server Error — the requested content may not be available on this page.` when the
   main document answers 400 or higher. The self-test requires it on `broken-link`.
 
@@ -233,6 +233,10 @@ What the transcripts show:
   inside 8K. gemma4:e2b never calls it: it reads all three parts (`open read read`) and passes only because the answer
   is in the last part; the run is flagged context-full (estimate 8,945 tokens). Its long-page success is therefore
   fragile, not an effect of `web_find`.
+
+Decision (Angelo): `broken-link` stays a real failure for gemma4:e2b and stays in its success rate. The tools are not
+tailored to one model; the HTTP error line is a general, correct signal, and deriving the next step from it is the
+model's part.
 
 ## Observations from the self-test
 

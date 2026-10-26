@@ -731,21 +731,26 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
         // the page); a binary document has no page text. Both use the classification of browser_snapshot.
         SavedDocument saved = document(p).saved;
         if (saved != null) return new PageCapture(saved.url(), "", sourceText(saved.contentType(), saved.url(),
-                saved.text()), "");
+                saved.text()), "", saved.status());
+        // The status of the document's own response (a protocol event Argos already records for the
+        // document type and readiness); 0 when the shown document has no recorded response, e.g. a
+        // history move the browser served from its cache. web_* report it to the agent for error pages.
         MainDocument main = document(p).mainDocument;
-        if (main != null && main.url().equals(p.url())) {
+        boolean shown = main != null && main.url().equals(p.url());
+        int status = shown ? main.status() : 0;
+        if (shown) {
             DocumentType type = DocumentType.classify(main.contentType(), main.url());
             if (type == DocumentType.BINARY) {
                 return new PageCapture(p.url(), "", "Binary document (" + DocumentType.mimeType(main.contentType())
-                        + "). It has no page text; use the document tools to download and read it.", "");
+                        + "). It has no page text; use the document tools to download and read it.", "", status);
             }
             Optional<String> body = type.isSourceDocument() ? main.body() : Optional.empty();
             if (body.isPresent()) return new PageCapture(p.url(), "", sourceText(main.contentType(), main.url(),
-                    body.get()), "");
+                    body.get()), "", status);
         }
         // Every in-page read is a protocol evaluation (with user activation, see
         // playwright4j #37), so take one content() call and avoid title()/innerText()/count().
-        return PageText.capture(p.url(), p.content());
+        return PageText.capture(p.url(), p.content(), status);
     }
 
     private static String sourceText(String contentType, String url, String source) {

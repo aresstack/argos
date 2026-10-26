@@ -29,8 +29,13 @@ public final class PageText {
 
     /** A capture whose title and text are derived from {@code html}. */
     public static PageCapture capture(String url, String html) {
+        return capture(url, html, 0);
+    }
+
+    /** Like {@link #capture(String, String)}, with the HTTP status of the document's response (0 = unknown). */
+    public static PageCapture capture(String url, String html, int status) {
         Document document = Jsoup.parse(html == null ? "" : html, url == null ? "" : url);
-        return new PageCapture(url, document.title(), text(document), html);
+        return new PageCapture(url, document.title(), text(document), html, status);
     }
 
     static String text(Document document) {

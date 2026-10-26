@@ -63,6 +63,10 @@ class CamoufoxBrowsingTest {
             </script></body></html>""";
     private static final String SECOND = """
             <html><head><title>Zweite</title></head><body><h1>Zweite Seite</h1></body></html>""";
+    /** A server error page, delivered with status 500 and rendered like any other document. */
+    private static final String BROKEN = """
+            <html><head><title>500 Internal Server Error</title></head><body><h1>Internal Server Error</h1>
+            <p>The archive is unavailable.</p></body></html>""";
     /** A single-page app: the document says it is loading until its own request answers. */
     private static final String LOADING = """
             <html><head><title>Daten</title></head><body><p id="d">Wird geladen …</p>
@@ -85,10 +89,10 @@ class CamoufoxBrowsingTest {
                 try (var out = exchange.getResponseBody()) { out.write(data); }
                 return;
             }
-            byte[] body = (path.startsWith("/second") ? SECOND : path.startsWith("/loading") ? LOADING : FORM)
-                    .getBytes(StandardCharsets.UTF_8);
+            byte[] body = (path.startsWith("/second") ? SECOND : path.startsWith("/loading") ? LOADING
+                    : path.startsWith("/broken") ? BROKEN : FORM).getBytes(StandardCharsets.UTF_8);
             exchange.getResponseHeaders().add("Content-Type", "text/html; charset=utf-8");
-            exchange.sendResponseHeaders(200, body.length);
+            exchange.sendResponseHeaders(path.startsWith("/broken") ? 500 : 200, body.length);
             try (var out = exchange.getResponseBody()) { out.write(body); }
         });
         site.setExecutor(java.util.concurrent.Executors.newCachedThreadPool());
@@ -186,6 +190,13 @@ class CamoufoxBrowsingTest {
             String loaded = web.open(base + "/loading");
             assertTrue(loaded.contains("Messwerte geladen: 42"), loaded);
             assertFalse(loaded.contains("Wird geladen"), loaded);
+            // An error page names its status from the navigation response (Phase 7, broken-link); the
+            // delivered pages above carried no error line.
+            assertFalse(loaded.contains("HTTP error:"), loaded);
+            String broken = web.open(base + "/broken");
+            assertTrue(broken.contains("TITLE: 500 Internal Server Error\nHTTP error: 500 Internal Server Error \u2014"), broken);
+            assertTrue(broken.contains("The archive is unavailable."), broken);
+            assertTrue(web.read(1).contains("\nHTTP error: 500 Internal Server Error \u2014"), "web_read keeps the status");
         } finally {
             site.stop(0);
         }

@@ -62,7 +62,7 @@ final class HttpPageBrowser implements BrowserPagePort {
             HttpRequest.Builder request = HttpRequest.newBuilder(URI.create(url));
             if (referer != null) request.header("Referer", referer);
             HttpResponse<String> response = http.send(request.build(), HttpResponse.BodyHandlers.ofString());
-            return PageText.capture(response.uri().toString(), response.body());
+            return PageText.capture(response.uri().toString(), response.body(), response.statusCode());
         } catch (Exception error) {
             throw new IllegalStateException(error);
         }

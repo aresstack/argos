@@ -158,6 +158,50 @@ class WebSessionTest {
         assertThrows(IllegalArgumentException.class, () -> web.read(4));
     }
 
+    @Test void findsTextOnALongPageWithSnippetsAndParts() {
+        pages.put("/archive", "<title>Archive</title><p>" + "filler text here. ".repeat(5) + "</p>"
+                + "<p>Its founding Director was Margit Solberg, who led it until 1988.</p>");
+        web.open(base + "/archive");
+        String answer = web.find("founding  director");
+        assertTrue(answer.startsWith("URL: " + base + "/archive\nFOUND: 1 match for \"founding  director\"\n"), answer);
+        assertTrue(answer.contains("hit 1 (part 3): "), answer);
+        assertTrue(answer.contains("Its founding Director was Margit Solberg"), answer);
+        assertTrue(answer.endsWith("Read a whole part with web_read part=N."), answer);
+        assertTrue(web.read(3).contains("founding Director"), "the named part holds the match");
+    }
+
+    @Test void findCountsAllMatchesButShowsAtMostTenShortSnippets() {
+        web = new WebSession(browser, UrlPolicy.off(), null);
+        pages.put("/many", "<title>Many</title>" + "<p>An apple a day and more words around it.</p>".repeat(30)
+                + "<p>" + "x".repeat(600) + " apple " + "y".repeat(600) + "</p>");
+        web.open(base + "/many");
+        String answer = web.find("APPLE");
+        assertTrue(answer.contains("FOUND: 31 matches for \"APPLE\" (showing 10)"), answer);
+        long hits = answer.lines().filter(line -> line.startsWith("hit ")).count();
+        assertEquals(10, hits, answer);
+        answer.lines().filter(line -> line.startsWith("hit ")).forEach(line ->
+                assertTrue(line.length() <= "hit 10 (part 1): ".length() + 2 + WebSession.FIND_SNIPPET_CHARACTERS, line));
+        assertFalse(answer.contains("web_read part=N"), "a one-part page needs no hint");
+    }
+
+    @Test void findIgnoresDashVariantsAndReportsMisses() {
+        pages.put("/dash", "<title>Dash</title><p>The state\u2011of\u2011the\u2011art telescope.</p>");
+        web.open(base + "/dash");
+        assertTrue(web.find("state-of-the-art").contains("FOUND: 1 match"));
+        assertTrue(web.find("planetarium").contains("No matches for \"planetarium\" on this page."));
+        assertThrows(IllegalArgumentException.class, () -> web.find(" "));
+    }
+
+    @Test void findNeedsAnOpenPageAndDoesNotNavigate() {
+        var error = assertThrows(IllegalStateException.class, () -> web.find("x"));
+        assertTrue(error.getMessage().startsWith("No page is open yet"), error.getMessage());
+        web.open(base + "/");
+        web.find("Welcome");
+        assertEquals(base + "/", browser.currentUrl());
+        assertEquals("link-1: Read the article — " + base + "/article\n"
+                + "link-2: About us — " + base + "/about", web.links(), "link ids stay valid");
+    }
+
     @Test void reportsTheFinalUrlAfterRedirects() {
         assertTrue(web.open(base + "/moved").startsWith("URL: " + base + "/article"));
     }

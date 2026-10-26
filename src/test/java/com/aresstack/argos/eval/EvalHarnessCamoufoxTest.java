@@ -75,11 +75,9 @@ class EvalHarnessCamoufoxTest {
                 return find(status, "(Ticket KV-4471: CONFIRMED\\. Seat F12)");
             },
             "long-page", steps -> {
-                String part = steps.tool("web_open", "{\"url\": \"" + site + "/archive\"}");
-                for (int next = 2; !part.contains("founding director") && part.contains("web_read part="); next++) {
-                    part = steps.tool("web_read", "{\"part\": " + next + "}");
-                }
-                return find(part, "founding director was (\\w+ \\w+)");
+                steps.tool("web_open", "{\"url\": \"" + site + "/archive\"}");
+                String found = steps.tool("web_find", "{\"text\": \"founding director\"}");
+                return find(found, "founding director was (\\w+ \\w+)");
             });
 
     @Test @Timeout(value = 400, unit = TimeUnit.SECONDS)
@@ -122,6 +120,9 @@ class EvalHarnessCamoufoxTest {
         assertTrue(retry.recovered(), "the failed first search must be visible as a setback");
         RunRecord broken = report.records().stream().filter(r -> r.task().equals("broken-link")).findFirst().orElseThrow();
         assertTrue(broken.recovered(), "the HTTP 500 page must be visible as a setback");
+        RunRecord longPage = report.records().stream().filter(r -> r.task().equals("long-page")).findFirst().orElseThrow();
+        assertTrue(longPage.estimatedPromptTokens() < 6000,
+                "web_find must keep long-page inside 8K context: " + longPage.estimatedPromptTokens());
         assertTrue(Files.exists(report.directory().resolve("results.json")));
     }
 }

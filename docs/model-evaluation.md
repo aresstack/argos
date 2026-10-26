@@ -106,7 +106,7 @@ $env:ARGOS_EVAL_API_KEY = "..."
 | `search-retry` | First search answers HTTP 503; retry or rephrase | Saturday 18:00–23:30 | hotel 12:00–22:00 |
 | `broken-link` | Official page answers HTTP 500; use the mirror | Ravenmoor | – |
 | `simple-form` | Fill a ticket form and submit | CONFIRMED, seat F12 | – |
-| `long-page` | Answer in the last part of a long page (`web_read part=N`) | Margit Solberg | – |
+| `long-page` | Answer in the last part of a long page (`web_find`, or `web_read part=N`) | Margit Solberg | – |
 | `live-rfc-title` | Real search engines and sites | HTTP Semantics | – |
 | `live-rfc-editor` | Open and read a real page | Fielding | – |
 | `live-jep` | Real search, pick, read | JEP 444 | – |
@@ -196,6 +196,18 @@ gpt-oss:20b@expert 18/24. From the `broken-link` and `find-site` transcripts:
   archive, until about 10,000 estimated tokens end it with `empty_answer`. In expert it reaches the mirror after
   eight calls.
 - A guessed `https://` address on the plain-HTTP fixture port waits the full 45 s navigation timeout.
+
+## After the three repetitions: `web_find` and the HTTP status line
+
+Approved by Angelo after the run above; measured apart from it (the numbers above stay the baseline, expert 21/24).
+
+- **`web_find`** (PR #15, compact and expert): searches the open page's text and returns the match count and
+  short snippets with their `web_read` part. The self-test solves `long-page` with `web_open` + `web_find` at an
+  estimated 4,400 prompt tokens, instead of about 8,600 for reading every part.
+- **HTTP status line** for error pages in `web_open`, `web_follow` and `web_read` (separate change).
+
+Rerun for the comparison:
+`.\gradlew.bat evalModels "-Peval.repeat=3" "-Peval.num-gpu=16" "-Peval.tasks=broken-link,long-page"`
 
 ## Observations from the self-test
 

@@ -229,10 +229,15 @@ public final class WebSession {
             forgetPage();
             throw new IllegalStateException(String.format(NO_WEB_PAGE, shown));
         }
-        if (page == null && shown.equals(searchPage)) {
+        if (page == null && sameDocument(shown, searchPage)) {
             throw new IllegalStateException(results.isEmpty() ? NO_PAGE : AFTER_SEARCH);
         }
         return shown;
+    }
+
+    /** Same scheme, host and path: a results page that rewrites its query or fragment later is still the results page. */
+    private static boolean sameDocument(String a, String b) {
+        return !b.isEmpty() && a.split("[?#]", 2)[0].equalsIgnoreCase(b.split("[?#]", 2)[0]);
     }
 
     private void forgetPage() {

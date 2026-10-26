@@ -139,6 +139,20 @@ class WebSessionTest {
         assertTrue(error.getMessage().startsWith("No page is open yet"), error.getMessage());
     }
 
+    @Test void aResultsPageThatRewritesItsQueryLaterIsStillTheProvidersPage() throws Exception {
+        WebSearchPort engine = query -> {
+            browser.moveTo(base + "/about?q=camoufox");
+            return new SearchResults(List.of(new SearchHit("Article", base + "/article", "")), List.of());
+        };
+        WebSession searching = new WebSession(browser, UrlPolicy.off(), engine);
+        searching.search("camoufox");
+        browser.show(base + "/about?q=camoufox&ia=web#top");    // history.replaceState by the engine's script
+        var error = assertThrows(IllegalStateException.class, () -> searching.read(1));
+        assertTrue(error.getMessage().contains("web_follow link_id=\"result-1\""), error.getMessage());
+        browser.moveTo(base + "/");                               // another path on the same host is a page
+        assertTrue(searching.read(1).contains("TITLE: Start"));
+    }
+
     @Test void aSearchWithoutResultsStillLeavesTheProvidersPageAlone() throws Exception {
         WebSearchPort engine = query -> {
             browser.moveTo(base + "/about");

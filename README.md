@@ -28,7 +28,7 @@ Die MCP-Implementierung nutzt `io.modelcontextprotocol.sdk:mcp:0.18.4` und einge
 
 ## Bauen (Windows)
 
-Voraussetzung: Java 21 sowie **Playwright4J-Commit `1c11fe9c2eb39eca1ca6abbc4ce0ffe3f183aa8c` oder neuer mit Fix #32**. Die alte, lokal veröffentlichte `0.2.2-SNAPSHOT` ohne Fix #32 startet den Treiber aus einer ausführbaren JAR nicht. Die CI baut die geprüfte Revision selbst; lokal kann sie in `.argos-build/maven/` veröffentlicht werden (das Verzeichnis ist Git-ignoriert).
+Voraussetzung: Java 21 sowie **Playwright4J-Commit `fad3590748a38059cf133d329d7d69b2984dd166` oder neuer** (enthält Fix #32 und die echten Unicode-Tasten aus #59). Die alte, lokal veröffentlichte `0.2.2-SNAPSHOT` ohne Fix #32 startet den Treiber aus einer ausführbaren JAR nicht. Die CI baut die geprüfte Revision selbst; lokal kann sie in `.argos-build/maven/` veröffentlicht werden (das Verzeichnis ist Git-ignoriert).
 
 ```powershell
 .\gradlew.bat test packageArgos argosZip
@@ -161,7 +161,7 @@ Diese Werkzeuge stehen in `ArgosBrowsingTools` als getrennte Listen `expert()` u
 
 **Tarnung:** Gelesen wird nur über Aufrufe, die nachweislich keine Spuren in der Seite hinterlassen: den seitenweiten Aria-Snapshot, `aria-ref`-Locator mit `count`/`boundingBox` und `evaluateAll`. Locator-Aktionen (auch Trial-Klicks), `isEditable`, `getAttribute`, `innerHTML` und `locator.ariaSnapshot` lösen dagegen `__playwright_mark_target__`-Events aus, die eine Seite abhören kann ([playwright4j#38](https://github.com/aresstack/playwright4j/issues/38)), und werden deshalb nicht verwendet. Es gibt keine Preload- oder Init-Scripts und keine Marker-Attribute. Klicks, Scrollen und Tippen laufen als echte BiDi-Eingabe mit menschlichem Verhalten (siehe [Menschliche Eingabe](#menschliche-eingabe)). Die Webseite sieht `isTrusted=true`. Der echte Browsertest prüft, dass keine Marker-Events und keine neuen globalen Namen entstehen. Passwortwerte werden in Bedienelement-Listen nie ausgegeben.
 
-**Bekannte Grenzen aus Playwright Core 1.62 (Playwright4J):** Der BiDi-Layer legt auf jedem Dokument `window.__pw_bidiInsertText` an, unabhängig von Argos. Zeichen außerhalb des US-Tastaturlayouts (z. B. Umlaute) tippt Playwright nur über diese Funktion mit einem nicht vertrauenswürdigen `InputEvent`; Argos verwendet das standardmäßig nicht (`ARGOS_INPUT_UNICODE`). Beides sollte in Playwright4J behoben werden (BiDi `input.performActions` akzeptiert beliebige Unicode-Tastenwerte, [playwright4j#36](https://github.com/aresstack/playwright4j/issues/36)). Für zuverlässige Historie setzt Argos `browser.sessionhistory.max_total_viewers=0`, weil Playwright Rücksprünge aus dem Back-Forward-Cache sonst nicht bemerkt; die offizielle `launch.json` kann den Wert überschreiben.
+**Playwright Core 1.62 (Playwright4J) und Unicode:** Ab dem gepinnten Playwright4J-Stand `fad3590` ([playwright4j#59](https://github.com/aresstack/playwright4j/pull/59)) sendet der BiDi-Layer Zeichen außerhalb des US-Tastaturlayouts (z. B. Umlaute) als echte, vertrauenswürdige Tastenereignisse über `input.performActions` und legt kein `window.__pw_bidiInsertText` mehr an. Für zuverlässige Historie setzt Argos `browser.sessionhistory.max_total_viewers=0`, weil Playwright Rücksprünge aus dem Back-Forward-Cache sonst nicht bemerkt; die offizielle `launch.json` kann den Wert überschreiben.
 
 ### Menschliche Eingabe
 
@@ -181,7 +181,7 @@ Jede Maus- und Tastatureingabe geht als vertrauenswürdiges Ereignis über WebDr
 
 Ob Playwright Unicode-Tasten als echte Tasten sendet, prüft Argos einmal beim Browserstart auf einem leeren Tab. Sobald Playwright4J sie über `performActions` unterstützt ([playwright4j#36](https://github.com/aresstack/playwright4j/issues/36)), nutzt Argos sie automatisch.
 
-**Einschränkung in Argos 2.0:** Mit dem in der CI gepinnten Playwright4J-Stand (`1c11fe9`, Playwright Core 1.62) fällt diese Prüfung negativ aus. Text mit Zeichen außerhalb des US-Layouts (Umlaute, `ß`, `€`, typografische Anführungszeichen) wird in der Voreinstellung `strict` **abgelehnt**, nicht getippt; der Fehler nennt die Zeichen. Echte Unicode-Tasten gibt es erst mit [playwright4j#59](https://github.com/aresstack/playwright4j/pull/59), das noch nicht in Playwright4J `master` ist. Dieser Weg ist bisher nur unter Linux mit Camoufox 158.0-beta.40 gegen den #59-Quellstand nachgewiesen (`-Pplaywright4jSource`), nicht unter Windows. Argos behauptet also keine vollständige Unicode-Eingabe; sie wird mit einem neuen Playwright4J-Pin und wiederholten Camoufox-Läufen nachgezogen.
+**Stand:** Mit dem in der CI gepinnten Playwright4J-Stand `fad3590` (Merge von [playwright4j#59](https://github.com/aresstack/playwright4j/pull/59)) fällt diese Prüfung positiv aus: Zeichen außerhalb des US-Layouts (Umlaute, `ß`, `€`, typografische Anführungszeichen) werden in der Voreinstellung `strict` als echte Tasten getippt statt abgelehnt. Nachgewiesen mit `UnicodeInputCamoufoxTest` (`web_fill` mit „Grüße“, echte Tasten verlangt) unter Linux mit Camoufox 156.0.1-beta.36 gegen `fad3590` sowie mit der vollständigen Argos-Testsuite unter Windows mit Camoufox 156.0.1-beta.36 gegen `f187ff6` (gleicher Laufzeitcode). `HumanInputBrowserTest` (`-PtestHumanBrowser`) ist unter Windows noch nicht gelaufen.
 
 ### Dokumenttypen und Seitenbereitschaft
 

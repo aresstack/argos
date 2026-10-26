@@ -182,6 +182,21 @@ gpt-oss:20b@expert 7/8. Changes from it:
 Next step: three repetitions per configuration with identical settings, e.g.
 `.\gradlew.bat evalModels "-Peval.repeat=3" "-Peval.num-gpu=16"`.
 
+## Three repetitions on `adf049d`
+
+Angelo's run (`repeat=3`, `num_gpu` 16, 8K): gemma4:e2b@compact 15/21, gpt-oss:20b@compact 15/21,
+gpt-oss:20b@expert 18/24. From the `broken-link` and `find-site` transcripts:
+
+- **find-site in expert was judged wrong but answered correctly.** gpt-oss wrote the address with a non-breaking
+  hyphen (`kestrel\u2011observatory`). The judge now reads U+2010/U+2011 as `-` and no-break spaces as spaces; with
+  it, expert solves 21/24.
+- **broken-link in compact is a real failure.** Both models see the official page's "500 Internal Server Error"
+  title but never open the mirror (search result 2). gemma4:e2b searches again, gets the same list and gives up or
+  repeats the snippet ("Kestrel Valley dark-sky zone"); gpt-oss:20b guesses addresses on the official site and the
+  archive, until about 10,000 estimated tokens end it with `empty_answer`. In expert it reaches the mirror after
+  eight calls.
+- A guessed `https://` address on the plain-HTTP fixture port waits the full 45 s navigation timeout.
+
 ## Observations from the self-test
 
 - `web_open` shows an HTTP 500 error page as ordinary page text without a status line. gpt-oss recovered in

@@ -35,9 +35,12 @@ public record EvalTask(String id, String category, String prompt, List<String> e
         return prompt.replace("{site}", siteBase);
     }
 
-    /** Success means: every expected pattern found, no distractor pattern found. */
+    /**
+     * Success means: every expected pattern found, no distractor pattern found. Typographic hyphens and no-break
+     * spaces are read as their plain forms first: gpt-oss writes {@code kestrel\u2011observatory}.
+     */
     public boolean accepts(String answer) {
-        String text = answer == null ? "" : answer;
+        String text = answer == null ? "" : answer.replaceAll("[\u2010\u2011]", "-").replaceAll("[\u00a0\u202f]", " ");
         return expected.stream().allMatch(pattern -> find(pattern, text))
                 && forbidden.stream().noneMatch(pattern -> find(pattern, text));
     }

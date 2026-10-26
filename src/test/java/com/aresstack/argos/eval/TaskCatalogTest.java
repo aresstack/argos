@@ -25,6 +25,7 @@ class TaskCatalogTest {
         EvalTask findSite = task("find-site");
         assertTrue(findSite.accepts("The official website is http://www.kestrel-observatory.test:4321/"));
         assertTrue(findSite.accepts("It is http://www.kestrel-observatory.test:4321."));
+        assertTrue(findSite.accepts("**http://www.kestrel\u2011observatory.test:62469/**"));
         assertTrue(findSite.accepts("[Official site](http://www.kestrel-observatory.test:4321/)"));
         assertTrue(findSite.accepts("www.kestrel-observatory.test"));
         assertFalse(findSite.accepts("http://www.kestrel-observatory.test:4321/instruments"));

@@ -74,7 +74,7 @@ public final class ArgosTools {
     private List<SyncToolSpecification> profileTools(ToolProfile profile) {
         return switch (profile) {
             case LEGACY -> browserTools();
-            // Small models: only the six short AskAI tools, nothing else to choose from.
+            // Small models: only the short AskAI tools plus web_find, nothing else to choose from.
             case COMPACT -> webTools();
             case EXPERT -> {
                 List<SyncToolSpecification> tools = new ArrayList<>(webTools());
@@ -109,6 +109,11 @@ public final class ArgosTools {
                         + "Example: {\"part\": 2}",
                 Map.of("part", field("integer", "Part number, default 1")), List.of(),
                 args -> web.read(number(args, "part", 1))));
+        tools.add(text("web_find", "Find a word or phrase on the page the browser shows without reading the whole page. "
+                        + "Returns the number of matches and short snippets, each with the web_read part it is in. "
+                        + "Example: {\"text\": \"opening hours\"}",
+                Map.of("text", field("string", "Word or phrase to find; case does not matter")), List.of("text"),
+                args -> web.find(string(args, "text"))));
         tools.add(text("web_links", "List the links of the page the browser shows as link-1, link-2, ... "
                         + "Use the id with web_follow. Call web_read first if the page loaded more content. Example: {}",
                 Map.of(), List.of(), args -> web.links()));

@@ -19,9 +19,10 @@ import java.util.regex.Pattern;
  * number such as "2" refers to the list the agent saw last: web_search shows results,
  * web_links shows links. Anything that cannot be resolved fails with a clear message.
  *
- * <p>The session follows the browser: in the expert profile a page that browser_navigate, a
- * click or a tab switch opened is read by web_read and web_links as well. Only the search
- * provider's own page after web_search is not a page to read; a result has to be opened first.
+ * <p>The session follows the browser: a page another tool opened (expert profile: browser_navigate,
+ * a click, a tab switch; any profile: the page web_research loaded last) is read by web_read and
+ * web_links as well. Only the search provider's own page after web_search is not a page to read;
+ * a result has to be opened first.
  */
 public final class WebSession {
     public static final int DEFAULT_PART_CHARACTERS = 12_000;

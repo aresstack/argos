@@ -52,7 +52,7 @@ Die Startprüfung kennt zwei echte Wege: `KEY_NAMES` (`keyboard.down("ä")` wird
 
 Ein Tabulator wird nie als Tab-Taste gesendet (sie würde den Fokus verschieben); er wird wie ein nicht tippbares Zeichen behandelt.
 
-**Stand:** Mit dem in der CI gepinnten Playwright4J `fad3590` (Merge von playwright4j#59) fällt die Startprüfung positiv aus; Umlaute und andere Zeichen außerhalb des US-Layouts werden als echte Tasten getippt. `UnicodeInputCamoufoxTest` verlangt mit `-Pplaywright4jSource` echte Tasten und ist unter Linux mit Camoufox 156.0.1-beta.36 gegen `fad3590` grün; die vollständige Testsuite lief zusätzlich unter Windows mit Camoufox 156.0.1-beta.36 gegen `f187ff6` (gleicher Laufzeitcode) ohne Fehler. Offen ist noch `HumanInputBrowserTest` unter Windows (`-PtestHumanBrowser`): reale Camoufox-Tests mit `äöüÄÖÜß€`, gemischtem Text, Backspace/Shift, `event.isTrusted`, `event.key` und dem tatsächlichen Feldwert.
+**Stand:** Mit dem in der CI gepinnten Playwright4J `fad3590` (Merge von playwright4j#59) fällt die Startprüfung positiv aus; Umlaute und andere Zeichen außerhalb des US-Layouts werden als echte Tasten getippt. `UnicodeInputCamoufoxTest` verlangt mit `-Pplaywright4jSource` echte Tasten und ist unter Linux mit Camoufox 156.0.1-beta.36 gegen `fad3590` grün; die vollständige Testsuite lief zusätzlich unter Windows mit Camoufox 156.0.1-beta.36 gegen `f187ff6` (gleicher Laufzeitcode) ohne Fehler. `HumanInputBrowserTest` (`-PtestHumanBrowser`) prüft reale Camoufox-Eingaben mit `isTrusted`, `event.key` und dem tatsächlichen Feldwert einschließlich Unicode und ist gegen `fad3590` mit Camoufox 156.0.1-beta.36 unter Windows und Linux grün.
 
 ## Was die Seite sieht
 

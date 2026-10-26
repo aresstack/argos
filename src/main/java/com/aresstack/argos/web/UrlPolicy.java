@@ -46,6 +46,11 @@ public final class UrlPolicy {
         return settings.strictMode() ? new UrlPolicy(settings.policy()) : off();
     }
 
+    /** Like {@link #from(NetworkSettings)} with another host resolution (e.g. the evaluation's fixture domains). */
+    public static UrlPolicy from(NetworkSettings settings, HostResolver resolver) {
+        return settings.strictMode() ? new UrlPolicy(settings.policy(), resolver) : off();
+    }
+
     /** Public targets only, the default of {@code ARGOS_NETWORK_POLICY=strict}. */
     public static UrlPolicy publicOnly() {
         return new UrlPolicy(NetworkPolicy.publicOnly());

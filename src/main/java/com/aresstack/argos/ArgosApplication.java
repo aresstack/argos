@@ -54,6 +54,37 @@ public final class ArgosApplication {
                 new WebSession(browser, urlPolicy, new BrowserWebSearch(browser)),
                 ResearchSettings.fromEnvironment(), new DocumentAndBatchTools(documents))
                 .forProfile(config.toolProfile());
+        RunningServer running = serve(config, tools);
+        Runtime.getRuntime().addShutdownHook(Thread.ofPlatform().name("argos-shutdown").unstarted(() -> {
+            running.close();
+            browser.close();
+            documents.close();
+        }));
+
+        System.out.println("Argos ready: http://" + config.host() + ":" + running.port()
+                + "/ (MCP root, health: /health, tool profile: "
+                + config.toolProfile().name().toLowerCase(java.util.Locale.ROOT) + ")");
+        running.server().join();
+    }
+
+    /** The started HTTP endpoint: Streamable HTTP MCP at the root, /health and protected-resource metadata. */
+    public record RunningServer(Server server, McpSyncServer mcp, int port) implements AutoCloseable {
+        @Override
+        public void close() {
+            try {
+                server.stop();
+            } catch (Exception error) {
+                System.err.println("Failed to stop Argos HTTP server: " + error.getMessage());
+            }
+            mcp.close();
+        }
+    }
+
+    /**
+     * Publishes the given tools over Streamable HTTP on {@code config.host()}:{@code config.port()} (0 picks a
+     * free port). Also used by the model evaluation, which drives the same endpoint as a real MCP client.
+     */
+    public static RunningServer serve(ArgosConfig config, List<SyncToolSpecification> tools) throws Exception {
         HttpServletStreamableServerTransportProvider transport =
                 HttpServletStreamableServerTransportProvider.builder()
                         .mcpEndpoint("/").build();
@@ -75,23 +106,9 @@ public final class ArgosApplication {
         context.addServlet(new ServletHolder(new ProtectedResourceServlet(config)),
                 "/.well-known/oauth-protected-resource");
         server.setHandler(context);
-        Runtime.getRuntime().addShutdownHook(Thread.ofPlatform().name("argos-shutdown").unstarted(() -> {
-            try {
-                server.stop();
-            } catch (Exception error) {
-                System.err.println("Failed to stop Argos HTTP server: " + error.getMessage());
-            }
-            mcp.close();
-            browser.close();
-            documents.close();
-        }));
-
         server.start();
-        System.out.println("Argos ready: http://" + config.host() + ":"
-                + ((org.eclipse.jetty.server.ServerConnector) server.getConnectors()[0]).getLocalPort()
-                + "/ (MCP root, health: /health, tool profile: "
-                + config.toolProfile().name().toLowerCase(java.util.Locale.ROOT) + ")");
-        server.join();
+        return new RunningServer(server, mcp,
+                ((org.eclipse.jetty.server.ServerConnector) server.getConnectors()[0]).getLocalPort());
     }
 
     static final class ProtectedResourceServlet extends HttpServlet {

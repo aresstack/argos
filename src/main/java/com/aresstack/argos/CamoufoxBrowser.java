@@ -105,18 +105,32 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
     /** Counted down once the stopped browser has exited (or was killed). */
     private volatile CountDownLatch browserStopped;
     private Socks5Proxy proxy;
+    private final HostResolver resolver;
     private BrowserContext context;
     /** True while a download or batch runs its own background tabs on the driver thread. */
     private boolean backgroundWork;
 
     public CamoufoxBrowser(ArgosConfig config) {
-        this(config, HumanInputSettings.fromEnvironment());
+        this(config, HumanInputSettings.fromEnvironment(), HostResolver.SYSTEM);
+    }
+
+    /**
+     * With another host resolution for the policy and the proxy, e.g. the model evaluation's fictional
+     * {@code .test} domains on loopback. Every connection still passes the proxy and its policy.
+     */
+    public CamoufoxBrowser(ArgosConfig config, HostResolver resolver) {
+        this(config, HumanInputSettings.fromEnvironment(), resolver);
     }
 
     CamoufoxBrowser(ArgosConfig config, HumanInputSettings humanInput) {
+        this(config, humanInput, HostResolver.SYSTEM);
+    }
+
+    private CamoufoxBrowser(ArgosConfig config, HumanInputSettings humanInput, HostResolver resolver) {
         this.config = config;
         this.input = new RealInput(humanInput);
-        this.urlPolicy = UrlPolicy.from(config.network());
+        this.resolver = resolver;
+        this.urlPolicy = UrlPolicy.from(config.network(), resolver);
         this.network = new NetworkRecorder(masker, config.networkBodies());
     }
 
@@ -329,7 +343,7 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
                     }
                 }
                 // Fail closed: no proxy, no browser.
-                proxy = Socks5Proxy.start(network, HostResolver.SYSTEM);
+                proxy = Socks5Proxy.start(network, resolver);
                 proxy.protectLoopbackPort(config.port());
                 prefs.putAll(FirefoxNetworkPrefs.forLocalSocks(proxy.port()));
             } else {

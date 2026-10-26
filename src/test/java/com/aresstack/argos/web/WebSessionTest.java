@@ -76,6 +76,7 @@ class WebSessionTest {
         assertTrue(answer.contains("Try again later."), "the server's message is still shown: " + answer);
         assertTrue(web.read(1).contains("\nHTTP error: 500 Internal Server Error \u2014"), "web_read keeps the status");
         assertFalse(web.open(base + "/about").contains("HTTP error:"), "a delivered page carries no error line");
+        // The double fetches again on back(); Camoufox reloads the document too (bfcache off), so the status is known.
         assertTrue(web.back().contains("\nHTTP error: 500 Internal Server Error \u2014"), "going back marks it again");
         pages.put("/", "<title>Start</title><a href='/missing'>Gone</a> <a href='/about'>About us</a>");
         web.open(base + "/");
@@ -85,6 +86,23 @@ class WebSessionTest {
         assertTrue(web.follow("link-2").startsWith("URL: " + base + "/about\nTITLE: About\nLINKS: 0"));
         assertEquals("HTTP error: 599 \u2014 the requested content may not be available on this page.",
                 WebSession.errorLine(599), "an unknown code is shown without a reason phrase");
+    }
+
+    @Test void aCaptureWithoutAKnownStatusRendersAsBefore() {
+        // Status 0: no response recorded for the shown address, or a port that does not know the status.
+        BrowserPagePort unknown = new BrowserPagePort() {
+            @Override public PageCapture open(String url, String referer) {
+                return new PageCapture("http://h.example/", "Start", "Welcome", "");
+            }
+            @Override public PageCapture current() { return open(null, null); }
+            @Override public String currentUrl() { return "http://h.example/"; }
+            @Override public PageCapture back() { return null; }
+            @Override public void clear() { }
+        };
+        assertEquals("URL: http://h.example/\nTITLE: Start\nLINKS: 0 (see web_links)\n\nWelcome",
+                new WebSession(unknown, UrlPolicy.off(), null).open("http://h.example/"));
+        assertFalse(new PageCapture("u", "t", "x", "", 399).isError(), "399 is not an error");
+        assertTrue(new PageCapture("u", "t", "x", "", 400).isError(), "400 is");
     }
 
     @Test void listsLinksWithShortIdsAndFollowsThem() {

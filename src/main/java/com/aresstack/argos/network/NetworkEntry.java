@@ -42,6 +42,8 @@ final class NetworkEntry {
     Integer bodyBytes;
     boolean bodyTruncated;
     String bodyUnavailable;
+    /** Handed to the content sink once (finish and response events may come in either order). */
+    boolean contentOffered;
 
     NetworkEntry(String id, Instant startedAt, long startedNanos, String method, String listUrl, String url,
                  String resourceType, Map<String, String> requestHeaders, String postData,

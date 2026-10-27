@@ -120,6 +120,17 @@ class SearchHistoryNetworkBrowserTest {
                 }
             });
 
+            // Diagnostics: the raw protocol events of the main document as Playwright delivers them.
+            browser.onActivePage(page -> {
+                page.onRequest(r -> { if (r.isNavigationRequest()) trace.add("event request " + r.url()
+                        + " id=" + System.identityHashCode(r)); });
+                page.onResponse(r -> { if (r.request().isNavigationRequest()) trace.add("event response "
+                        + r.url() + " status=" + r.status() + " id=" + System.identityHashCode(r.request())); });
+                page.onRequestFinished(r -> { if (r.isNavigationRequest()) trace.add("event finished " + r.url()
+                        + " id=" + System.identityHashCode(r)); });
+                page.onRequestFailed(r -> { if (r.isNavigationRequest()) trace.add("event failed " + r.url()); });
+                return null;
+            });
             browser.navigate(base + "/");
             browser.waitFor(null, "loaded", 10_000);
             capture.browserPage(null, base + "/", true, "browser_navigate");

@@ -140,6 +140,32 @@ class NetworkContentCaptureTest {
         verify(responses.get(responses.size() - 1), never()).body();
     }
 
+    @Test void aNavigationWithAnotherRequestObjectInItsResponseEventsIsStillOffered() {
+        NetworkRecorder recorder = recorder();
+        Request started = request("http://localhost:1/", "document");
+        Request answered = request("http://localhost:1/", "document"); // a different object for the same exchange
+        Response response = response(answered, 200, "text/html; charset=utf-8", "<p>doc</p>",
+                Map.of("content-length", "10"));
+        recorder.requestStarted(started);
+        recorder.responseReceived(response);
+        recorder.requestFinished(answered);
+        recorder.captureQueuedBodies();
+        assertEquals(List.of("http://localhost:1/ <p>doc</p>"), delivered);
+    }
+
+    @Test void aFinishBeforeTheResponseEventIsOfferedOnce() {
+        NetworkRecorder recorder = recorder();
+        Request request = request("http://localhost:1/page", "document");
+        Response response = response(request, 200, "text/html", "<p>x</p>", Map.of("content-length", "8"));
+        recorder.requestStarted(request);
+        recorder.requestFinished(request);
+        recorder.responseReceived(response);
+        recorder.requestFinished(request);
+        recorder.captureQueuedBodies();
+        assertEquals(1, delivered.size(), delivered.toString());
+        verify(response, times(1)).body();
+    }
+
     @Test void partialMediaKeepsItsRangeMetadata() {
         NetworkRecorder recorder = recorder();
         List<ResponseContentSink.ObservedResponse> seen = new ArrayList<>();

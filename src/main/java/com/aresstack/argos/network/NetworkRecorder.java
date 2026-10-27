@@ -110,18 +110,22 @@ public final class NetworkRecorder {
     }
 
     void responseReceived(Response response) {
-        NetworkEntry entry = byRequest.get(response.request());
+        NetworkEntry entry = entryFor(response.request());
         if (entry == null) return;
         entry.response = response;
-        entry.state = NetworkEntry.State.RESPONSE;
+        if (entry.state != NetworkEntry.State.FINISHED && entry.state != NetworkEntry.State.FAILED) {
+            entry.state = NetworkEntry.State.RESPONSE;
+        }
         entry.status = response.status();
         entry.statusText = response.statusText() == null ? "" : response.statusText();
         entry.responseHeaders = masker.headers(response.headers());
         entry.mimeType = mimeType(header(entry.responseHeaders, "content-type"));
+        // Event order is not guaranteed for navigations: the finish may already have been seen.
+        if (entry.state == NetworkEntry.State.FINISHED) offerContent(entry);
     }
 
     void requestFinished(Request request) {
-        NetworkEntry entry = byRequest.get(request);
+        NetworkEntry entry = entryFor(request);
         if (entry == null) return;
         if (entry.state != NetworkEntry.State.FAILED) entry.state = NetworkEntry.State.FINISHED;
         complete(entry, request);
@@ -130,6 +134,32 @@ public final class NetworkRecorder {
             pendingBodies.addLast(entry);
         }
         offerContent(entry);
+    }
+
+    /**
+     * The entry of a request. Playwright's BiDi layer can hand out a different Request object for a navigation
+     * in its response/finished events than in the request event; then the newest unanswered entry with the same
+     * method and URL is the same exchange and is re-bound (local values only, no protocol call).
+     */
+    private NetworkEntry entryFor(Request request) {
+        NetworkEntry entry = byRequest.get(request);
+        if (entry != null || request == null) return entry;
+        try {
+            String url = request.url();
+            String method = request.method();
+            for (var iterator = entries.descendingIterator(); iterator.hasNext(); ) {
+                NetworkEntry candidate = iterator.next();
+                if (candidate.response == null && candidate.state != NetworkEntry.State.FAILED
+                        && candidate.request != null && candidate.method.equalsIgnoreCase(method)
+                        && url.equals(candidate.request.url())) {
+                    byRequest.put(request, candidate);
+                    return candidate;
+                }
+            }
+        } catch (RuntimeException unreadable) {
+            return null;
+        }
+        return null;
     }
 
     /** The durable consumer of response bodies; null switches the content capture off. */
@@ -145,7 +175,11 @@ public final class NetworkRecorder {
 
     private void offerContent(NetworkEntry entry) {
         ResponseContentSink sink = contentSink;
-        if (sink == null || entry.response == null || entry.state != NetworkEntry.State.FINISHED) return;
+        if (sink == null || entry.response == null || entry.state != NetworkEntry.State.FINISHED
+                || entry.contentOffered) {
+            return;
+        }
+        entry.contentOffered = true;
         if (entry.status == 204 || entry.status == 304 || (entry.status >= 300 && entry.status < 400)
                 || entry.status < 200 || entry.method.equalsIgnoreCase("HEAD")) {
             return;

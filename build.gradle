@@ -50,6 +50,8 @@ tasks.withType(JavaCompile).configureEach { options.encoding = 'UTF-8' }
 tasks.named('test') {
     useJUnitPlatform()
     systemProperty 'argos.testCamoufox', providers.gradleProperty('testCamoufox').orElse('false').get()
+    // Drag diagnostics (DragDiagnosticsBrowserTest): prints event traces of several drag variants, needs -PtestCamoufox.
+    systemProperty 'argos.dragDiagnostics', providers.gradleProperty('dragDiagnostics').orElse('false').get()
     systemProperty 'argos.testHumanBrowser', providers.gradleProperty('testHumanBrowser').orElse('').get()
     // Unicode input test: must Playwright4J type umlauts as trusted keys? Defaults to true when Playwright4J is built
     // from -Pplaywright4jSource (a fix under test), so a refusal fails the run instead of passing as fail-closed.

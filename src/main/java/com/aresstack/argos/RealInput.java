@@ -225,8 +225,8 @@ final class RealInput {
         HumanMotion.Point center = center(target);
         if (!inside(center, view)) {
             if (!pointers.containsKey(page)) pointerMove(page, device, viewportPoint(view.width() / 2, view.height() / 2, view));
-            device.wheel(wheelDelta(inside(center.x(), view.width()) ? 0 : center.x() - view.width() / 2),
-                    wheelDelta(inside(center.y(), view.height()) ? 0 : center.y() - view.height() / 2));
+            device.wheel(inside(center.x(), view.width()) ? 0 : center.x() - view.width() / 2,
+                    inside(center.y(), view.height()) ? 0 : center.y() - view.height() / 2);
             page.waitForTimeout(150);
             center = center(target);
             if (!inside(center, view)) throw new IllegalStateException("Element cannot be scrolled into view");
@@ -241,12 +241,7 @@ final class RealInput {
             HumanMotion.Box view = viewport(page);
             pointerMove(page, device, viewportPoint(view.width() / 2, view.height() / 2, view));
         }
-        device.wheel(wheelDelta(deltaX), wheelDelta(deltaY));
-    }
-
-    /** WebDriver BiDi wheel actions take whole CSS pixels only; a fractional delta is rejected as invalid. */
-    static long wheelDelta(double delta) {
-        return Double.isFinite(delta) ? Math.round(delta) : 0;
+        device.wheel(deltaX, deltaY);
     }
 
     private HumanMotion.Point pointerMove(Page page, InputDevice device, HumanMotion.Point point) {

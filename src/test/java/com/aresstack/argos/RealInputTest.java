@@ -52,14 +52,6 @@ class RealInputTest {
         return new RealInput(new HumanInputSettings(HumanInputSettings.Mode.NATURAL, 1, 0, 7L, policy));
     }
 
-    @Test void wheelDeltasAreWholePixelsForBidi() {
-        assertEquals(0, RealInput.wheelDelta(0.0));
-        assertEquals(341, RealInput.wheelDelta(340.5));
-        assertEquals(-340, RealInput.wheelDelta(-340.5));
-        assertEquals(-12, RealInput.wheelDelta(-12.4));
-        assertEquals(0, RealInput.wheelDelta(Double.NaN));
-    }
-
     @Test void strictPolicyRefusesBeforeTheFirstKeyUntilRealUnicodeKeysAreProven() {
         RealInput input = input(HumanInputSettings.UnicodePolicy.STRICT);
         RecordingDevice device = new RecordingDevice(false);

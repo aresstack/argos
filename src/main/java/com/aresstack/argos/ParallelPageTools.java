@@ -36,7 +36,7 @@ public final class ParallelPageTools {
                                                 "required", List.of("tab", "url"),
                                                 "additionalProperties", false)),
                                 "parallel", field("integer", "Maximum in-flight pages (1-4, default 4)"),
-                                "timeoutMs", field("integer", "Per-page response-commit timeout in milliseconds (500-20000, default 10000)")),
+                                "timeoutMs", field("integer", "Per-page timeout in milliseconds for response commit and for document load (500-20000, default 10000)")),
                         List.of("pages"), args -> browser.navigatePages(pageRequests(args),
                                 number(args, "parallel", 4), number(args, "timeoutMs", 10_000))),
                 tool("browser_pages_snapshot",

@@ -99,10 +99,17 @@ class ConvenienceBrowserTest {
                     hitC = find(hits, "localhost", "/slow-c");
             assertTrue(hitA.overlaps(hitB), delay + ": different domains load at the same time: " + hits + timeline);
             assertFalse(hitA.overlaps(hitC), delay + ": the same domain waits: " + hits + timeline);
-            // Sequential would be 3 x 2.5 s; parallel a and b, then c.
-            assertTrue(millis < 6_500, delay + ": took " + millis + " ms, server intervals " + intervals(hits, started)
-                    + timeline);
             System.out.println(delay + " " + millis + " ms, server " + intervals(hits, started) + timeline);
+            // What Argos controls: the next page of a domain gets its slot as soon as the previous one released it
+            // (spec 8.3). How long Firefox then needs to send the request or commit the response is the browser's
+            // (on Windows a new content process per site can add seconds, see docs/convenience-profile.md); the
+            // parallelism itself is proven by the overlapping server intervals above.
+            List<String> marks = browser.lastLoadTimeline();
+            long released = mark(marks, 0, "released"), slot = mark(marks, 2, "slot");
+            assertTrue(slot - released < 250, delay + ": next slot of the domain " + (slot - released)
+                    + " ms after the release" + timeline);
+            assertTrue(millis < 20_000, delay + ": took " + millis + " ms, server intervals "
+                    + intervals(hits, started) + timeline);
             assertTrue(coordinator.activeDomains().isEmpty(), "every slot is released");
         } finally {
             site.stop(0);
@@ -190,6 +197,14 @@ class ConvenienceBrowserTest {
         site.setExecutor(java.util.concurrent.Executors.newCachedThreadPool());
         site.start();
         return site;
+    }
+
+    /** The milestone {@code name}@ms of page {@code index} in {@link CamoufoxBrowser#lastLoadTimeline()}. */
+    private static long mark(List<String> timeline, int index, String name) {
+        java.util.regex.Matcher match = java.util.regex.Pattern.compile("(?:^| )" + name + "@(\\d+)")
+                .matcher(timeline.get(index));
+        if (!match.find()) throw new AssertionError("no " + name + " for page " + index + ": " + timeline);
+        return Long.parseLong(match.group(1));
     }
 
     /** Each request as host+path start..end in ms relative to {@code origin}, for the failure message. */

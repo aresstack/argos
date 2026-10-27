@@ -132,6 +132,7 @@ Echte Suchmaschinen prüft nur die Abnahme über ChatGPT.
 - Die gemeinsame erste Navigation endet erst, wenn alle Suchmaschinen geladen haben oder ihr Budget (20 s) abgelaufen ist. Die Auswertung danach hat ein eigenes Budget von 15 s. Ein Aufruf dauert deshalb höchstens etwa 35 s.
 - Ein laufender Browser-Schritt einer abgelaufenen Suchmaschine endet erst mit seinem eigenen Timeout. Ein Netzwerkfehler nach dem Commit-Fenster wird als `TIMEOUT` gemeldet.
 - Hintergrund-Tabs können von Firefox gedrosselt werden.
+- Argos vergibt den nächsten Slot einer Domain sofort nach der Freigabe (gemessen: ~30 ms). Danach braucht Firefox im Browsertest unter Windows für den dritten neuen Tab teils 2–3 s zusätzlich: Mal kommt die Anfrage später beim Server an, mal committet Firefox eine schon vollständig empfangene Antwort später. Vermutete, noch unbestätigte Ursache: Site-Isolation (Fission) startet je Site einen neuen Content-Prozess. Argos ändert dafür keine Firefox-Prefs, weil das auch die anderen Profile beträfe.
 - Anders als `web_read` gibt es kein zweites Lesen von „Loading…“-Seiten (Single-Page-Apps).
 - Ein Consent-Klick in einem Hintergrund-Tab ist auf echtem Camoufox noch nicht geprüft. Er geschieht nur mit `ARGOS_SEARCH_CONSENT_ACCEPT=true` oder bei „Ablehnen“-Schaltflächen.
 - Die Tab-, Such- und Link-Register leben im Speicher des Chat-Workspaces und gehen bei Idle-Shutdown oder Neustart verloren. Alte IDs werden dann als unbekannt abgelehnt.

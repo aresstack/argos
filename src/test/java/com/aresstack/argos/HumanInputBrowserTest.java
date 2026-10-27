@@ -15,6 +15,7 @@ import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -31,13 +32,15 @@ class HumanInputBrowserTest {
             <div style="height:2600px"></div>
             <button id="far" style="width:160px;height:40px">Weit unten</button>
             <script>
-              window.seen = {moves: [], keys: [], wheels: 0, untrusted: 0, traces: [], clicks: []};
+              window.seen = {moves: [], keys: [], inputs: [], wheels: 0, untrusted: 0, traces: [], clicks: []};
               const note = e => { if (!e.isTrusted) seen.untrusted++; };
               for (const type of ['__playwright_mark_target__', '__playwright_reset_targets__'])
                 document.addEventListener(type, () => seen.traces.push(type), true);
               addEventListener('mousemove', e => { note(e); seen.moves.push([e.clientX, e.clientY, e.timeStamp]); }, true);
               addEventListener('wheel', e => { note(e); seen.wheels++; }, true);
               addEventListener('keydown', e => { note(e); seen.keys.push([e.key, e.shiftKey, e.timeStamp]); }, true);
+              addEventListener('keyup', note, true);
+              addEventListener('input', e => { note(e); seen.inputs.push(e.data); }, true);
               addEventListener('click', e => { note(e); seen.clicks.push([e.target.id, e.clientX, e.clientY]); }, true);
             </script></body></html>""";
 
@@ -94,9 +97,16 @@ class HumanInputBrowserTest {
                     input.replaceText(page, page.locator("#q"), "Grüße äöüÄÖÜß€");
                     seen = (Map<String, Object>) page.evaluate("() => window.seen");
                     assertEquals("Grüße äöüÄÖÜß€", page.evaluate("() => document.getElementById('q').value"));
-                    assertTrue(((List<List<Object>>) seen.get("keys")).stream().anyMatch(k -> "ß".equals(k.get(0))));
+                    for (String character : List.of("ü", "ß", "Ä", "€")) {
+                        assertTrue(((List<List<Object>>) seen.get("keys")).stream().anyMatch(k -> character.equals(k.get(0))),
+                                "keydown for " + character + ": " + seen.get("keys"));
+                        assertTrue(((List<?>) seen.get("inputs")).contains(character),
+                                "input for " + character + ": " + seen.get("inputs"));
+                    }
                     assertEquals(0, ((Number) seen.get("untrusted")).intValue(), "umlauts as trusted keys");
                 } catch (IllegalStateException refused) {
+                    // With -PexpectUnicodeKeys=true the Playwright4J under test must type them; a refusal is a failure.
+                    assertFalse(Boolean.getBoolean("argos.expectUnicodeKeys"), "real Unicode keys expected: " + refused);
                     assertTrue(refused.getMessage().contains("playwright4j#36"), refused.getMessage());
                     assertEquals("Hallo Welt", page.evaluate("() => document.getElementById('q').value"),
                             "the field is untouched");

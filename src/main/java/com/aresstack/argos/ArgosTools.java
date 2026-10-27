@@ -83,6 +83,7 @@ public final class ArgosTools {
                 // Tabs, history, semantic controls, extraction. browsing.compact() (web_controls,
                 // web_click, web_fill) joins COMPACT only after it has been tested with small models.
                 tools.addAll(browsing.expert());
+                tools.addAll(new ParallelPageTools(browser).expertTools());
                 tools.addAll(expertTools());
                 tools.addAll(new NetworkTools(browser).expertTools());
                 if (documents != null) tools.addAll(documents.all());
@@ -139,9 +140,10 @@ public final class ArgosTools {
                         + "Example: {\"text\": \"Search results\", \"timeoutMs\": 10000}",
                 Map.of("selector", field("string", "Optional CSS selector that must become visible, e.g. '#results'"),
                         "text", field("string", "Optional text that must become visible on the page"),
-                        "timeoutMs", field("integer", "Maximum wait in milliseconds (500–60000, default 10000)")),
+                        "timeoutMs", field("integer", "Maximum wait in milliseconds (500–60000, default 10000)"),
+                        "tab", field("string", "Optional tab id from browser_tabs, e.g. t2")),
                 List.of(), args -> browser.waitFor(optionalString(args, "selector"), optionalString(args, "text"),
-                        number(args, "timeoutMs", 10_000))));
+                        number(args, "timeoutMs", 10_000), optionalString(args, "tab"))));
         return List.copyOf(tools);
     }
 
@@ -150,34 +152,43 @@ public final class ArgosTools {
         List<SyncToolSpecification> tools = new ArrayList<>();
         tools.add(tool("browser_status", "Report whether Argos' dedicated Camoufox session is running.",
                 Map.of(), List.of(), args -> browser.status()));
-        tools.add(tool("browser_navigate", "Navigate the current Camoufox page to an http(s) URL.",
-                Map.of("url", field("string", "Full http(s) website URL")), List.of("url"),
-                args -> browser.navigate(string(args, "url"))));
-        tools.add(tool("browser_snapshot", "Read the current page as text. Works for HTML (visible text), "
+        tools.add(tool("browser_navigate", "Navigate the current tab or the specified tab id to an http(s) URL. Omit tab to keep current-tab behavior.",
+                Map.of("url", field("string", "Full http(s) website URL"),
+                        "tab", field("string", "Optional tab id from browser_tabs, e.g. t2")),
+                List.of("url"), args -> browser.navigate(string(args, "url"), optionalString(args, "tab"))));
+        tools.add(tool("browser_snapshot", "Read the current tab or the specified tab id as text. Works for HTML (visible text), "
                         + "XML/RSS/Atom feeds (numbered entries), JSON and plain text; binary documents such as "
                         + "PDF are reported with documentType 'binary' and a hint instead of text.",
-                Map.of("maxCharacters", field("integer", "Maximum characters (1000–60000, default 16000)")),
-                List.of(), args -> browser.snapshot(number(args, "maxCharacters", 16_000))));
-        tools.add(tool("browser_inspect", "Inspect DOM elements matching a CSS selector, including text, links and attributes.",
+                Map.of("maxCharacters", field("integer", "Maximum characters (1000–60000, default 16000)"),
+                        "tab", field("string", "Optional tab id from browser_tabs, e.g. t2")),
+                List.of(), args -> browser.snapshot(number(args, "maxCharacters", 16_000), optionalString(args, "tab"))));
+        tools.add(tool("browser_inspect", "Inspect DOM elements matching a CSS selector in the current or specified tab, including text, links and attributes.",
                 Map.of("selector", field("string", "CSS selector"),
-                        "limit", field("integer", "Maximum elements (1–50, default 20)")),
-                List.of("selector"), args -> browser.inspect(string(args, "selector"), number(args, "limit", 20))));
-        tools.add(tool("browser_click", "Click the first element matching a CSS selector.",
-                Map.of("selector", field("string", "CSS selector")), List.of("selector"),
-                args -> browser.click(string(args, "selector"))));
-        tools.add(tool("browser_fill", "Fill an input field with text, replacing its existing contents.",
-                Map.of("selector", field("string", "CSS selector"), "text", field("string", "Text to enter")),
-                List.of("selector", "text"), args -> browser.fill(string(args, "selector"), string(args, "text"))));
-        tools.add(tool("browser_evaluate", "Evaluate JavaScript in the current website and return its result. This can change the page.",
-                Map.of("expression", field("string", "JavaScript expression or function, e.g. () => document.title")),
-                List.of("expression"), args -> browser.evaluate(string(args, "expression"))));
-        tools.add(tool("browser_network", "List recent page requests and responses, one line per request with an id "
+                        "limit", field("integer", "Maximum elements (1–50, default 20)"),
+                        "tab", field("string", "Optional tab id from browser_tabs, e.g. t2")),
+                List.of("selector"), args -> browser.inspect(string(args, "selector"),
+                        number(args, "limit", 20), optionalString(args, "tab"))));
+        tools.add(tool("browser_click", "Click the first element matching a CSS selector in the current or specified tab.",
+                Map.of("selector", field("string", "CSS selector"),
+                        "tab", field("string", "Optional tab id from browser_tabs, e.g. t2")), List.of("selector"),
+                args -> browser.click(string(args, "selector"), optionalString(args, "tab"))));
+        tools.add(tool("browser_fill", "Fill an input field in the current or specified tab, replacing its existing contents.",
+                Map.of("selector", field("string", "CSS selector"), "text", field("string", "Text to enter"),
+                        "tab", field("string", "Optional tab id from browser_tabs, e.g. t2")),
+                List.of("selector", "text"), args -> browser.fill(string(args, "selector"), string(args, "text"),
+                        optionalString(args, "tab"))));
+        tools.add(tool("browser_evaluate", "Evaluate JavaScript in the current or specified tab and return its result. This can change that page.",
+                Map.of("expression", field("string", "JavaScript expression or function, e.g. () => document.title"),
+                        "tab", field("string", "Optional tab id from browser_tabs, e.g. t2")),
+                List.of("expression"), args -> browser.evaluate(string(args, "expression"), optionalString(args, "tab"))));
+        tools.add(tool("browser_network", "List recent requests and responses for the whole session or one tab, one line per request with an id "
                         + "(URLs have query parameters redacted). Optional filter, e.g. \"xhr\", \"json\", \"failed\" or \"api/\".",
-                Map.of("filter", field("string", "Optional case-insensitive text matched against url, type, mime, kind, status")),
-                List.of(), args -> browser.networkEvents(optionalString(args, "filter"))));
+                Map.of("filter", field("string", "Optional case-insensitive text matched against url, type, mime, kind, status"),
+                        "tab", field("string", "Optional tab id from browser_tabs, e.g. t2; page-scoped results omit proxy events that cannot be attributed to one tab")),
+                List.of(), args -> browser.networkEvents(optionalString(args, "filter"), optionalString(args, "tab"))));
         tools.add(SyncToolSpecification.builder()
                 .tool(Tool.builder().name("browser_screenshot")
-                        .description("Take a PNG screenshot of the current Camoufox page. mode: viewport (default, "
+                        .description("Take a PNG screenshot of the current Camoufox page or a specified tab. mode: viewport (default, "
                                 + "what is on screen), full (whole page) or element (one control, needs target). "
                                 + "mark=true draws the numbered controls into the image. A text part explains how "
                                 + "image pixels map to viewport CSS pixels for mouse input. "
@@ -186,13 +197,14 @@ public final class ArgosTools {
                                 "mode", field("string", "viewport | full | element"),
                                 "target", field("string", "For mode element: control number, aria ref or locator, "
                                         + "e.g. 3 or role=button name=\"Suchen\""),
-                                "mark", field("boolean", "Draw numbered boxes around the page's controls")),
+                                "mark", field("boolean", "Draw numbered boxes around the page's controls"),
+                                "tab", field("string", "Optional tab id from browser_tabs, e.g. t2")),
                                 List.of())).build())
                 .callHandler((exchange, request) -> {
                     try {
                         Map<String, Object> args = request.arguments() == null ? Map.of() : request.arguments();
                         PageScreenshot shot = browser.capture(screenshotMode(optionalString(args, "mode")),
-                                optionalString(args, "target"), flag(args, "mark"));
+                                optionalString(args, "target"), flag(args, "mark"), optionalString(args, "tab"));
                         String encoded = Base64.getEncoder().encodeToString(shot.png());
                         return CallToolResult.builder()
                                 .content(List.of(new ImageContent(null, encoded, "image/png"),

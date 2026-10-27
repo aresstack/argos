@@ -25,6 +25,10 @@ public final class ArgosBrowsingTools {
             + "(e.g. e12), a semantic locator (e.g. role=button name=\"Suchen\", label=\"E-Mail\", "
             + "placeholder=\"Search\", text=\"Weiter\") or simply the visible name (e.g. Suchen).";
 
+    private static final String POINT_HELP = "Coordinates are CSS pixels in the browser viewport (the visible part "
+            + "of the page, as in browser_screenshot): x=0, y=0 is its top left corner and does not move when the page "
+            + "scrolls.";
+
     private final CamoufoxBrowser browser;
 
     public ArgosBrowsingTools(CamoufoxBrowser browser) {
@@ -44,37 +48,114 @@ public final class ArgosBrowsingTools {
         tools.add(tool("browser_tab_close", "Close a tab. The last remaining tab cannot be closed.",
                 Map.of("tab", field("string", "Tab id from browser_tabs, e.g. t2")), List.of("tab"),
                 args -> browser.closeTab(string(args, "tab"))));
-        tools.add(tool("browser_back", "Go back one page in the current tab's history.",
-                Map.of(), List.of(), args -> browser.historyBack()));
-        tools.add(tool("browser_forward", "Go forward one page in the current tab's history.",
-                Map.of(), List.of(), args -> browser.forward()));
-        tools.add(tool("browser_reload", "Reload the current page.",
-                Map.of(), List.of(), args -> browser.reload()));
+        tools.add(tool("browser_back", "Go back one page in the current or specified tab's history.",
+                Map.of("tab", field("string", "Optional tab id from browser_tabs, e.g. t2")), List.of(),
+                args -> browser.historyBack(optionalString(args, "tab"))));
+        tools.add(tool("browser_forward", "Go forward one page in the current or specified tab's history.",
+                Map.of("tab", field("string", "Optional tab id from browser_tabs, e.g. t2")), List.of(),
+                args -> browser.forward(optionalString(args, "tab"))));
+        tools.add(tool("browser_reload", "Reload the current or specified tab.",
+                Map.of("tab", field("string", "Optional tab id from browser_tabs, e.g. t2")), List.of(),
+                args -> browser.reload(optionalString(args, "tab"))));
         tools.add(tool("browser_controls",
-                "List visible, enabled controls (fields, buttons, checkboxes, selects, tabs, menu items) with "
+                "List visible, enabled controls on the current or specified tab (fields, buttons, checkboxes, selects, tabs, menu items) with "
                         + "number, aria ref and a reusable semantic locator.",
                 Map.of("filter", field("string", "Optional text the role, name or value must contain"),
-                        "limit", field("integer", "Maximum controls (1-200, default 60)")),
+                        "limit", field("integer", "Maximum controls (1-200, default 60)"),
+                        "tab", field("string", "Optional tab id from browser_tabs, e.g. t2")),
                 List.of(), args -> controlsAsJson(optionalString(args, "filter"),
-                        Math.min(200, Math.max(1, number(args, "limit", 60))))));
+                        Math.min(200, Math.max(1, number(args, "limit", 60))), optionalString(args, "tab"))));
         tools.add(tool("browser_click_target",
-                "Click an element with real mouse input at its on-screen position. " + TARGET_HELP,
-                Map.of("target", field("string", "What to click, e.g. role=button name=\"Anmelden\"")),
-                List.of("target"), args -> interactionAsJson(browser.clickTarget(string(args, "target")))));
+                "Click an element in the current or specified tab with real mouse input at its on-screen position. " + TARGET_HELP,
+                Map.of("target", field("string", "What to click, e.g. role=button name=\"Anmelden\""),
+                        "tab", field("string", "Optional tab id from browser_tabs, e.g. t2")),
+                List.of("target"), args -> interactionAsJson(browser.clickTarget(
+                        string(args, "target"), optionalString(args, "tab")))));
         tools.add(tool("browser_fill_target",
-                "Click into a field and type text with real key presses, replacing its content. End the text "
+                "Click into a field in the current or specified tab and type text with real key presses, replacing its content. End the text "
                         + "with a newline to press Enter. " + TARGET_HELP,
                 Map.of("target", field("string", "Which field, e.g. label=\"Suche\""),
-                        "text", field("string", "Text to type")),
+                        "text", field("string", "Text to type"),
+                        "tab", field("string", "Optional tab id from browser_tabs, e.g. t2")),
                 List.of("target", "text"),
-                args -> interactionAsJson(browser.fillTarget(string(args, "target"), string(args, "text")))));
+                args -> interactionAsJson(browser.fillTarget(
+                        string(args, "target"), string(args, "text"), optionalString(args, "tab")))));
+        tools.add(tool("browser_mouse_move",
+                "Move the mouse pointer to a point in the current or specified tab without clicking. " + POINT_HELP,
+                Map.of("x", field("number", "Horizontal position in CSS pixels from the viewport's left edge"),
+                        "y", field("number", "Vertical position in CSS pixels from the viewport's top edge"),
+                        "tab", field("string", "Optional tab id from browser_tabs, e.g. t2")),
+                List.of("x", "y"), args -> browser.mouseMove(decimal(args, "x"), decimal(args, "y"),
+                        optionalString(args, "tab"))));
+        tools.add(tool("browser_mouse_click",
+                "Click with real mouse input at a point in the current or specified tab. Prefer browser_click_target "
+                        + "when the element is a listed control; use this for canvases, maps or spots without a name. "
+                        + POINT_HELP,
+                Map.of("x", field("number", "Horizontal position in CSS pixels from the viewport's left edge"),
+                        "y", field("number", "Vertical position in CSS pixels from the viewport's top edge"),
+                        "button", field("string", "left (default), middle or right"),
+                        "tab", field("string", "Optional tab id from browser_tabs, e.g. t2")),
+                List.of("x", "y"), args -> browser.mouseClick(decimal(args, "x"), decimal(args, "y"),
+                        optionalString(args, "button"), optionalString(args, "tab"))));
+        tools.add(tool("browser_hover",
+                "Rest the mouse pointer on an element in the current or specified tab without clicking, e.g. to open a "
+                        + "hover menu or show a tooltip. Scrolls it into view with the mouse wheel if needed. " + TARGET_HELP,
+                Map.of("target", field("string", "What to hover, e.g. role=menuitem name=\"Produkte\""),
+                        "tab", field("string", "Optional tab id from browser_tabs, e.g. t2")),
+                List.of("target"), args -> browser.hover(string(args, "target"), optionalString(args, "tab"))));
+        tools.add(tool("browser_scroll",
+                "Turn the mouse wheel in the current or specified tab. Positive delta_y scrolls down, negative up; "
+                        + "positive delta_x scrolls right, negative left (CSS pixels). The element "
+                        + "under the pointer scrolls: give a target or x/y to scroll a list or panel instead of the page. "
+                        + POINT_HELP,
+                Map.of("delta_x", field("number", "Horizontal wheel distance in CSS pixels (default 0)"),
+                        "delta_y", field("number", "Vertical wheel distance in CSS pixels (default 0)"),
+                        "target", field("string", "Optional element to scroll over. " + TARGET_HELP),
+                        "x", field("number", "Optional pointer x in CSS pixels; requires y"),
+                        "y", field("number", "Optional pointer y in CSS pixels; requires x"),
+                        "tab", field("string", "Optional tab id from browser_tabs, e.g. t2")),
+                List.of(), args -> browser.scroll(optionalDecimal(args, "delta_x", 0), optionalDecimal(args, "delta_y", 0),
+                        args.get("x") == null ? null : decimal(args, "x"),
+                        args.get("y") == null ? null : decimal(args, "y"),
+                        optionalString(args, "target"), optionalString(args, "tab"))));
+        tools.add(tool("browser_drag",
+                "Drag and drop with real mouse input in the current or specified tab: press on the source, move, "
+                        + "release on the target, e.g. to sort a list, move a card or drop a file entry onto a folder. "
+                        + "Give the source as source or from_x/from_y and the target as target or to_x/to_y. "
+                        + TARGET_HELP + " " + POINT_HELP,
+                Map.of("source", field("string", "Element to pick up, e.g. text=\"Karte 1\""),
+                        "target", field("string", "Element to drop on, e.g. role=region name=\"Erledigt\""),
+                        "from_x", field("number", "Start x in CSS pixels instead of source; requires from_y"),
+                        "from_y", field("number", "Start y in CSS pixels instead of source; requires from_x"),
+                        "to_x", field("number", "End x in CSS pixels instead of target; requires to_y"),
+                        "to_y", field("number", "End y in CSS pixels instead of target; requires to_x"),
+                        "tab", field("string", "Optional tab id from browser_tabs, e.g. t2")),
+                List.of(), args -> browser.drag(optionalString(args, "source"),
+                        args.get("from_x") == null ? null : decimal(args, "from_x"),
+                        args.get("from_y") == null ? null : decimal(args, "from_y"),
+                        optionalString(args, "target"),
+                        args.get("to_x") == null ? null : decimal(args, "to_x"),
+                        args.get("to_y") == null ? null : decimal(args, "to_y"),
+                        optionalString(args, "tab"))));
+        tools.add(tool("browser_press_key",
+                "Press a key or shortcut in the current or specified tab with real key events, e.g. Enter, Escape, Tab, ArrowDown, PageDown, "
+                        + "Control+a, Shift+Tab. Optionally click into a target first; otherwise the focused element "
+                        + "gets the keys. To type text, use browser_fill_target. " + TARGET_HELP,
+                Map.of("keys", field("string", "Key or combination, e.g. Escape or Control+Enter"),
+                        "target", field("string", "Optional element to focus first, e.g. label=\"Suche\""),
+                        "times", field("integer", "How often to press it (1-20, default 1)"),
+                        "tab", field("string", "Optional tab id from browser_tabs, e.g. t2")),
+                List.of("keys"), args -> interactionAsJson(browser.pressKey(optionalString(args, "target"),
+                        string(args, "keys"), number(args, "times", 1), optionalString(args, "tab")))));
         tools.add(tool("browser_extract",
-                "Extract structure from the current HTML page. kind: overview (default), headings, links, tables, "
+                "Extract structure from the current or specified tab's HTML page. kind: overview (default), headings, links, tables, "
                         + "lists, metadata (description, Open Graph, citation_* tags), jsonld.",
                 Map.of("kind", field("string", "overview | headings | links | tables | lists | metadata | jsonld"),
                         "scope", field("string", "Optional landmark role or name limiting headings/links/tables/"
-                                + "lists, e.g. main, article, navigation")),
-                List.of(), args -> browser.extract(optionalString(args, "kind"), optionalString(args, "scope"))));
+                                + "lists, e.g. main, article, navigation"),
+                        "tab", field("string", "Optional tab id from browser_tabs, e.g. t2")),
+                List.of(), args -> browser.extract(optionalString(args, "kind"), optionalString(args, "scope"),
+                        optionalString(args, "tab"))));
         return List.copyOf(tools);
     }
 
@@ -101,8 +182,29 @@ public final class ArgosBrowsingTools {
         return List.copyOf(tools);
     }
 
+    /** A required finite number; small models often send numbers as strings ("120"). */
+    static double decimal(Map<String, Object> args, String name) {
+        Object value = args.get(name);
+        double number;
+        if (value instanceof Number n) {
+            number = n.doubleValue();
+        } else if (value instanceof String text && text.strip().matches("-?\\d{1,7}(\\.\\d+)?")) {
+            number = Double.parseDouble(text.strip());
+        } else throw new IllegalArgumentException("Missing number field: " + name);
+        if (!Double.isFinite(number)) throw new IllegalArgumentException(name + " must be a finite number");
+        return number;
+    }
+
+    static double optionalDecimal(Map<String, Object> args, String name, double fallback) {
+        return args.get(name) == null ? fallback : decimal(args, name);
+    }
+
     private Map<String, Object> controlsAsJson(String filter, int limit) {
-        PageControls controls = browser.controls();
+        return controlsAsJson(filter, limit, null);
+    }
+
+    private Map<String, Object> controlsAsJson(String filter, int limit, String tabId) {
+        PageControls controls = browser.controls(tabId);
         List<Map<String, Object>> list = controls.filtered(filter, limit).stream().map(c -> Map.<String, Object>of(
                 "number", c.number(), "role", c.role(), "name", c.name(), "value", c.value(),
                 "states", c.states(), "ref", c.ref(), "locator", c.locator())).toList();

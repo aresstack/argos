@@ -137,16 +137,18 @@ als Text gelesen.
 
 | Grenze | Wert |
 |---|---|
-| Text-Body (Standard, Skripte, Styles) | 8 MiB; bekannte größere `Content-Length` wird gar nicht gelesen, sonst nach dem Lesen verworfen |
-| Binär-Body (Bilder, Fonts, Audio, Video, PDF, Sonstige) | 32 MiB, **nur** mit bekannter, unkodierter `Content-Length` |
-| Bodies je Browseroperation | 16, höchstens 2,5 s und 48 MiB |
+| Text-Body (Standard, Skripte, Styles) | 8 MiB |
+| Binär-Body (Bilder, Fonts, Audio, Video, PDF, Sonstige) | 32 MiB |
+| Voraussetzung für jedes Auslesen | bekannte, gültige, **unkodierte** `Content-Length` innerhalb der Grenze |
+| Bodies je Browseroperation | 16, höchstens 2,5 s und 48 MiB (die angekündigte Größe wird **vor** dem Lesen reserviert; was nicht mehr passt, wartet auf die nächste Operation) |
 | Warteschlange je Browser / Schreiber | 64 Antworten / 64 MiB |
 | Ressourcen-Volumen je Chat | 2 GiB, danach werden neue Bodies ausgelassen (Log-Hinweis) |
 | Indexierter Text je Ressource | 2 000 000 Zeichen (gespeichert wird der ganze Body) |
 
-`Response.body()` liefert immer den vollständigen Body als Byte-Array, ohne Streaming. Darum werden Audio, Video und
-alle anderen Binärtypen ohne verlässliche Größe (fehlende `Content-Length` oder `Content-Encoding`) **nie** gelesen.
-Textantworten ohne Größenangabe (z. B. chunked JSON) werden einmal gelesen und über 8 MiB verworfen.
+`Response.body()` liefert immer den vollständigen Body als Byte-Array, ohne Streaming und ohne Größenbegrenzung.
+Darum wird eine Antwort ohne verlässliche Größe (fehlende oder ungültige `Content-Length`, oder ein
+`Content-Encoding`, bei dem die Länge nur die komprimierte Größe ist) **nie** gelesen, egal welcher Typ. Bewusste
+Abwägung: chunked oder komprimiert ausgelieferte Antworten (z. B. chunked JSON) werden derzeit nicht erfasst.
 Die Diagnosegrenzen des Recorders (200 Einträge, 32 000 Zeichen) gelten für die History nicht: gespeichert werden die
 Bytes, nie der gekürzte Diagnosetext.
 
@@ -162,7 +164,9 @@ eingeschalteter Kategorie. Request-Bodies, Cookies, Authorization- und andere He
 
 **Deduplizierung:** `resourceId` = SHA-256-Präfix der gespeicherten Bytes. Identische Bodies (auch unter anderen URLs)
 liegen einmal vor und ergeben einen Suchtreffer; jede Beobachtung bleibt ein eigenes `network_resource`-Ereignis.
-Ein geänderter Body derselben URL ist eine neue Ressource. Das HTML-Dokument einer Seite, die schon als Seiten-Snapshot
+Ein geänderter Body derselben URL ist eine neue Ressource. MIME-Typ, Kategorie und `masked` gehören zur jeweiligen
+Beobachtung (Ereignis/Manifest), nicht zur geteilten Ressource. Der Dateiname im ZIP (`resources/<resourceId>.<ext>`,
+Endung nach dem MIME-Typ der ersten Speicherung) ist für alle Beobachtungen derselbe und gleich dem JSONL-`bodyRef`. Das HTML-Dokument einer Seite, die schon als Seiten-Snapshot
 gefunden wird, erscheint nicht zusätzlich als Ressourcentreffer.
 
 **Ereignis** `network_resource` in `events.jsonl`: `seq`, `at`, `url`, `pageUrl`, `status`, `mimeType`, `category`,

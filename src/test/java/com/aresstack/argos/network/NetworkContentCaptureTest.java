@@ -83,15 +83,47 @@ class NetworkContentCaptureTest {
         assertTrue(unavailable.get(0).contains("too large"), unavailable.toString());
     }
 
-    @Test void aBodyLargerThanAllowedAfterReadingIsDroppedAndAGoneBodyNeverFails() {
+    @Test void unknownOrEncodedSizesAreNeverReadAndAGoneBodyNeverFails() {
         NetworkRecorder recorder = recorder();
-        wanted = 4;
-        finished(recorder, "https://x.example/chunked", "fetch", "application/json", "{\"long\":true}", Map.of());
+        Response chunked = response(request("https://x.example/chunked", "fetch"), 200, "application/json",
+                "{\"long\":true}", Map.of());
+        Response gzip = response(request("https://x.example/gzip", "fetch"), 200, "application/json", "{}",
+                Map.of("content-length", "2", "content-encoding", "gzip"));
+        Response malformed = response(request("https://x.example/bad", "fetch"), 200, "application/json", "{}",
+                Map.of("content-length", "abc"));
+        for (Response response : List.of(chunked, gzip, malformed)) {
+            recorder.requestStarted(response.request());
+            recorder.responseReceived(response);
+            recorder.requestFinished(response.request());
+        }
         Response gone = finished(recorder, "https://x.example/gone", "document", "text/html", "<p>x</p>", Map.of());
         when(gone.body()).thenThrow(new RuntimeException("evicted"));
         assertDoesNotThrow(recorder::captureQueuedBodies);
+        verify(chunked, never()).body();
+        verify(gzip, never()).body();
+        verify(malformed, never()).body();
         assertTrue(delivered.isEmpty());
-        assertEquals(2, unavailable.size(), unavailable.toString());
+        assertEquals(4, unavailable.size(), unavailable.toString());
+    }
+
+    @Test void theByteBudgetIsReservedBeforeReading() {
+        NetworkRecorder recorder = recorder();
+        wanted = 40L * 1024 * 1024;
+        long size = 32L * 1024 * 1024;
+        List<Response> big = new ArrayList<>();
+        for (int i = 0; i < 2; i++) {
+            Request request = request("https://media.example/" + i, "media");
+            Response response = response(request, 200, "video/mp4", "", Map.of("content-length", Long.toString(size)));
+            recorder.requestStarted(request);
+            recorder.responseReceived(response);
+            recorder.requestFinished(request);
+            big.add(response);
+        }
+        recorder.captureQueuedContent();
+        verify(big.get(0), times(1)).body();
+        verify(big.get(1), never()).body(); // 64 MiB would exceed the 48 MiB budget: waits
+        recorder.captureQueuedContent();
+        verify(big.get(1), times(1)).body();
     }
 
     @Test void theQueueIsBoundedAndTheBudgetLeavesTheRestForTheNextTask() {
@@ -131,7 +163,9 @@ class NetworkContentCaptureTest {
     private static Response finished(NetworkRecorder recorder, String url, String type, String mime, String body,
                                      Map<String, String> headers) {
         Request request = request(url, type);
-        Response response = response(request, 200, mime, body, headers);
+        Map<String, String> withLength = new HashMap<>(headers);
+        withLength.putIfAbsent("content-length", Integer.toString(body.getBytes(StandardCharsets.UTF_8).length));
+        Response response = response(request, 200, mime, body, withLength);
         recorder.requestStarted(request);
         recorder.responseReceived(response);
         recorder.requestFinished(request);

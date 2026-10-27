@@ -190,8 +190,7 @@ public final class SearchHistoryExporter {
                     json.writeBooleanField("masked", observed.masked());
                     if (observed.contentRange() != null) json.writeStringField("contentRange", observed.contentRange());
                     // ZIP path of the body; the JSONL never embeds binary data (no base64).
-                    json.writeStringField("bodyRef", "resources/" + resourceFileName(observed.resourceId(),
-                            observed.mimeType()));
+                    if (resource != null) json.writeStringField("bodyRef", resourcePath(resource));
                     if (resource != null && resource.textual() && resource.size() <= MAX_JSONL_BODY_BYTES
                             && Files.isRegularFile(repository.resourceBody(resource.resourceId()))) {
                         json.writeStringField("body", Files.readString(repository.resourceBody(
@@ -270,8 +269,9 @@ public final class SearchHistoryExporter {
     private void writeResource(ZipOutputStream zip, Map<String, String> written, JsonGenerator manifest,
                                HistoryEvent.NetworkResource observed) throws IOException {
         String name = written.get(observed.resourceId());
-        if (name == null && repository.hasResource(observed.resourceId())) {
-            name = "resources/" + resourceFileName(observed.resourceId(), observed.mimeType());
+        StoredResource stored = repository.resource(observed.resourceId()).orElse(null);
+        if (name == null && stored != null && repository.hasResource(observed.resourceId())) {
+            name = resourcePath(stored);
             zip.putNextEntry(new ZipEntry(name));
             Files.copy(repository.resourceBody(observed.resourceId()), zip);
             zip.closeEntry();
@@ -293,6 +293,14 @@ public final class SearchHistoryExporter {
         manifest.writeBooleanField("masked", observed.masked());
         if (observed.contentRange() != null) manifest.writeStringField("contentRange", observed.contentRange());
         manifest.writeEndObject();
+    }
+
+    /**
+     * The one ZIP path of a stored body, shared by the ZIP entry, the manifest and JSONL {@code bodyRef}: derived
+     * from the resource id and the MIME type the bytes were first stored with, never from a later observation.
+     */
+    static String resourcePath(StoredResource resource) {
+        return "resources/" + resourceFileName(resource.resourceId(), resource.mimeType());
     }
 
     /** {@code <resourceId>.<ext>} from the MIME type; the id is validated hex, so no path can come from it. */

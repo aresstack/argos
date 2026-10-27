@@ -138,11 +138,12 @@ public final class SearchHistoryRepository {
     public synchronized HistoryEvent.NetworkResource appendResource(Instant at, String url, String pageUrl, int status,
                                                                     String mimeType, String category,
                                                                     String resourceType, String contextId,
-                                                                    StoredResource resource, boolean complete,
+                                                                    StoredResource resource, boolean masked,
+                                                                    boolean complete,
                                                                     String contentRange) throws IOException {
         HistoryEvent.NetworkResource event = new HistoryEvent.NetworkResource(lastSeq() + 1, at, url, pageUrl,
                 status, mimeType, category, resourceType, contextId, resource.resourceId(), resource.contentHash(),
-                resource.size(), complete, resource.masked(), contentRange);
+                resource.size(), complete, masked, contentRange);
         append(toJson(event));
         return event;
     }

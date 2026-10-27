@@ -174,7 +174,7 @@ public final class SearchHistoryCapture {
 
     /** Largest body read for text categories (content, scripts, styles); larger ones are skipped. */
     public static final long MAX_TEXT_BODY_BYTES = 8L * 1024 * 1024;
-    /** Largest body read for binary categories; these also need an announced, unencoded Content-Length. */
+    /** Largest body read for binary categories. Every category needs an announced, unencoded Content-Length. */
     public static final long MAX_BINARY_BODY_BYTES = 32L * 1024 * 1024;
     /** Bodies waiting for the writer, of all chats; beyond it new bodies are dropped (counted). */
     static final long MAX_QUEUED_BYTES = 64L * 1024 * 1024;
@@ -224,21 +224,20 @@ public final class SearchHistoryCapture {
     }
 
     /**
-     * The largest body worth reading for this response, 0 = not wanted. Media and other binary bodies need an
-     * announced, unencoded Content-Length within the limit (Response.body() loads the whole body into the heap, so
-     * an unknown size is never read for them); text may be read without one and is dropped afterwards when larger.
+     * The largest body worth reading for this response, 0 = not wanted. Response.body() loads the whole body into
+     * the heap without streaming, so only responses with an announced, unencoded Content-Length within the limit are
+     * read (text and binary alike); chunked or compressed responses are skipped.
      */
     static long limit(ResponseContentSink.ObservedResponse response, CaptureSettings settings) {
         String url = response.url() == null ? "" : response.url().toLowerCase(Locale.ROOT);
         if (!url.startsWith("http://") && !url.startsWith("https://")) return 0;
         ResourceCategory category = ResourceCategory.classify(response.contentType());
         if (!settings.enabled(category)) return 0;
-        if (ResourceCategory.textKind(response.contentType()) != ResourceCategory.TextKind.BINARY) {
-            return MAX_TEXT_BODY_BYTES;
-        }
+        long max = ResourceCategory.textKind(response.contentType()) != ResourceCategory.TextKind.BINARY
+                ? MAX_TEXT_BODY_BYTES : MAX_BINARY_BODY_BYTES;
         Long length = response.contentLength();
-        if (length == null || response.encoded() || length <= 0 || length > MAX_BINARY_BODY_BYTES) return 0;
-        return MAX_BINARY_BODY_BYTES;
+        if (length == null || response.encoded() || length <= 0 || length > max) return 0;
+        return max;
     }
 
     /** For tests: waits until every queued body was written. */

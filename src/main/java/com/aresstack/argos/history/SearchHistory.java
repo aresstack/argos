@@ -224,9 +224,10 @@ public final class SearchHistory {
                         kind.name().toLowerCase(Locale.ROOT), hash, stored.length, now(), masked);
                 repository.saveResource(resource, stored);
             }
+            // The bytes are shared; MIME type, category and masking belong to THIS observation.
             event = repository.appendResource(now(), url, received.pageUrl() == null ? null
-                            : ArchiveSanitizer.safeUrl(received.pageUrl()), received.status(), resource.mimeType(),
-                    resource.category(), received.resourceType(), contextId, resource, complete,
+                            : ArchiveSanitizer.safeUrl(received.pageUrl()), received.status(), mime,
+                    category.key(), received.resourceType(), contextId, resource, masked, complete,
                     received.contentRange());
         }
         scheduleIndexing();

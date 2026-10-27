@@ -204,13 +204,31 @@ public final class NetworkRecorder {
         long bytes = 0;
         while (!pendingContent.isEmpty() && fetches < CONTENT_FETCHES_PER_TASK
                 && elapsedMillis(started) < CONTENT_FETCH_BUDGET_MILLIS && bytes < CONTENT_BYTES_PER_TASK) {
-            PendingContent pending = pendingContent.removeFirst();
+            PendingContent pending = pendingContent.peekFirst();
             ResponseContentSink.ObservedResponse observed = pending.observed();
             Long announced = observed.contentLength();
-            if (announced != null && !observed.encoded() && announced > pending.maxBytes()) {
+            // Response.body() always loads the whole body: only an announced, unencoded size is a real bound.
+            if (announced == null || announced <= 0 || observed.encoded()) {
+                pendingContent.removeFirst();
+                deliverQuietly(sink, observed, null, "size unknown or encoded; not read");
+                continue;
+            }
+            if (announced > pending.maxBytes()) {
+                pendingContent.removeFirst();
                 deliverQuietly(sink, observed, null, "too large (announced " + announced + " bytes)");
                 continue;
             }
+            // Reserve before reading: the per-task byte budget is never exceeded.
+            if (bytes + announced > CONTENT_BYTES_PER_TASK) {
+                if (announced > CONTENT_BYTES_PER_TASK) {
+                    pendingContent.removeFirst();
+                    deliverQuietly(sink, observed, null, "too large for one task");
+                    continue;
+                }
+                break; // waits for the next browser task
+            }
+            pendingContent.removeFirst();
+            bytes += announced;
             fetches++;
             byte[] body;
             try {
@@ -223,7 +241,6 @@ public final class NetworkRecorder {
                 deliverQuietly(sink, withPage(observed, pending.entry()), null, "no body");
                 continue;
             }
-            bytes += body.length;
             if (body.length > pending.maxBytes()) {
                 deliverQuietly(sink, withPage(observed, pending.entry()), null,
                         "too large (" + body.length + " bytes)");

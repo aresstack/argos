@@ -169,6 +169,47 @@ class SearchHistoryResourcesTest {
         assertEquals(1, history.search("betaversion", 10).size(), "the changed version is kept");
     }
 
+    @Test void identicalBytesKeepEachObservationsMetadataAndOneConsistentFileName() throws Exception {
+        SearchHistory history = history("a");
+        String body = "same bytes dedupterm";
+        HistoryEvent.NetworkResource json = history.recordResource(received("https://a.example/x", "application/json",
+                body), "start");
+        HistoryEvent.NetworkResource text = history.recordResource(received("https://b.example/x", "text/plain",
+                body), "start");
+        // A masked original that cleans to the same bytes as an unmasked one.
+        HistoryEvent.NetworkResource plain = history.recordResource(received("https://c.example/x", "text/plain",
+                "{\"password\":\"[REDACTED]\"}"), "start");
+        HistoryEvent.NetworkResource masked = history.recordResource(received("https://d.example/x", "text/plain",
+                "{\"password\":\"hunter2\"}"), "start");
+        assertEquals(json.resourceId(), text.resourceId(), "bytes are stored once");
+        assertEquals("application/json", json.mimeType());
+        assertEquals("text/plain", text.mimeType(), "the second observation keeps its own MIME type");
+        assertEquals(plain.resourceId(), masked.resourceId());
+        assertFalse(plain.masked());
+        assertTrue(masked.masked(), "masking belongs to the observation");
+
+        SearchHistoryExporter exporter = new SearchHistoryExporter(history.repository());
+        ObjectMapper mapper = new ObjectMapper();
+        List<String> refs = new ArrayList<>();
+        for (String line : Files.readAllLines(exporter.export(SearchHistoryExporter.Format.JSONL, false, false).file())) {
+            JsonNode node = mapper.readTree(line);
+            refs.add(node.get("bodyRef").asText());
+            if (node.get("url").asText().equals("https://b.example/x")) assertEquals("text/plain", node.get("mimeType").asText());
+        }
+        assertEquals(refs.get(0), refs.get(1), "one bodyRef per stored body");
+        Map<String, byte[]> entries = new LinkedHashMap<>();
+        try (InputStream in = Files.newInputStream(exporter.export(SearchHistoryExporter.Format.ZIP, false, false)
+                .file()); ZipInputStream zip = new ZipInputStream(in)) {
+            for (ZipEntry entry; (entry = zip.getNextEntry()) != null; ) entries.put(entry.getName(), zip.readAllBytes());
+        }
+        for (String ref : refs) assertTrue(entries.containsKey(ref), ref + " in " + entries.keySet());
+        JsonNode manifest = mapper.readTree(entries.get("resources/manifest.json"));
+        assertEquals(4, manifest.size());
+        assertEquals(refs.get(0), manifest.get(1).get("file").asText());
+        assertEquals("text/plain", manifest.get(1).get("mimeType").asText());
+        assertEquals(2, entries.keySet().stream().filter(n -> n.startsWith("resources/") && !n.endsWith("manifest.json")).count());
+    }
+
     @Test void thePagesOwnDocumentIsNoSecondHitNextToItsSnapshot() throws Exception {
         SearchHistory history = history("a");
         history.recordPage(page("https://doc.example/", "Doc", "uniqueword in the page"), "start", "web_open", true);
@@ -212,9 +253,13 @@ class SearchHistoryResourcesTest {
         assertEquals(0, SearchHistoryCapture.limit(observed("video/mp4", 1L << 40, false), media));
         assertEquals(SearchHistoryCapture.MAX_BINARY_BODY_BYTES,
                 SearchHistoryCapture.limit(observed("video/mp4", 4_000L, false), media));
+        assertEquals(0, SearchHistoryCapture.limit(observed("application/json", null, false), media),
+                "text of unknown size is never read");
+        assertEquals(0, SearchHistoryCapture.limit(observed("application/json", 100L, true), media),
+                "compressed text is never read");
+        assertEquals(0, SearchHistoryCapture.limit(observed("application/json", 9L * 1024 * 1024, false), media));
         assertEquals(SearchHistoryCapture.MAX_TEXT_BODY_BYTES,
-                SearchHistoryCapture.limit(observed("application/json", null, false), media),
-                "text without length is read, bounded afterwards");
+                SearchHistoryCapture.limit(observed("application/json", 100L, false), media));
         assertEquals(0, SearchHistoryCapture.limit(observed("text/css", 10L, false), media), "styles are off");
         assertEquals(0, SearchHistoryCapture.limit(new ResponseContentSink.ObservedResponse("data:text/plain,x", null,
                 "GET", 200, "text/plain", "text/plain", "fetch", 1L, null, false), media), "only http(s)");
@@ -237,7 +282,7 @@ class SearchHistoryResourcesTest {
         SearchHistoryCapture capture = new SearchHistoryCapture(history, null, 1_000);
         capture.useContext("context-2");
         ResponseContentSink sink = capture.networkContent();
-        ResponseContentSink.ObservedResponse json = observed("application/json", null, false);
+        ResponseContentSink.ObservedResponse json = observed("application/json", 15L, false);
         assertTrue(sink.wants(json) > 0);
         sink.deliver(json, "{\"k\":\"sinkterm\"}".getBytes(), null);
         sink.deliver(json, null, "body no longer available");

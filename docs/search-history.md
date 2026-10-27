@@ -82,6 +82,23 @@ Nicht erfasst werden derzeit die Mehrseiten-Werkzeuge (`browser_navigate_pages`,
   unlesbarer Index wird gelöscht und aus `events.jsonl` und `pages/` neu aufgebaut.
 - Es gibt keine automatische Löschung.
 
+## Download der Exporte
+
+`search_history_export` gibt **keinen lokalen Pfad** mehr zurück, sondern einen Download-Link auf dem vorhandenen
+Argos-Server (kein zweiter Server): `GET <PUBLIC_ORIGIN>/api/search-history/exports/<exportId>`. Das Ergebnis enthält
+den Link als Markdown-Text (das Modell gibt ihn an den Nutzer weiter) und zusätzlich als MCP `resource_link`
+(Name, MIME-Typ, Größe). Der Endpunkt streamt die Datei mit `Content-Disposition: attachment` und passendem
+`Content-Type` (`text/plain`, `application/x-ndjson`, `application/zip`) – für alle drei Formate.
+
+- Ohne `PUBLIC_ORIGIN` lautet der Link `http://<ARGOS_HOST>:<Port>/…` (nur lokal brauchbar).
+- Der Endpunkt liegt außerhalb des Bearer-Filters, weil ein Browser-Download kein Token mitsendet. Zugangsnachweis
+  ist die Export-ID: 256 Zufallsbits, nur im Speicher, gebunden an das `exports/`-Verzeichnis des aufrufenden Chats
+  und einen von Argos vergebenen Dateinamen. Die ID enthält keinen Pfad; aufgelöst wird nur eine reguläre Datei
+  direkt in diesem Verzeichnis (keine Symlinks). Unbekannte, abgelaufene und ungültige IDs: 404.
+- Aufbewahrung: `ARGOS_SEARCH_HISTORY_EXPORT_TTL_MINUTES` (Standard 60, 1–1440). Danach ist der Link ungültig und
+  die Datei wird gelöscht; ältere Exporte eines Chats (z. B. aus der Zeit vor einem Neustart) werden beim nächsten
+  Export dieses Chats gelöscht. Nach einem Neustart sind alte Links ungültig.
+
 ## Exportformate (`search_history_export`)
 
 Exportiert wird immer nur der aufrufende Chat, in dessen `history/exports/`. Der Dateiname wird von Argos vergeben;
@@ -145,3 +162,9 @@ Manuelle Abnahme mit ChatGPT: In Unterhaltung A `web_search`, `web_open` eines T
 `search_history {"query":"<Wort von der Seite>"}` und `search_history_export {"format":"zip"}`. Unter
 `~/.argos/profiles/chats/<A>/history/` liegen danach `events.jsonl` mit 1 Suche und 1 Besuch, `pages/` und die
 ZIP-Datei unter `exports/`. In Unterhaltung B liefert `search_history` mit demselben Wort keinen Treffer.
+
+Abnahme Download (ChatGPT, Argos mit `PUBLIC_ORIGIN` gestartet, Tool-Liste neu geladen): in Unterhaltung A nacheinander
+`search_history_export` mit `txt`, `jsonl` und `zip` aufrufen lassen. Jede Antwort muss einen anklickbaren Link
+`https://<PUBLIC_ORIGIN>/api/search-history/exports/…` enthalten; Klick lädt `search-history-<Zeit>.<ext>` herunter,
+die Datei lässt sich öffnen (ZIP: `index.html` im Browser). Gegenproben: denselben Link nach Ablauf der Frist bzw. nach
+Neustart öffnen → 404; einen Link mit veränderter ID → 404; `<PUBLIC_ORIGIN>/` ohne Token → weiter 401.

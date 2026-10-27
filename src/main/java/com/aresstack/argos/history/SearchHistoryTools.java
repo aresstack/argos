@@ -3,6 +3,8 @@ package com.aresstack.argos.history;
 import io.modelcontextprotocol.server.McpServerFeatures.SyncToolSpecification;
 import io.modelcontextprotocol.spec.McpSchema.CallToolResult;
 import io.modelcontextprotocol.spec.McpSchema.JsonSchema;
+import io.modelcontextprotocol.spec.McpSchema.ResourceLink;
+import io.modelcontextprotocol.spec.McpSchema.TextContent;
 import io.modelcontextprotocol.spec.McpSchema.Tool;
 
 import java.util.List;
@@ -11,20 +13,29 @@ import java.util.Map;
 /**
  * MCP tools of the Search History: {@code search_history} (full-text search over this chat's history) and
  * {@code search_history_export} (txt, jsonl or zip). Both act on the calling chat only; the export's location is
- * chosen by Argos, never by an argument.
+ * chosen by Argos, never by an argument. An export is handed to the chat as a download link on this server's own
+ * origin ({@link SearchHistoryDownloads}), as text the model can pass on and as an MCP {@code resource_link}; the
+ * local file path is never returned.
  */
 public final class SearchHistoryTools {
     private final SearchHistory history;
+    private final SearchHistoryDownloads downloads;
     /** Non-null when this server keeps no history: both tools stay listed and answer with this message. */
     private final String disabledReason;
 
     public SearchHistoryTools(SearchHistory history) {
+        this(history, SearchHistoryDownloads.shared());
+    }
+
+    public SearchHistoryTools(SearchHistory history, SearchHistoryDownloads downloads) {
         this.history = history;
+        this.downloads = downloads;
         this.disabledReason = null;
     }
 
     private SearchHistoryTools(String disabledReason) {
         this.history = null;
+        this.downloads = null;
         this.disabledReason = disabledReason;
     }
 
@@ -45,9 +56,10 @@ public final class SearchHistoryTools {
                         Map.of("query", Map.of("type", "string", "description", "Words to find"),
                                 "limit", Map.of("type", "integer", "description", "Maximum hits (1-50, default 10)")),
                         List.of("query"), this::search),
-                tool("search_history_export", "Export this chat's search history to a file on the Argos host: "
+                tool("search_history_export", "Export this chat's search history as a file the user can download: "
                                 + "txt (visited URLs, one per line), jsonl (all searches and page visits with text) "
-                                + "or zip (one self-contained HTML file per page plus index.html). "
+                                + "or zip (one self-contained HTML file per page plus index.html). Returns a "
+                                + "download link valid for a limited time; give it to the user as a Markdown link. "
                                 + "Example: {\"format\": \"zip\"}",
                         Map.of("format", Map.of("type", "string", "description", "txt | jsonl | zip"),
                                 "unique", Map.of("type", "boolean", "description",
@@ -81,7 +93,7 @@ public final class SearchHistoryTools {
         return out.toString().stripTrailing();
     }
 
-    private String export(Map<String, Object> arguments) throws Exception {
+    private CallToolResult export(Map<String, Object> arguments) throws Exception {
         if (disabledReason != null) throw new IllegalStateException(disabledReason);
         Object format = arguments.get("format");
         SearchHistoryExporter.Format chosen = SearchHistoryExporter.format(format instanceof String s ? s : null);
@@ -92,7 +104,21 @@ public final class SearchHistoryTools {
             case JSONL -> " records";
             case ZIP -> " archived pages";
         };
-        return "Exported " + export.records() + what + " to " + export.file();
+        SearchHistoryDownloads.Link link = downloads.register(history.repository().exportsDirectory(), export.file());
+        if (link.url() == null) {
+            throw new IllegalStateException("Exported " + export.records() + what + " (" + link.fileName()
+                    + "), but this Argos server knows no address to offer it under. Start it with PUBLIC_ORIGIN.");
+        }
+        long minutes = downloads.retention().toMinutes();
+        String text = "Exported " + export.records() + what + " as " + link.fileName() + " (" + link.size()
+                + " bytes). Download (valid " + minutes + " minutes, until " + link.expires() + "): ["
+                + link.fileName() + "](" + link.url() + ")";
+        return CallToolResult.builder()
+                .addContent(new TextContent(text))
+                .addContent(ResourceLink.builder().name(link.fileName()).title(link.fileName()).uri(link.url())
+                        .mimeType(link.contentType()).size(link.size())
+                        .description("Search history export, valid " + minutes + " minutes").build())
+                .build();
     }
 
     private static boolean flag(Map<String, Object> arguments, String name) {
@@ -102,7 +128,8 @@ public final class SearchHistoryTools {
 
     @FunctionalInterface
     private interface Handler {
-        String apply(Map<String, Object> arguments) throws Exception;
+        /** A String answer becomes one text content; a CallToolResult is returned as is. */
+        Object apply(Map<String, Object> arguments) throws Exception;
     }
 
     private static SyncToolSpecification tool(String name, String description, Map<String, Object> properties,
@@ -113,8 +140,9 @@ public final class SearchHistoryTools {
                         .build())
                 .callHandler((exchange, request) -> {
                     try {
-                        String answer = handler.apply(request.arguments() == null ? Map.of() : request.arguments());
-                        return CallToolResult.builder().addTextContent(answer).build();
+                        Object answer = handler.apply(request.arguments() == null ? Map.of() : request.arguments());
+                        return answer instanceof CallToolResult result ? result
+                                : CallToolResult.builder().addTextContent((String) answer).build();
                     } catch (Exception error) {
                         String message = error.getMessage() == null ? error.getClass().getSimpleName()
                                 : error.getMessage();

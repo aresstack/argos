@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Run the full Argos suite against real Camoufox and keep a JSON summary.
+#   scripts/acceptance/run-suite.sh LABEL [extra gradle args...]
+# Needs ARGOS_CAMOUFOX_EXECUTABLE and ARGOS_CAMOUFOX_LAUNCH_OPTIONS (see docs/acceptance.md).
+# Writes build/acceptance/LABEL/{summary.json,test-results/,gradle.log}.
+set -u
+label=${1:?label, e.g. baseline-main or integration-<sha>}; shift
+cd "$(dirname "$0")/../.."
+out=build/acceptance/$label
+mkdir -p "$out"
+{ echo "commit $(git rev-parse HEAD)"; git status --short; java -version 2>&1 | head -1
+  echo "camoufox $ARGOS_CAMOUFOX_EXECUTABLE"; echo "args $*"; } > "$out/environment.txt"
+bash gradlew clean test --continue -PtestCamoufox=true -PexpectUnicodeKeys=true "$@" 2>&1 | tee "$out/gradle.log"
+status=${PIPESTATUS[0]}
+rm -rf "$out/test-results" && cp -r build/test-results/test "$out/test-results"
+python3 scripts/acceptance/summarize.py "$out/test-results" "$out/summary.json" || python scripts/acceptance/summarize.py "$out/test-results" "$out/summary.json"
+echo "gradle exit $status; summary in $out/summary.json"
+exit "$status"

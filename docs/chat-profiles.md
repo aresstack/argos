@@ -15,22 +15,18 @@ Fehlt die Kennung, liefert der Aufruf einen Fehler. Es wird kein Browser gestart
 
 ## Profile und Kontexte
 
+Wie im AskAI-Research-Plugin (`ResearchAgentSessionFactory`: `getWorkspaceDirectory(sessionId)` → `createSession(sessionId, dir)`) besitzt jede Unterhaltung ein eigenes Verzeichnis, das dem Browser beim Start übergeben wird:
+
 ```
 ~/.argos/profiles/chats/<sha256-Präfix der Kennung>/
-    contexts.properties      Liste der Kontexte + aktiver Kontext
-    start/                   Startprofil der Unterhaltung (Camoufox-Profilverzeichnis)
-    context-2/ ...           zusätzliche User-Kontexte
+    profile/                         Camoufox-Profil der Unterhaltung (launchPersistentContext), Kontext "start"
+    contexts.properties              Kontexte + aktiver Kontext
+    contexts/context-2.cookies.json  Cookies des User-Contexts (über das Protokoll gelesen/geschrieben)
 ```
 
-- Jeder Kontext hat ein eigenes persistentes Profilverzeichnis, das von einem eigenen Camoufox-Prozess genutzt wird
-  (`launchPersistentContext`). Cookies und Local Storage werden deshalb nie geteilt.
-- Jedes Profil bekommt den unveränderten Argos-Tool-Stapel: `CamoufoxBrowser`, `WebSession` und die Dokumente.
-  `ChatRoutedTools` wählt lediglich aus, welcher Stapel antwortet.
-- Der Fingerprint stammt für alle Profile aus derselben `launch.json`.
-- Mehr als `ARGOS_MAX_BROWSERS` (Standard 4) gleichzeitig laufende Browser werden im Leerlauf nach LRU geschlossen.
-  Das Profil bleibt erhalten, und der nächste Aufruf startet den Browser neu.
-- Tools (nur im Profil `expert`): `browser_context_new`, `browser_contexts`, `browser_context_select {"context": "context-2"}`.
-  Kontext-IDs vergibt der Server. Unbekannte IDs und IDs anderer Unterhaltungen werden abgelehnt.
+- Je Unterhaltung läuft ein Camoufox. Mehr als `ARGOS_MAX_BROWSERS` (Standard 4) werden im Leerlauf nach LRU geschlossen; das Profil bleibt.
+- `browser_context_new` legt im Browser der Unterhaltung einen WebDriver-BiDi-User-Context an (Playwright `browser.newContext()`, in Firefox ein Container) mit eigenen Cookies, Storage und Tabs. `browser_context_select` wechselt, `browser_contexts` listet. Kontext-IDs vergibt der Server. Unbekannte IDs und IDs anderer Unterhaltungen werden abgelehnt.
+- Persistenz: Firefox speichert Container im Profil (`containers.json`, Cookies mit `userContextId`). Playwright entfernt den Container aber beim Schließen des Kontexts (`browser.removeUserContext`) und kann nach einem Neustart keinen vorhandenen Container übernehmen. Deshalb sichert Argos die Cookies jedes zusätzlichen Kontexts nach jedem Aufruf über das Protokoll (`context.cookies()`) und lädt sie beim Neuanlegen wieder (`addCookies`). localStorage übersteht einen Neustart nicht.
 
 ## Konfiguration
 

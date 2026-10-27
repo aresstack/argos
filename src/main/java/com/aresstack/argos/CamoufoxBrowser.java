@@ -295,6 +295,11 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
         }
     }
 
+    /** For opt-in diagnostics tests only: runs {@code action} on the current tab on the browser thread. */
+    <T> T onActivePage(java.util.function.Function<Page, T> action) {
+        return onBrowser(() -> action.apply(activePage()));
+    }
+
     private Page activePage() throws Exception {
         Optional<Page> current = tabs.current();
         if (current.isPresent()) return current.get();

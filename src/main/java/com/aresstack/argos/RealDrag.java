@@ -16,6 +16,7 @@ import java.util.random.RandomGenerator;
 final class RealDrag {
     /** Firefox starts a drag session after the pointer moved more than a few pixels with the button held. */
     private static final double DRAG_THRESHOLD = 9;
+    private static final int DWELL_MOVES = 5;
 
     private final RealInput input;
     private final RandomGenerator random;
@@ -53,12 +54,15 @@ final class RealDrag {
                     from.y() + DRAG_THRESHOLD / 2);
             device.sleep(between(40, 90));
             HumanMotion.Point to = reach(page, target);
-            // Rest on the target with tiny movements so dragover reaches it more than once before the drop.
-            for (int i = 0; i < 2; i++) {
-                device.sleep(between(60, 120));
-                device.move(to.x() + (i == 0 ? 1 : 0), to.y() + (i == 0 ? 1 : 0));
+            // Rest on the target with small movements, then once more exactly on the release point: Gecko updates its
+            // drag session (and the drop target) on pointer movement, so the release must follow a move onto it.
+            for (int i = 0; i < DWELL_MOVES; i++) {
+                device.sleep(between(50, 90));
+                device.move(to.x() + (i % 2 == 0 ? 1 : -1), to.y() + (i % 2 == 0 ? 1 : 0));
             }
-            device.sleep(between(80, 160));
+            device.sleep(between(50, 90));
+            device.move(to.x(), to.y());
+            device.sleep(between(120, 200));
             device.up(MouseButton.LEFT);
             released = true;
             return new HumanMotion.Point[] {from, to};

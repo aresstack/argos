@@ -32,7 +32,10 @@ import java.util.regex.Pattern;
  * history/
  *   events.jsonl              search and page_visit events, one JSON object per line, chronological
  *   pages/&lt;snapshotId&gt;.json   readable content, links and metadata of one distinct page snapshot
- *   pages/&lt;snapshotId&gt;.html   the single-file HTML archive of that snapshot (only if the collector succeeded)
+ *   pages/&lt;snapshotId&gt;.html   the single-file HTML archive of that snapshot (only made by browser_archive_html)
+ *   resources/&lt;resourceId&gt;.json  metadata of one distinct captured response body
+ *   resources/&lt;resourceId&gt;.body  that body: masked UTF-8 text, or the received bytes of a binary resource
+ *   capture-settings.json     this chat's overrides of the optional resource categories ({@link CaptureSettings})
  *   lucene/                   rebuildable index ({@link LuceneSearchHistoryIndex})
  *   exports/                  files written by search_history_export
  * </pre>
@@ -45,6 +48,9 @@ public final class SearchHistoryRepository {
     private final Path root;
     private final Path events;
     private final Path pages;
+    private final Path resources;
+    /** Bytes under resources/, -1 until counted once. */
+    private long resourceBytes = -1;
     /** -1 until the event log was scanned. */
     private long lastSeq = -1;
 
@@ -52,6 +58,7 @@ public final class SearchHistoryRepository {
         this.root = historyDirectory.toAbsolutePath().normalize();
         this.events = root.resolve("events.jsonl");
         this.pages = root.resolve("pages");
+        this.resources = root.resolve("resources");
     }
 
     public Path root() {
@@ -124,6 +131,19 @@ public final class SearchHistoryRepository {
                                                            String contentHash, String source) throws IOException {
         HistoryEvent.PageVisit event = new HistoryEvent.PageVisit(lastSeq() + 1, at, url, requestedUrl, title,
                 status, contextId, snapshotId, contentHash, source);
+        append(toJson(event));
+        return event;
+    }
+
+    public synchronized HistoryEvent.NetworkResource appendResource(Instant at, String url, String pageUrl, int status,
+                                                                    String mimeType, String category,
+                                                                    String resourceType, String contextId,
+                                                                    StoredResource resource, boolean masked,
+                                                                    boolean complete,
+                                                                    String contentRange) throws IOException {
+        HistoryEvent.NetworkResource event = new HistoryEvent.NetworkResource(lastSeq() + 1, at, url, pageUrl,
+                status, mimeType, category, resourceType, contextId, resource.resourceId(), resource.contentHash(),
+                resource.size(), complete, masked, contentRange);
         append(toJson(event));
         return event;
     }
@@ -221,6 +241,23 @@ public final class SearchHistoryRepository {
                 node.put("contentHash", visit.contentHash());
                 node.put("source", visit.source());
             }
+            case HistoryEvent.NetworkResource resource -> {
+                node.put("type", "network_resource");
+                node.put("at", resource.at().toString());
+                node.put("url", resource.url());
+                node.put("pageUrl", resource.pageUrl());
+                node.put("status", resource.status());
+                node.put("mimeType", resource.mimeType());
+                node.put("category", resource.category());
+                node.put("resourceType", resource.resourceType());
+                node.put("contextId", resource.contextId());
+                node.put("resourceId", resource.resourceId());
+                node.put("contentHash", resource.contentHash());
+                node.put("size", resource.size());
+                node.put("complete", resource.complete());
+                node.put("masked", resource.masked());
+                node.put("contentRange", resource.contentRange());
+            }
         }
         return node;
     }
@@ -247,7 +284,17 @@ public final class SearchHistoryRepository {
                             text(node, "title"), node.path("status").asInt(0), context, snapshot,
                             text(node, "contentHash"), text(node, "source"));
                 }
+                case "network_resource" -> {
+                    String resource = text(node, "resourceId");
+                    if (resource == null || !SNAPSHOT_ID.matcher(resource).matches()) return null;
+                    return new HistoryEvent.NetworkResource(seq, at, text(node, "url"), text(node, "pageUrl"),
+                            node.path("status").asInt(0), text(node, "mimeType"), text(node, "category"),
+                            text(node, "resourceType"), context, resource, text(node, "contentHash"),
+                            node.path("size").asLong(0), node.path("complete").asBoolean(false),
+                            node.path("masked").asBoolean(false), text(node, "contentRange"));
+                }
                 default -> {
+                    // Unknown types (from a newer Argos) are skipped, never fatal.
                     return null;
                 }
             }
@@ -304,6 +351,81 @@ public final class SearchHistoryRepository {
 
     public void saveHtml(String snapshotId, String html) throws IOException {
         writeAtomically(pageFile(snapshotId, ".html"), html.getBytes(StandardCharsets.UTF_8));
+    }
+
+    // ------------------------------------------------------------------ network resources
+
+    /** The id of a stored body: derived from its bytes, so identical bodies share one id. */
+    public static String resourceId(String contentHash) {
+        return contentHash.substring(0, 32);
+    }
+
+    public static String sha256(byte[] bytes) {
+        try {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes));
+        } catch (NoSuchAlgorithmException impossible) {
+            throw new IllegalStateException(impossible);
+        }
+    }
+
+    public boolean hasResource(String resourceId) {
+        return Files.isRegularFile(resourceFile(resourceId, ".json"))
+                && Files.isRegularFile(resourceFile(resourceId, ".body"));
+    }
+
+    public Optional<StoredResource> resource(String resourceId) throws IOException {
+        Path file = resourceFile(resourceId, ".json");
+        if (!Files.isRegularFile(file)) return Optional.empty();
+        JsonNode node = JSON.readTree(file.toFile());
+        return Optional.of(new StoredResource(resourceId, text(node, "mimeType"), text(node, "category"),
+                text(node, "textKind"), text(node, "contentHash"), node.path("size").asLong(0),
+                Instant.parse(node.path("storedAt").asText()), node.path("masked").asBoolean(false)));
+    }
+
+    /** The stored body; exists only when {@link #hasResource} is true. */
+    public Path resourceBody(String resourceId) {
+        return resourceFile(resourceId, ".body");
+    }
+
+    /** Stores body and metadata (body first, so metadata never points at a missing body). */
+    public synchronized void saveResource(StoredResource resource, byte[] body) throws IOException {
+        long before = resourceBytes();
+        writeAtomically(resourceFile(resource.resourceId(), ".body"), body);
+        ObjectNode node = JSON.createObjectNode();
+        node.put("resourceId", resource.resourceId());
+        node.put("mimeType", resource.mimeType());
+        node.put("category", resource.category());
+        node.put("textKind", resource.textKind());
+        node.put("contentHash", resource.contentHash());
+        node.put("size", resource.size());
+        node.put("storedAt", resource.storedAt().toString());
+        node.put("masked", resource.masked());
+        byte[] meta = JSON.writeValueAsBytes(node);
+        writeAtomically(resourceFile(resource.resourceId(), ".json"), meta);
+        resourceBytes = before + body.length + meta.length;
+    }
+
+    /** Bytes stored under resources/ (counted once, then kept up to date). */
+    public synchronized long resourceBytes() throws IOException {
+        if (resourceBytes < 0) {
+            long total = 0;
+            if (Files.isDirectory(resources)) {
+                try (var files = Files.list(resources)) {
+                    for (Path file : files.toList()) {
+                        if (Files.isRegularFile(file)) total += Files.size(file);
+                    }
+                }
+            }
+            resourceBytes = total;
+        }
+        return resourceBytes;
+    }
+
+    private Path resourceFile(String resourceId, String extension) {
+        if (resourceId == null || !SNAPSHOT_ID.matcher(resourceId).matches()) {
+            throw new IllegalArgumentException("Invalid resource id");
+        }
+        return resources.resolve(resourceId + extension);
     }
 
     private Path pageFile(String snapshotId, String extension) {

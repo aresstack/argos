@@ -7,7 +7,8 @@ import java.util.List;
  * One entry of a chat's canonical history ({@code events.jsonl}), in chronological order. {@code seq} counts the
  * chat's events from 1; the Lucene index remembers up to which {@code seq} it is current.
  */
-public sealed interface HistoryEvent permits HistoryEvent.Search, HistoryEvent.PageVisit {
+public sealed interface HistoryEvent permits HistoryEvent.Search, HistoryEvent.PageVisit,
+        HistoryEvent.NetworkResource {
     long seq();
 
     Instant at();
@@ -36,6 +37,25 @@ public sealed interface HistoryEvent permits HistoryEvent.Search, HistoryEvent.P
      */
     record PageVisit(long seq, Instant at, String url, String requestedUrl, String title, int status,
                      String contextId, String snapshotId, String contentHash, String source)
+            implements HistoryEvent {
+    }
+
+    /**
+     * One response the browser received during a regular browser operation (document, fetch, XHR, ...), whose body
+     * is stored as resource {@code resourceId} ({@code resources/<resourceId>.body}, shared by every event with the
+     * same stored bytes). No request body, no request or response headers.
+     *
+     * @param pageUrl      the tab's page when the body was read, null when unknown
+     * @param category     the {@link ResourceCategory} key, e.g. content, images
+     * @param resourceType the browser's resource type (document, fetch, xhr, image, ...)
+     * @param size         stored bytes
+     * @param complete     false for a partial (206 / Content-Range) or otherwise incomplete body
+     * @param masked       true when secrets were removed from the text before it was stored
+     * @param contentRange the Content-Range of a partial response, else null
+     */
+    record NetworkResource(long seq, Instant at, String url, String pageUrl, int status, String mimeType,
+                           String category, String resourceType, String contextId, String resourceId,
+                           String contentHash, long size, boolean complete, boolean masked, String contentRange)
             implements HistoryEvent {
     }
 }

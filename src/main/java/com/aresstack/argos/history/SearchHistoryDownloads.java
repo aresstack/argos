@@ -17,7 +17,8 @@ import java.util.regex.Pattern;
 
 /**
  * Download links for Search History exports, served by {@link SearchHistoryDownloadServlet} on the existing Argos
- * HTTP endpoint at {@code /api/search-history/exports/{exportId}}.
+ * HTTP endpoint at {@code /api/search-history/exports/{exportId}}, and for the single-file HTML archives of
+ * browser_archive_html ({@code page-archive-<time>.html}, {@code text/html}).
  * <p>
  * An export id is 256 random bits and is the only credential of the link (a browser download carries no bearer
  * token). It maps to the exports directory of the chat whose tool call created it plus a file name Argos chose; the
@@ -31,7 +32,8 @@ public final class SearchHistoryDownloads {
     public static final String PATH = "/api/search-history/exports/";
     static final Duration DEFAULT_RETENTION = Duration.ofMinutes(60);
     private static final Pattern ID = Pattern.compile("[A-Za-z0-9_-]{43}");
-    private static final Pattern FILE = Pattern.compile("search-history-[0-9TZ-]+(-\\d+)?\\.(txt|jsonl|zip)");
+    private static final Pattern FILE = Pattern.compile(
+            "search-history-[0-9TZ-]+(-\\d+)?\\.(txt|jsonl|zip)|page-archive-[0-9TZ-]+(-\\d+)?\\.html");
     private static volatile SearchHistoryDownloads shared;
 
     private final Duration retention;
@@ -147,7 +149,7 @@ public final class SearchHistoryDownloads {
     /** Deletes this chat's exports (and abandoned .part files) older than the retention, except {@code keep}. */
     private void deleteStale(Path directory, Path keep) {
         Instant limit = clock.instant().minus(retention);
-        try (DirectoryStream<Path> files = Files.newDirectoryStream(directory, "search-history-*")) {
+        try (DirectoryStream<Path> files = Files.newDirectoryStream(directory, "{search-history-,page-archive-}*")) {
             for (Path file : files) {
                 if (file.equals(keep) || !Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS)) continue;
                 if (Files.getLastModifiedTime(file, LinkOption.NOFOLLOW_LINKS).toInstant().isBefore(limit)) {
@@ -162,6 +164,7 @@ public final class SearchHistoryDownloads {
     static String contentType(String fileName) {
         if (fileName.endsWith(".zip")) return "application/zip";
         if (fileName.endsWith(".jsonl")) return "application/x-ndjson; charset=utf-8";
+        if (fileName.endsWith(".html")) return "text/html; charset=utf-8";
         return "text/plain; charset=utf-8";
     }
 }

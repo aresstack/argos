@@ -20,10 +20,6 @@ final class HistoryFixtures {
         return new SearchHistory.PageRead(url, url, title, 200, text, List.of(links));
     }
 
-    static SearchHistory.HtmlArchive html(String html) {
-        return () -> Optional.of(html);
-    }
-
     /** A browser that serves fixed HTML per URL, with history for back(). */
     static final class FakeBrowser implements BrowserPagePort {
         final Map<String, String> pages = new HashMap<>();

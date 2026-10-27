@@ -29,7 +29,7 @@ import static org.junit.jupiter.api.Assertions.*;
  * Spec §10 item 6 in a real Camoufox (opt-in, -PtestCamoufox=true): a local page with an image, an external
  * stylesheet with a CSS background image, a script and relative links. The archived single file must embed the
  * reachable resources, contain no script, have absolute links, leave no globals in the page and create no
- * resource folder.
+ * resource folder. Through the Search History the collector runs only for the explicit browser_archive_html call.
  */
 class SearchHistoryCollectorBrowserTest {
     @TempDir Path temporary;
@@ -86,7 +86,8 @@ class SearchHistoryCollectorBrowserTest {
             assertTrue(archived.select("script").isEmpty(), "scripts removed");
             assertTrue(archived.select("link[rel~=preload]").isEmpty(), "preload links removed");
             assertTrue(archived.select("link[rel~=stylesheet]").isEmpty(), "stylesheet inlined");
-            String style = archived.select("style[data-from]").text();
+            String style = archived.select("style[data-from]").stream().map(org.jsoup.nodes.Element::data)
+                    .collect(java.util.stream.Collectors.joining("\n")); // <style> content is data, text() is ""
             assertTrue(style.contains("rgb(1, 2, 3)"), style);
             assertTrue(style.contains("url('data:image/png;base64,"), "CSS background image embedded: " + style);
             assertTrue(archived.select("img[alt=pixel]").attr("src").startsWith("data:image/png;base64,"));
@@ -95,19 +96,31 @@ class SearchHistoryCollectorBrowserTest {
             assertEquals(base + "/next", archived.select("a").get(0).attr("href"));
             assertEquals(base + "/sub/page.html", archived.select("a").get(1).attr("href"));
 
-            // The same page through the Search History: one .json and one .html, no resource folders.
+            // Through the Search History: navigating records text only; browser_archive_html stores one .html.
             SearchHistory history = new SearchHistory(temporary.resolve("chat").resolve("history"));
+            int[] evaluations = {0};
             SearchHistoryCapture capture = new SearchHistoryCapture(history, new SearchHistoryCapture.LivePages() {
                 @Override public PageCapture capture(String tabId) { return browser.capturePage(tabId); }
-                @Override public Object evaluate(String function, String tabId) { return browser.evaluate(function, tabId); }
-            }, true, 10_000);
+                @Override public Object evaluate(String function, String tabId) {
+                    evaluations[0]++;
+                    return browser.evaluate(function, tabId);
+                }
+            }, 10_000);
             capture.browserPage(null, base + "/", true, "browser_navigate");
-            try (Stream<Path> stored = Files.list(temporary.resolve("chat").resolve("history").resolve("pages"))) {
+            assertEquals(0, evaluations[0], "a normal navigation never runs the collector");
+            Path pagesDirectory = temporary.resolve("chat").resolve("history").resolve("pages");
+            try (Stream<Path> stored = Files.list(pagesDirectory)) {
+                assertEquals(1, stored.count(), "text snapshot only");
+            }
+            SearchHistoryCapture.HtmlArchiveResult result = capture.archiveHtml(null);
+            assertEquals(1, evaluations[0], "the collector ran for the explicit call only");
+            try (Stream<Path> stored = Files.list(pagesDirectory)) {
                 List<Path> pages = stored.toList();
                 assertEquals(2, pages.size(), pages.toString());
                 assertTrue(pages.stream().noneMatch(Files::isDirectory));
                 Path html = pages.stream().filter(p -> p.toString().endsWith(".html")).findFirst().orElseThrow();
                 String saved = Files.readString(html);
+                assertEquals(saved, result.html());
                 assertFalse(saved.contains("geheim"), "form values are not archived");
                 assertTrue(saved.contains("data:image/png;base64,"));
             }

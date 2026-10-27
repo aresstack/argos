@@ -58,7 +58,18 @@ public final class NetworkRecorder {
     private final Map<String, NetworkEntry> byId = new LinkedHashMap<>();
     private final Map<Request, NetworkEntry> byRequest = new IdentityHashMap<>();
     private final Deque<NetworkEntry> pendingBodies = new ArrayDeque<>();
+    // Durable content capture (Search History): independent of captureBodies (ARGOS_NETWORK_BODIES), with its own
+    // bounded queue and per-task budget; bodies are read as bytes, never cut to MAX_BODY_CHARACTERS.
+    static final int MAX_PENDING_CONTENT = 64;
+    static final int CONTENT_FETCHES_PER_TASK = 16;
+    static final long CONTENT_FETCH_BUDGET_MILLIS = 2_500;
+    static final long CONTENT_BYTES_PER_TASK = 48L * 1024 * 1024;
+    private final Deque<PendingContent> pendingContent = new ArrayDeque<>();
+    private volatile ResponseContentSink contentSink;
+    private long droppedContent;
     private long sequence;
+
+    private record PendingContent(NetworkEntry entry, ResponseContentSink.ObservedResponse observed, long maxBytes) { }
 
     public NetworkRecorder(SecretMasker masker, boolean captureBodies) {
         this(masker, captureBodies, Instant::now, System::nanoTime);
@@ -99,24 +110,97 @@ public final class NetworkRecorder {
     }
 
     void responseReceived(Response response) {
-        NetworkEntry entry = byRequest.get(response.request());
+        NetworkEntry entry = entryFor(response.request());
         if (entry == null) return;
         entry.response = response;
-        entry.state = NetworkEntry.State.RESPONSE;
+        if (entry.state != NetworkEntry.State.FINISHED && entry.state != NetworkEntry.State.FAILED) {
+            entry.state = NetworkEntry.State.RESPONSE;
+        }
         entry.status = response.status();
         entry.statusText = response.statusText() == null ? "" : response.statusText();
         entry.responseHeaders = masker.headers(response.headers());
         entry.mimeType = mimeType(header(entry.responseHeaders, "content-type"));
+        // Event order is not guaranteed for navigations: the finish may already have been seen.
+        if (entry.state == NetworkEntry.State.FINISHED) offerContent(entry);
     }
 
     void requestFinished(Request request) {
-        NetworkEntry entry = byRequest.get(request);
+        NetworkEntry entry = entryFor(request);
         if (entry == null) return;
         if (entry.state != NetworkEntry.State.FAILED) entry.state = NetworkEntry.State.FINISHED;
         complete(entry, request);
         if (captureBodies && entry.response != null && EAGER_BODY_TYPES.contains(entry.resourceType)) {
             // Response.body() is a protocol round trip: never issue it inside an event handler.
             pendingBodies.addLast(entry);
+        }
+        offerContent(entry);
+    }
+
+    /**
+     * The entry of a request. Playwright's BiDi layer can hand out a different Request object for a navigation
+     * in its response/finished events than in the request event; then the newest unanswered entry with the same
+     * method and URL is the same exchange and is re-bound (local values only, no protocol call).
+     */
+    private NetworkEntry entryFor(Request request) {
+        NetworkEntry entry = byRequest.get(request);
+        if (entry != null || request == null) return entry;
+        try {
+            String url = request.url();
+            String method = request.method();
+            for (var iterator = entries.descendingIterator(); iterator.hasNext(); ) {
+                NetworkEntry candidate = iterator.next();
+                if (candidate.response == null && candidate.state != NetworkEntry.State.FAILED
+                        && candidate.request != null && candidate.method.equalsIgnoreCase(method)
+                        && url.equals(candidate.request.url())) {
+                    byRequest.put(request, candidate);
+                    return candidate;
+                }
+            }
+        } catch (RuntimeException unreadable) {
+            return null;
+        }
+        return null;
+    }
+
+    /** The durable consumer of response bodies; null switches the content capture off. */
+    public void contentSink(ResponseContentSink sink) {
+        this.contentSink = sink;
+        if (sink == null) pendingContent.clear();
+    }
+
+    /** Wanted responses dropped because the content queue was full (diagnostics, a count only). */
+    public long droppedContent() {
+        return droppedContent;
+    }
+
+    private void offerContent(NetworkEntry entry) {
+        ResponseContentSink sink = contentSink;
+        if (sink == null || entry.response == null || entry.state != NetworkEntry.State.FINISHED
+                || entry.contentOffered) {
+            return;
+        }
+        entry.contentOffered = true;
+        if (entry.status == 204 || entry.status == 304 || (entry.status >= 300 && entry.status < 400)
+                || entry.status < 200 || entry.method.equalsIgnoreCase("HEAD")) {
+            return;
+        }
+        try {
+            String contentType = header(entry.responseHeaders, "content-type");
+            String encoding = header(entry.responseHeaders, "content-encoding");
+            ResponseContentSink.ObservedResponse observed = new ResponseContentSink.ObservedResponse(entry.url,
+                    null, entry.method, entry.status, contentType, mimeType(contentType), entry.resourceType,
+                    contentLength(entry.responseHeaders), header(entry.responseHeaders, "content-range"),
+                    encoding != null && !encoding.isBlank() && !encoding.equalsIgnoreCase("identity"));
+            long maxBytes = sink.wants(observed);
+            if (maxBytes <= 0) return;
+            if (pendingContent.size() >= MAX_PENDING_CONTENT) {
+                // Bounded: under a flood of responses the newest wanted ones are skipped, never buffered.
+                droppedContent++;
+                return;
+            }
+            pendingContent.addLast(new PendingContent(entry, observed, maxBytes));
+        } catch (RuntimeException failed) {
+            // Content capture never disturbs the recording or the page.
         }
     }
 
@@ -139,6 +223,87 @@ public final class NetworkRecorder {
             }
         }
         // Whatever is left waits for the next browser task.
+        captureQueuedContent();
+    }
+
+    /**
+     * Reads the bodies the content sink wants, within a per-task budget (count, time, bytes), and delivers them.
+     * Never inside an event handler; a missing or evicted body is reported to the sink, never thrown.
+     */
+    void captureQueuedContent() {
+        ResponseContentSink sink = contentSink;
+        if (sink == null) return;
+        long started = nanos.getAsLong();
+        int fetches = 0;
+        long bytes = 0;
+        while (!pendingContent.isEmpty() && fetches < CONTENT_FETCHES_PER_TASK
+                && elapsedMillis(started) < CONTENT_FETCH_BUDGET_MILLIS && bytes < CONTENT_BYTES_PER_TASK) {
+            PendingContent pending = pendingContent.peekFirst();
+            ResponseContentSink.ObservedResponse observed = pending.observed();
+            Long announced = observed.contentLength();
+            // Response.body() always loads the whole body: only an announced, unencoded size is a real bound.
+            if (announced == null || announced <= 0 || observed.encoded()) {
+                pendingContent.removeFirst();
+                deliverQuietly(sink, observed, null, "size unknown or encoded; not read");
+                continue;
+            }
+            if (announced > pending.maxBytes()) {
+                pendingContent.removeFirst();
+                deliverQuietly(sink, observed, null, "too large (announced " + announced + " bytes)");
+                continue;
+            }
+            // Reserve before reading: the per-task byte budget is never exceeded.
+            if (bytes + announced > CONTENT_BYTES_PER_TASK) {
+                if (announced > CONTENT_BYTES_PER_TASK) {
+                    pendingContent.removeFirst();
+                    deliverQuietly(sink, observed, null, "too large for one task");
+                    continue;
+                }
+                break; // waits for the next browser task
+            }
+            pendingContent.removeFirst();
+            bytes += announced;
+            fetches++;
+            byte[] body;
+            try {
+                body = pending.entry().response.body();
+            } catch (RuntimeException gone) {
+                deliverQuietly(sink, withPage(observed, pending.entry()), null, "body no longer available");
+                continue;
+            }
+            if (body == null) {
+                deliverQuietly(sink, withPage(observed, pending.entry()), null, "no body");
+                continue;
+            }
+            if (body.length > pending.maxBytes()) {
+                deliverQuietly(sink, withPage(observed, pending.entry()), null,
+                        "too large (" + body.length + " bytes)");
+                continue;
+            }
+            deliverQuietly(sink, withPage(observed, pending.entry()), body, null);
+        }
+    }
+
+    private ResponseContentSink.ObservedResponse withPage(ResponseContentSink.ObservedResponse observed,
+                                                          NetworkEntry entry) {
+        String pageUrl = null;
+        try {
+            if (entry.ownerPage != null) pageUrl = masker.url(entry.ownerPage.url());
+        } catch (RuntimeException closed) {
+            // The tab is gone; the page URL stays unknown.
+        }
+        return new ResponseContentSink.ObservedResponse(observed.url(), pageUrl, observed.method(), observed.status(),
+                observed.contentType(), observed.mimeType(), observed.resourceType(), observed.contentLength(),
+                observed.contentRange(), observed.encoded());
+    }
+
+    private static void deliverQuietly(ResponseContentSink sink, ResponseContentSink.ObservedResponse observed,
+                                       byte[] body, String unavailable) {
+        try {
+            sink.deliver(observed, body, unavailable);
+        } catch (RuntimeException failed) {
+            System.err.println("[argos-network] content delivery failed: " + failed.getClass().getSimpleName());
+        }
     }
 
     /**
@@ -279,6 +444,7 @@ public final class NetworkRecorder {
         byId.clear();
         byRequest.clear();
         pendingBodies.clear();
+        // pendingContent stays: clearing the diagnostic list must not cost the Search History its queued bodies.
         automaticFetchSuspended = false;
     }
 

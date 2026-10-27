@@ -45,7 +45,7 @@ class ArgosToolsTest {
             var enabled = new ResearchSettings(true, ResearchBudget.defaults());
             var web = new com.aresstack.argos.web.WebSession(browser, com.aresstack.argos.web.UrlPolicy.publicOnly(),
                     query -> new SearchResults(List.of(), List.of()));
-            for (ToolProfile profile : ToolProfile.values()) {
+            for (ToolProfile profile : List.of(ToolProfile.LEGACY, ToolProfile.COMPACT, ToolProfile.EXPERT)) {
                 int plain = new ArgosTools(browser, web).forProfile(profile).size();
                 var tools = new ArgosTools(browser, web, enabled).forProfile(profile);
                 List<String> names = tools.stream().map(spec -> spec.tool().name()).toList();
@@ -213,8 +213,8 @@ class ArgosToolsTest {
     }
 
     @Test void parsesToolProfile() {
-        assertEquals(ToolProfile.EXPERT, ToolProfile.parse(null));
-        assertEquals(ToolProfile.EXPERT, ToolProfile.parse(" "));
+        assertEquals(ToolProfile.CONVENIENCE, ToolProfile.parse(null));
+        assertEquals(ToolProfile.CONVENIENCE, ToolProfile.parse(" "));
         assertEquals(ToolProfile.EXPERT, ToolProfile.parse("Expert"));
         assertThrows(IllegalArgumentException.class, () -> ToolProfile.parse("everything"));
         assertTrue(new ArgosTools(null).forProfile(ToolProfile.COMPACT).stream()

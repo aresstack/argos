@@ -110,7 +110,7 @@ class SearchHistoryDownloadsTest {
         downloads.origin("https://argos.example");
         SearchHistory history = new SearchHistory(root.resolve("chat/history"));
         history.recordSearch("argos", "bing.com", "start", List.of());
-        SyncToolSpecification export = new SearchHistoryTools(history, downloads).specifications().get(1);
+        SyncToolSpecification export = new SearchHistoryTools(history, tab -> null, downloads).specifications().get(1);
         for (String format : List.of("txt", "jsonl", "zip")) {
             CallToolResult result = export.callHandler().apply(null,
                     new CallToolRequest("search_history_export", Map.of("format", format, "include_results", true)));

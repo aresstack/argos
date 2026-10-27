@@ -45,7 +45,9 @@ import java.util.stream.Stream;
  * deleted and rebuilt from the log. Lucene types never leave this class.
  * <p>
  * Documents: one per search event ({@code search:<seq>}) and one per page snapshot ({@code page:<snapshotId>},
- * updated with each visit). The searchable text is the query, hit titles/URLs/snippets, the page title, URL,
+ * updated with each visit) and one per distinct stored response body ({@code resource:<resourceId>}, updated with each
+ * observation, so identical bodies never add hits; binary bodies are indexed by URL and MIME type only, optional
+ * script and style text goes into a low-weighted field so it cannot crowd out page content). The searchable text is the query, hit titles/URLs/snippets, the page title, URL,
  * readable text and links, never the archived HTML.
  */
 public final class LuceneSearchHistoryIndex {
@@ -61,10 +63,14 @@ public final class LuceneSearchHistoryIndex {
     private static final String F_URL = "url";
     private static final String F_CONTENT = "content";
     private static final String F_LINKS = "links";
+    private static final String F_CODE = "code";
+    private static final String F_RESOURCE = "resourceId";
+    /** Indexed text of one resource; the stored body may be longer. */
+    static final int MAX_RESOURCE_TEXT = 2_000_000;
     private static final int MAX_TERMS = 64;
     private static final String LAST_SEQ = "argos.lastSeq";
     private static final Map<String, Float> FIELDS = Map.of(
-            F_QUERY, 3f, F_TITLE, 3f, F_URL, 2f, F_CONTENT, 1f, F_LINKS, 0.5f);
+            F_QUERY, 3f, F_TITLE, 3f, F_URL, 2f, F_CONTENT, 1f, F_LINKS, 0.5f, F_CODE, 0.2f);
 
     private final Path directory;
 
@@ -74,7 +80,12 @@ public final class LuceneSearchHistoryIndex {
 
     /** One hit: a search event or a page snapshot. Neutral types only. */
     public record Hit(String type, String id, Instant at, String title, String url, String snapshotId,
-                      String contextId, float score) { }
+                      String contextId, float score, String resourceId) {
+        public Hit(String type, String id, Instant at, String title, String url, String snapshotId,
+                   String contextId, float score) {
+            this(type, id, at, title, url, snapshotId, contextId, score, null);
+        }
+    }
 
     /** The last event seq the index contains; 0 when there is no index yet. */
     public synchronized long indexedSeq() throws IOException {
@@ -134,6 +145,13 @@ public final class LuceneSearchHistoryIndex {
                                         pageDocument(page, visit));
                             }
                         }
+                        case HistoryEvent.NetworkResource observed -> {
+                            StoredResource resource = repository.resource(observed.resourceId()).orElse(null);
+                            if (resource != null) {
+                                writer.updateDocument(new Term(F_ID, "resource:" + resource.resourceId()),
+                                        resourceDocument(resource, observed, text(repository, resource)));
+                            }
+                        }
                     }
                     last[0] = event.seq();
                 });
@@ -182,6 +200,30 @@ public final class LuceneSearchHistoryIndex {
         return doc;
     }
 
+    private static String text(SearchHistoryRepository repository, StoredResource resource) throws IOException {
+        if (!resource.textual()) return "";
+        Path body = repository.resourceBody(resource.resourceId());
+        if (!Files.isRegularFile(body)) return "";
+        String text = Files.readString(body, java.nio.charset.StandardCharsets.UTF_8);
+        if ("html".equals(resource.textKind())) text = org.jsoup.Jsoup.parse(text).text();
+        return text.length() > MAX_RESOURCE_TEXT ? text.substring(0, MAX_RESOURCE_TEXT) : text;
+    }
+
+    private static Document resourceDocument(StoredResource resource, HistoryEvent.NetworkResource observed,
+                                             String text) {
+        Document doc = new Document();
+        doc.add(new StringField(F_ID, "resource:" + resource.resourceId(), Field.Store.YES));
+        doc.add(new StoredField(F_TYPE, "resource"));
+        doc.add(new StoredField(F_AT, observed.at().toString()));
+        if (observed.contextId() != null) doc.add(new StoredField(F_CONTEXT, observed.contextId()));
+        doc.add(new StoredField(F_RESOURCE, resource.resourceId()));
+        doc.add(new StoredField(F_URL_STORED, nonNull(observed.url())));
+        doc.add(new StoredField(F_TITLE_STORED, nonNull(resource.mimeType())));
+        doc.add(new TextField(F_URL, nonNull(observed.url()), Field.Store.NO));
+        doc.add(new TextField("code".equals(resource.textKind()) ? F_CODE : F_CONTENT, text, Field.Store.NO));
+        return doc;
+    }
+
     /** Keyword search over this chat's index; empty when there is no index or no searchable term. */
     public synchronized List<Hit> search(String queryText, int limit) throws IOException {
         List<Hit> hits = new ArrayList<>();
@@ -195,7 +237,8 @@ public final class LuceneSearchHistoryIndex {
                 for (ScoreDoc scored : top.scoreDocs) {
                     Document d = searcher.doc(scored.doc);
                     hits.add(new Hit(d.get(F_TYPE), d.get(F_ID), Instant.parse(d.get(F_AT)), d.get(F_TITLE_STORED),
-                            d.get(F_URL_STORED), d.get(F_SNAPSHOT), d.get(F_CONTEXT), scored.score));
+                            d.get(F_URL_STORED), d.get(F_SNAPSHOT), d.get(F_CONTEXT), scored.score,
+                            d.get(F_RESOURCE)));
                 }
             }
         }
@@ -208,7 +251,7 @@ public final class LuceneSearchHistoryIndex {
         try (TokenStream tokens = analyzer.tokenStream(F_CONTENT, queryText == null ? "" : queryText)) {
             CharTermAttribute attribute = tokens.addAttribute(CharTermAttribute.class);
             tokens.reset();
-            // Distinct terms, bounded: five clauses per term must stay below BooleanQuery's clause limit.
+            // Distinct terms, bounded: six clauses per term must stay below BooleanQuery's clause limit.
             while (tokens.incrementToken() && terms.size() < MAX_TERMS) {
                 if (!terms.contains(attribute.toString())) terms.add(attribute.toString());
             }

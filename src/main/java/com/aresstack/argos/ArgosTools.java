@@ -39,6 +39,8 @@ public final class ArgosTools {
     private final DocumentAndBatchTools documents;
     /** Search History of this workspace's chat; null when it is off (single profile, ARGOS_SEARCH_HISTORY=false). */
     private final SearchHistoryCapture history;
+    /** The convenience profile's tools on this workspace's research session; null outside that profile. */
+    private ConvenienceTools convenience;
 
     public ArgosTools(CamoufoxBrowser browser) {
         this(browser, new WebSession(browser, UrlPolicy.publicOnly(), null));
@@ -77,18 +79,31 @@ public final class ArgosTools {
                 : null;
     }
 
+    /** Sets the tools of the {@link ToolProfile#CONVENIENCE} profile (built on this workspace's browser). */
+    public ArgosTools withConvenience(ConvenienceTools tools) {
+        this.convenience = tools;
+        return this;
+    }
+
     /** The original nine browser_* tools (the {@link ToolProfile#LEGACY} profile). */
     public List<SyncToolSpecification> all() {
         return browserTools();
     }
 
     public List<SyncToolSpecification> forProfile(ToolProfile profile) {
+        if (profile == ToolProfile.CONVENIENCE) {
+            // Its own tool set only: no expert browser/network tools and no ResearchTools (even with ARGOS_RESEARCH).
+            if (convenience == null) throw new IllegalStateException("The convenience profile needs its research session.");
+            List<SyncToolSpecification> tools = new ArrayList<>(convenience.specifications());
+            if (history != null) tools.addAll(new SearchHistoryTools(history.history(), history::archiveHtml).specifications());
+            return List.copyOf(tools);
+        }
         List<SyncToolSpecification> tools = new ArrayList<>(profileTools(profile));
         // Opt-in (ARGOS_RESEARCH=true): one-call research suits small models, so every profile gets it.
         if (research != null) tools.addAll(research.specifications());
         // Search History of the calling chat (per-chat profiles only); the legacy set stays unchanged.
         if (history != null && profile != ToolProfile.LEGACY) {
-            tools.addAll(new SearchHistoryTools(history.history()).specifications());
+            tools.addAll(new SearchHistoryTools(history.history(), history::archiveHtml).specifications());
         }
         return List.copyOf(tools);
     }
@@ -110,6 +125,7 @@ public final class ArgosTools {
                 if (documents != null) tools.addAll(documents.all());
                 yield List.copyOf(tools);
             }
+            case CONVENIENCE -> throw new IllegalStateException("handled in forProfile");
         };
     }
 

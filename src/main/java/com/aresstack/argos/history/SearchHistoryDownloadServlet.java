@@ -38,7 +38,7 @@ public final class SearchHistoryDownloadServlet extends HttpServlet {
         response.setStatus(HttpServletResponse.SC_OK);
         response.setContentType(download.contentType());
         response.setContentLengthLong(download.size());
-        // File names are Argos-made ASCII (search-history-<time>.<ext>), so no escaping is needed.
+        // File names are Argos-made ASCII (search-history-<time>.<ext>, page-archive-<time>.html): no escaping needed.
         response.setHeader("Content-Disposition", "attachment; filename=\"" + download.fileName() + "\"");
         try (InputStream in = Files.newInputStream(download.file())) {
             in.transferTo(response.getOutputStream());

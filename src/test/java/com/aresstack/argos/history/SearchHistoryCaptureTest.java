@@ -50,7 +50,7 @@ class SearchHistoryCaptureTest {
                 return "{\"title\":\"t\",\"url\":\"" + browser.currentUrl() + "\",\"html\":"
                         + "\"<!DOCTYPE html><html><body><script>x()</script><p>archived</p></body></html>\"}";
             }
-        }, true, 5_000);
+        }, 5_000);
     }
 
     private List<HistoryEvent> events() throws Exception {
@@ -88,10 +88,8 @@ class SearchHistoryCaptureTest {
         HistoryEvent.PageVisit back = (HistoryEvent.PageVisit) events.get(4);
         HistoryEvent.PageVisit first = (HistoryEvent.PageVisit) events.get(2);
         assertEquals(first.snapshotId(), back.snapshotId(), "going back reuses the snapshot");
-        assertEquals(2, evaluated.size(), "the collector ran once per new snapshot");
-        assertTrue(history.repository().hasHtml(first.snapshotId()));
-        String archived = java.nio.file.Files.readString(history.repository().htmlFile(first.snapshotId()));
-        assertFalse(archived.contains("<script"), archived);
+        assertTrue(evaluated.isEmpty(), "web_* tools never run the HTML collector");
+        assertFalse(history.repository().hasHtml(first.snapshotId()));
         assertTrue(history.search("reference", 5).get(0).url().endsWith("/api"));
     }
 

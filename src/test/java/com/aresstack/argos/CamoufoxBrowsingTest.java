@@ -2,6 +2,13 @@ package com.aresstack.argos;
 
 import com.aresstack.argos.web.UrlPolicy;
 import com.aresstack.argos.web.WebSession;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import io.modelcontextprotocol.server.McpServerFeatures.SyncToolSpecification;
+import io.modelcontextprotocol.spec.McpSchema.CallToolRequest;
+import io.modelcontextprotocol.spec.McpSchema.CallToolResult;
+import io.modelcontextprotocol.spec.McpSchema.ImageContent;
+import io.modelcontextprotocol.spec.McpSchema.TextContent;
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
@@ -63,6 +70,8 @@ class CamoufoxBrowsingTest {
             </script></body></html>""";
     private static final String SECOND = """
             <html><head><title>Zweite</title></head><body><h1>Zweite Seite</h1></body></html>""";
+    private static final String THIRD = """
+            <html><head><title>Dritte</title></head><body><h1>Dritte Seite</h1></body></html>""";
     /** A server error page, delivered with status 500 and rendered like any other document. */
     private static final String BROKEN = """
             <html><head><title>500 Internal Server Error</title></head><body><h1>Internal Server Error</h1>
@@ -204,5 +213,118 @@ class CamoufoxBrowsingTest {
         } finally {
             site.stop(0);
         }
+    }
+
+    @Test @Timeout(value = 180, unit = TimeUnit.SECONDS)
+    void pageTargetedMcpToolsKeepTabsIsolated() throws Exception {
+        Assumptions.assumeTrue(Boolean.getBoolean("argos.testCamoufox"), "Opt-in real browser test");
+        ArgosConfig local = ArgosConfig.fromEnvironment();
+        local.requireBrowserConfiguration();
+        HttpServer site = HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0);
+        site.createContext("/", exchange -> {
+            String path = exchange.getRequestURI().getPath();
+            String html = path.startsWith("/second") ? SECOND : path.startsWith("/third") ? THIRD : FORM;
+            byte[] body = html.getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "text/html; charset=utf-8");
+            exchange.sendResponseHeaders(200, body.length);
+            try (var out = exchange.getResponseBody()) {
+                out.write(body);
+            }
+        });
+        site.setExecutor(java.util.concurrent.Executors.newCachedThreadPool());
+        site.start();
+
+        try (CamoufoxBrowser browser = new CamoufoxBrowser(new ArgosConfig(
+                "127.0.0.1", 0, local.executable(), local.launchOptions(), temporary.resolve("page-target-profile"), true)
+                .withNetwork(TestNetworks.LOOPBACK))) {
+            List<SyncToolSpecification> tools = new ArgosTools(browser).forProfile(ToolProfile.EXPERT);
+            ObjectMapper mapper = new ObjectMapper();
+            String base = "http://localhost:" + site.getAddress().getPort();
+
+            assertFalse(callTool(tools, "browser_navigate", Map.of("url", base + "/")).isError());
+            assertFalse(callTool(tools, "browser_tab_new", Map.of("url", base + "/second")).isError());
+
+            JsonNode tabs = mapper.readTree(toolText(callTool(tools, "browser_tabs", Map.of())));
+            assertEquals(2, tabs.size());
+            assertTrue(tabs.toString().contains("\"t1\""));
+            assertTrue(tabs.toString().contains("\"t2\""));
+            assertEquals("t2", browser.status().get("tab"), "Opening a tab makes it current");
+
+            String firstSnapshot = toolText(callTool(tools, "browser_snapshot", Map.of("tab", "t1")));
+            String secondSnapshot = toolText(callTool(tools, "browser_snapshot", Map.of("tab", "t2")));
+            assertTrue(firstSnapshot.contains("Formular"), firstSnapshot);
+            assertTrue(secondSnapshot.contains("Zweite Seite"), secondSnapshot);
+
+            String firstInspection = toolText(callTool(tools, "browser_inspect",
+                    Map.of("selector", "h1", "tab", "t1")));
+            String secondInspection = toolText(callTool(tools, "browser_inspect",
+                    Map.of("selector", "h1", "tab", "t2")));
+            assertTrue(firstInspection.contains("Suche"), firstInspection);
+            assertTrue(secondInspection.contains("Zweite Seite"), secondInspection);
+
+            assertFalse(callTool(tools, "browser_fill",
+                    Map.of("selector", "#q", "text", "per-tab", "tab", "t1")).isError());
+            assertFalse(callTool(tools, "browser_click", Map.of("selector", "#go", "tab", "t1")).isError());
+            assertFalse(callTool(tools, "browser_fill_target",
+                    Map.of("target", "label=\"Suchbegriff\"", "text", "semantic", "tab", "t1")).isError());
+            assertFalse(callTool(tools, "browser_click_target",
+                    Map.of("target", "role=button name=\"Suchen\"", "tab", "t1")).isError());
+            String firstLog = toolText(callTool(tools, "browser_evaluate",
+                    Map.of("expression", "() => document.getElementById('log').textContent", "tab", "t1")));
+            assertTrue(firstLog.contains("clicked trusted=true value=semantic"), firstLog);
+            String secondTitle = toolText(callTool(tools, "browser_evaluate",
+                    Map.of("expression", "() => document.title", "tab", "t2")));
+            assertTrue(secondTitle.contains("Zweite"), secondTitle);
+            assertEquals("t2", browser.status().get("tab"), "Page-targeted calls must not switch the current tab");
+
+            JsonNode firstNetwork = mapper.readTree(toolText(callTool(tools, "browser_network", Map.of("tab", "t1"))));
+            JsonNode secondNetwork = mapper.readTree(toolText(callTool(tools, "browser_network", Map.of("tab", "t2"))));
+            assertTrue(firstNetwork.toString().contains(base + "/"), firstNetwork.toString());
+            assertFalse(firstNetwork.toString().contains("/second"), firstNetwork.toString());
+            assertTrue(secondNetwork.toString().contains("/second"), secondNetwork.toString());
+            String secondRequestId = secondNetwork.get(0).get("id").asText();
+            CallToolResult crossTabDetail = callTool(tools, "browser_network_detail",
+                    Map.of("id", secondRequestId, "body", false, "tab", "t1"));
+            assertTrue(crossTabDetail.isError(), toolText(crossTabDetail));
+
+            assertFalse(callTool(tools, "browser_navigate",
+                    Map.of("url", base + "/third", "tab", "t1")).isError());
+            String thirdSnapshot = toolText(callTool(tools, "browser_snapshot", Map.of("tab", "t1")));
+            secondSnapshot = toolText(callTool(tools, "browser_snapshot", Map.of("tab", "t2")));
+            assertTrue(thirdSnapshot.contains("Dritte Seite"), thirdSnapshot);
+            assertTrue(secondSnapshot.contains("Zweite Seite"), secondSnapshot);
+
+            CallToolResult firstScreenshot = callTool(tools, "browser_screenshot", Map.of("tab", "t1"));
+            CallToolResult secondScreenshot = callTool(tools, "browser_screenshot", Map.of("tab", "t2"));
+            assertFalse(firstScreenshot.isError());
+            assertFalse(secondScreenshot.isError());
+            ImageContent firstImage = assertInstanceOf(ImageContent.class, firstScreenshot.content().get(0));
+            ImageContent secondImage = assertInstanceOf(ImageContent.class, secondScreenshot.content().get(0));
+            assertNotEquals(firstImage.data(), secondImage.data(), "Screenshots must come from the requested tab");
+
+            assertFalse(callTool(tools, "browser_tab_close", Map.of("tab", "t1")).isError());
+            String remainingSnapshot = toolText(callTool(tools, "browser_snapshot", Map.of("tab", "t2")));
+            assertTrue(remainingSnapshot.contains("Zweite Seite"), remainingSnapshot);
+            assertTrue(callTool(tools, "browser_snapshot", Map.of("tab", "t1")).isError());
+            assertTrue(callTool(tools, "browser_snapshot", Map.of("tab", "t9")).isError());
+            assertEquals("t2", browser.status().get("tab"));
+        } finally {
+            site.stop(0);
+        }
+    }
+
+    private static CallToolResult callTool(List<SyncToolSpecification> tools, String name,
+                                           Map<String, Object> arguments) {
+        SyncToolSpecification specification = tools.stream()
+                .filter(candidate -> candidate.tool().name().equals(name))
+                .findFirst()
+                .orElseThrow(() -> new IllegalArgumentException("Unknown test tool: " + name));
+        return specification.callHandler().apply(null, new CallToolRequest(name, arguments));
+    }
+
+    private static String toolText(CallToolResult result) {
+        if (result.content().isEmpty()) return "";
+        if (result.content().get(0) instanceof TextContent text) return text.text();
+        return result.content().get(0).toString();
     }
 }

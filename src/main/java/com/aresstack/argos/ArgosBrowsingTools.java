@@ -44,37 +44,47 @@ public final class ArgosBrowsingTools {
         tools.add(tool("browser_tab_close", "Close a tab. The last remaining tab cannot be closed.",
                 Map.of("tab", field("string", "Tab id from browser_tabs, e.g. t2")), List.of("tab"),
                 args -> browser.closeTab(string(args, "tab"))));
-        tools.add(tool("browser_back", "Go back one page in the current tab's history.",
-                Map.of(), List.of(), args -> browser.historyBack()));
-        tools.add(tool("browser_forward", "Go forward one page in the current tab's history.",
-                Map.of(), List.of(), args -> browser.forward()));
-        tools.add(tool("browser_reload", "Reload the current page.",
-                Map.of(), List.of(), args -> browser.reload()));
+        tools.add(tool("browser_back", "Go back one page in the current or specified tab's history.",
+                Map.of("tab", field("string", "Optional tab id from browser_tabs, e.g. t2")), List.of(),
+                args -> browser.historyBack(optionalString(args, "tab"))));
+        tools.add(tool("browser_forward", "Go forward one page in the current or specified tab's history.",
+                Map.of("tab", field("string", "Optional tab id from browser_tabs, e.g. t2")), List.of(),
+                args -> browser.forward(optionalString(args, "tab"))));
+        tools.add(tool("browser_reload", "Reload the current or specified tab.",
+                Map.of("tab", field("string", "Optional tab id from browser_tabs, e.g. t2")), List.of(),
+                args -> browser.reload(optionalString(args, "tab"))));
         tools.add(tool("browser_controls",
-                "List visible, enabled controls (fields, buttons, checkboxes, selects, tabs, menu items) with "
+                "List visible, enabled controls on the current or specified tab (fields, buttons, checkboxes, selects, tabs, menu items) with "
                         + "number, aria ref and a reusable semantic locator.",
                 Map.of("filter", field("string", "Optional text the role, name or value must contain"),
-                        "limit", field("integer", "Maximum controls (1-200, default 60)")),
+                        "limit", field("integer", "Maximum controls (1-200, default 60)"),
+                        "tab", field("string", "Optional tab id from browser_tabs, e.g. t2")),
                 List.of(), args -> controlsAsJson(optionalString(args, "filter"),
-                        Math.min(200, Math.max(1, number(args, "limit", 60))))));
+                        Math.min(200, Math.max(1, number(args, "limit", 60))), optionalString(args, "tab"))));
         tools.add(tool("browser_click_target",
-                "Click an element with real mouse input at its on-screen position. " + TARGET_HELP,
-                Map.of("target", field("string", "What to click, e.g. role=button name=\"Anmelden\"")),
-                List.of("target"), args -> interactionAsJson(browser.clickTarget(string(args, "target")))));
+                "Click an element in the current or specified tab with real mouse input at its on-screen position. " + TARGET_HELP,
+                Map.of("target", field("string", "What to click, e.g. role=button name=\"Anmelden\""),
+                        "tab", field("string", "Optional tab id from browser_tabs, e.g. t2")),
+                List.of("target"), args -> interactionAsJson(browser.clickTarget(
+                        string(args, "target"), optionalString(args, "tab")))));
         tools.add(tool("browser_fill_target",
-                "Click into a field and type text with real key presses, replacing its content. End the text "
+                "Click into a field in the current or specified tab and type text with real key presses, replacing its content. End the text "
                         + "with a newline to press Enter. " + TARGET_HELP,
                 Map.of("target", field("string", "Which field, e.g. label=\"Suche\""),
-                        "text", field("string", "Text to type")),
+                        "text", field("string", "Text to type"),
+                        "tab", field("string", "Optional tab id from browser_tabs, e.g. t2")),
                 List.of("target", "text"),
-                args -> interactionAsJson(browser.fillTarget(string(args, "target"), string(args, "text")))));
+                args -> interactionAsJson(browser.fillTarget(
+                        string(args, "target"), string(args, "text"), optionalString(args, "tab")))));
         tools.add(tool("browser_extract",
-                "Extract structure from the current HTML page. kind: overview (default), headings, links, tables, "
+                "Extract structure from the current or specified tab's HTML page. kind: overview (default), headings, links, tables, "
                         + "lists, metadata (description, Open Graph, citation_* tags), jsonld.",
                 Map.of("kind", field("string", "overview | headings | links | tables | lists | metadata | jsonld"),
                         "scope", field("string", "Optional landmark role or name limiting headings/links/tables/"
-                                + "lists, e.g. main, article, navigation")),
-                List.of(), args -> browser.extract(optionalString(args, "kind"), optionalString(args, "scope"))));
+                                + "lists, e.g. main, article, navigation"),
+                        "tab", field("string", "Optional tab id from browser_tabs, e.g. t2")),
+                List.of(), args -> browser.extract(optionalString(args, "kind"), optionalString(args, "scope"),
+                        optionalString(args, "tab"))));
         return List.copyOf(tools);
     }
 
@@ -102,7 +112,11 @@ public final class ArgosBrowsingTools {
     }
 
     private Map<String, Object> controlsAsJson(String filter, int limit) {
-        PageControls controls = browser.controls();
+        return controlsAsJson(filter, limit, null);
+    }
+
+    private Map<String, Object> controlsAsJson(String filter, int limit, String tabId) {
+        PageControls controls = browser.controls(tabId);
         List<Map<String, Object>> list = controls.filtered(filter, limit).stream().map(c -> Map.<String, Object>of(
                 "number", c.number(), "role", c.role(), "name", c.name(), "value", c.value(),
                 "states", c.states(), "ref", c.ref(), "locator", c.locator())).toList();

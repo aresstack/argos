@@ -300,6 +300,12 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
         return tabs.select(adopt(first));
     }
 
+    /** Resolve an explicit tab without changing which tab is current. */
+    private Page pageFor(String tabId) throws Exception {
+        Page current = activePage();
+        return tabId == null || tabId.isBlank() ? current : tabs.get(tabId);
+    }
+
     private void ensureContext() throws Exception {
         if (context == null) {
             config.requireBrowserConfiguration();
@@ -566,8 +572,13 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
     }
 
     public Map<String, Object> navigate(String target) {
+        return navigate(target, null);
+    }
+
+    /** Navigate a specific tab without changing the current-tab selection. */
+    public Map<String, Object> navigate(String target, String tabId) {
         requireWebUrl(target);
-        return onBrowser(() -> navigateHere(activePage(), target));
+        return onBrowser(() -> navigateHere(pageFor(tabId), target));
     }
 
     /** {@link #navigate} on the driver thread. */
@@ -651,8 +662,12 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
      * visible element ({@code selector}) and/or visible {@code text}.
      */
     public Map<String, Object> waitFor(String selector, String text, int timeoutMillis) {
+        return waitFor(selector, text, timeoutMillis, null);
+    }
+
+    public Map<String, Object> waitFor(String selector, String text, int timeoutMillis, String tabId) {
         return onBrowser(() -> {
-            Page p = activePage();
+            Page p = pageFor(tabId);
             SavedDocument saved = document(p).saved;
             if (saved != null) return savedWaitResult(saved, selector, text);
             ReadinessPolicy configured = config.readiness().settles() ? config.readiness() : ReadinessPolicy.balanced();
@@ -787,8 +802,12 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
     }
 
     public PageSnapshot snapshot(int maxCharacters) {
+        return snapshot(maxCharacters, null);
+    }
+
+    public PageSnapshot snapshot(int maxCharacters, String tabId) {
         return onBrowser(() -> {
-            Page p = activePage();
+            Page p = pageFor(tabId);
             SavedDocument saved = document(p).saved;
             if (saved != null) return snapshots.read(new SavedPageSource(saved), maxCharacters);
             return snapshots.read(new PlaywrightPageSource(p, document(p).mainDocument), maxCharacters);
@@ -1121,8 +1140,12 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
     }
 
     public Map<String, Object> inspect(String selector, int limit) {
+        return inspect(selector, limit, null);
+    }
+
+    public Map<String, Object> inspect(String selector, int limit, String tabId) {
         return onBrowser(() -> {
-            Page p = activePage();
+            Page p = pageFor(tabId);
             Object value = p.evaluate("""
                     ({selector,limit}) => [...document.querySelectorAll(selector)]
                       .slice(0,limit).map(node => ({
@@ -1141,8 +1164,12 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
     }
 
     public Map<String, Object> click(String selector) {
+        return click(selector, null);
+    }
+
+    public Map<String, Object> click(String selector, String tabId) {
         return onBrowser(() -> {
-            Page p = activePage();
+            Page p = pageFor(tabId);
             input.click(p, p.locator(selector).first());
             leaveSavedDocument(p);
             settle(p);
@@ -1151,8 +1178,12 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
     }
 
     public Map<String, Object> fill(String selector, String text) {
+        return fill(selector, text, null);
+    }
+
+    public Map<String, Object> fill(String selector, String text, String tabId) {
         return onBrowser(() -> {
-            Page p = activePage();
+            Page p = pageFor(tabId);
             input.replaceText(p, p.locator(selector).first(), text);
             leaveSavedDocument(p);
             return Map.of("filled", selector, "url", p.url());
@@ -1233,15 +1264,27 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
     // ---- History ----------------------------------------------------------------------------------------
 
     public Map<String, Object> historyBack() {
-        return traverse("back");
+        return historyBack(null);
+    }
+
+    public Map<String, Object> historyBack(String tabId) {
+        return traverse("back", tabId);
     }
 
     public Map<String, Object> forward() {
-        return traverse("forward");
+        return forward(null);
+    }
+
+    public Map<String, Object> forward(String tabId) {
+        return traverse("forward", tabId);
     }
 
     public Map<String, Object> reload() {
-        return traverse("reload");
+        return reload(null);
+    }
+
+    public Map<String, Object> reload(String tabId) {
+        return traverse("reload", tabId);
     }
 
     /**
@@ -1254,9 +1297,9 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
     }
 
     /** History traversal via BiDi {@code browsingContext.traverseHistory} / {@code reload}; no page script. */
-    private Map<String, Object> traverse(String direction) {
+    private Map<String, Object> traverse(String direction, String tabId) {
         return onBrowser(() -> {
-            Page p = activePage();
+            Page p = pageFor(tabId);
             SavedDocument saved = document(p).saved;
             if (saved != null && !direction.equals("forward")) {
                 // The saved feed is no history entry of its own: back returns to the page shown before it,
@@ -1302,8 +1345,12 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
 
     /** A fresh numbered control snapshot of the current tab, replacing the previous one. */
     public PageControls controls() {
+        return controls(null);
+    }
+
+    public PageControls controls(String tabId) {
         return onBrowser(() -> {
-            Page p = activePage();
+            Page p = pageFor(tabId);
             PageControls snapshot = takeControlSnapshot(p);
             leaveSavedDocument(p);
             return snapshot;
@@ -1337,22 +1384,31 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
     public record Interaction(String target, String url, String title, String openedTab) { }
 
     public Interaction clickTarget(String target) {
+        return clickTarget(target, null);
+    }
+
+    public Interaction clickTarget(String target, String tabId) {
         return onBrowser(() -> {
-            Page p = activePage();
+            Page p = pageFor(tabId);
             Set<String> before = tabs.all().keySet();
             Resolved resolved = resolve(p, target);
             input.click(p, resolved.locator());
             leaveSavedDocument(p);
             settle(p);
-            String opened = adoptOpenedTab(before);
-            Page now = activePage();
-            return new Interaction(resolved.description(), now.url(), safeTitle(now), opened);
+            boolean preserveCurrentTab = tabId != null && !tabId.isBlank();
+            String opened = adoptOpenedTab(before, !preserveCurrentTab);
+            Page resultPage = preserveCurrentTab ? p : activePage();
+            return new Interaction(resolved.description(), resultPage.url(), safeTitle(resultPage), opened);
         });
     }
 
     public Interaction fillTarget(String target, String text) {
+        return fillTarget(target, text, null);
+    }
+
+    public Interaction fillTarget(String target, String text, String tabId) {
         return onBrowser(() -> {
-            Page p = activePage();
+            Page p = pageFor(tabId);
             Resolved resolved = resolve(p, target);
             input.replaceText(p, resolved.locator(), text);
             leaveSavedDocument(p);
@@ -1420,11 +1476,15 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
 
     /** If the last action opened a tab, it becomes current, as it would for a person. */
     private String adoptOpenedTab(Set<String> before) {
+        return adoptOpenedTab(before, true);
+    }
+
+    private String adoptOpenedTab(Set<String> before, boolean selectOpened) {
         for (Page candidate : context.pages()) adopt(candidate);
         List<String> opened = tabs.all().keySet().stream().filter(id -> !before.contains(id)).toList();
         if (opened.isEmpty()) return null;
         String newest = opened.get(opened.size() - 1);
-        Page tab = tabs.select(newest);
+        Page tab = selectOpened ? tabs.select(newest) : tabs.get(newest);
         try {
             tab.waitForLoadState(LoadState.DOMCONTENTLOADED, new Page.WaitForLoadStateOptions().setTimeout(10_000));
         } catch (TimeoutError slow) {
@@ -1451,12 +1511,16 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
      * getAttribute would dispatch {@code __playwright_mark_target__} events into the page (playwright4j #38).
      */
     public Map<String, Object> extract(String kind, String scope) {
+        return extract(kind, scope, null);
+    }
+
+    public Map<String, Object> extract(String kind, String scope, String tabId) {
         String what = kind == null || kind.isBlank() ? "overview" : kind.trim().toLowerCase(java.util.Locale.ROOT);
         if (!PageExtractor.KINDS.contains(what)) {
             throw new IllegalArgumentException("kind must be one of " + PageExtractor.KINDS);
         }
         return onBrowser(() -> {
-            Page p = activePage();
+            Page p = pageFor(tabId);
             if (document(p).saved != null || p.locator("body").count() == 0) {
                 throw new IllegalStateException("browser_extract needs an HTML page; use browser_snapshot for "
                         + "XML, JSON or text documents.");
@@ -1513,23 +1577,36 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
     }
 
     public Object evaluate(String expression) {
-        return onBrowser(() -> activePage().evaluate(expression));
+        return evaluate(expression, null);
+    }
+
+    public Object evaluate(String expression, String tabId) {
+        return onBrowser(() -> pageFor(tabId).evaluate(expression));
     }
 
     public byte[] screenshot() {
-        return onBrowser(() -> activePage().screenshot(new Page.ScreenshotOptions()
+        return screenshot(null);
+    }
+
+    public byte[] screenshot(String tabId) {
+        return onBrowser(() -> pageFor(tabId).screenshot(new Page.ScreenshotOptions()
                 .setFullPage(false).setTimeout(15_000)));
     }
 
     public List<Map<String, Object>> networkEvents() {
-        return networkEvents(null);
+        return networkEvents(null, null);
     }
 
     public List<Map<String, Object>> networkEvents(String filter) {
+        return networkEvents(filter, null);
+    }
+
+    public List<Map<String, Object>> networkEvents(String filter, String tabId) {
         return onBrowser(() -> {
-            List<Map<String, Object>> rows = network.summary(filter);
-            if (proxy == null) return rows;
-            // Refused connections never reach the page as requests; merge them in time order.
+            Page ownerPage = tabId == null || tabId.isBlank() ? null : pageFor(tabId);
+            List<Map<String, Object>> rows = network.summary(filter, ownerPage);
+            // Proxy-blocked events are session-wide and cannot reliably be attributed to one page.
+            if (proxy == null || ownerPage != null) return rows;
             String needle = filter == null ? "" : filter.trim().toLowerCase(java.util.Locale.ROOT);
             List<Map<String, Object>> events = new ArrayList<>(rows);
             for (Map<String, Object> blocked : proxy.blockedEvents()) {
@@ -1545,15 +1622,30 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
     }
 
     public Map<String, Object> networkDetail(String id, boolean includeBody) {
-        return onBrowser(() -> network.detail(id, includeBody));
+        return networkDetail(id, includeBody, null);
+    }
+
+    public Map<String, Object> networkDetail(String id, boolean includeBody, String tabId) {
+        return onBrowser(() -> network.detail(id, includeBody,
+                tabId == null || tabId.isBlank() ? null : pageFor(tabId)));
     }
 
     public List<Map<String, Object>> networkJson(String filter, int limit) {
-        return onBrowser(() -> network.jsonResponses(filter, limit));
+        return networkJson(filter, limit, null);
+    }
+
+    public List<Map<String, Object>> networkJson(String filter, int limit, String tabId) {
+        return onBrowser(() -> network.jsonResponses(filter, limit,
+                tabId == null || tabId.isBlank() ? null : pageFor(tabId)));
     }
 
     public Map<String, Object> networkHar(int limit) {
-        return onBrowser(() -> network.har(limit, ArgosTools.VERSION));
+        return networkHar(limit, null);
+    }
+
+    public Map<String, Object> networkHar(int limit, String tabId) {
+        return onBrowser(() -> network.har(limit, ArgosTools.VERSION,
+                tabId == null || tabId.isBlank() ? null : pageFor(tabId)));
     }
 
     public Map<String, Object> clearNetwork() {

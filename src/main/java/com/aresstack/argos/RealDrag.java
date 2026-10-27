@@ -12,6 +12,10 @@ import java.util.random.RandomGenerator;
  * the browser itself fires {@code dragstart}, {@code dragenter}, {@code dragover} and {@code drop} (or plain
  * mousemove/mouseup for script-made sliders and sortable lists). Neither {@code locator.dragTo} (marker events,
  * playwright4j #38) nor script-made DragEvents are used.
+ *
+ * <p>Known limit: Firefox does not route automated input into its native HTML5 drag session (Mozilla bug 1515879),
+ * so for {@code draggable} sources only dragstart/dragenter/dragover arrive, then pointercancel; drop and dragend
+ * never do. Pointer- and mouse-event drags complete. See {@code DragDiagnosticsBrowserTest}.
  */
 final class RealDrag {
     /** Firefox starts a drag session after the pointer moved more than a few pixels with the button held. */

@@ -122,6 +122,9 @@ public final class ArgosBrowsingTools {
                 "Drag and drop with real mouse input in the current or specified tab: press on the source, move, "
                         + "release on the target, e.g. to sort a list, move a card or drop a file entry onto a folder. "
                         + "Give the source as source or from_x/from_y and the target as target or to_x/to_y. "
+                        + "Works for pages that drag with pointer or mouse events (sliders, maps, most sortable lists); "
+                        + "native HTML5 drag and drop (draggable elements) does not complete in Firefox, the result then "
+                        + "carries a warning. "
                         + TARGET_HELP + " " + POINT_HELP,
                 Map.of("source", field("string", "Element to pick up, e.g. text=\"Karte 1\""),
                         "target", field("string", "Element to drop on, e.g. role=region name=\"Erledigt\""),

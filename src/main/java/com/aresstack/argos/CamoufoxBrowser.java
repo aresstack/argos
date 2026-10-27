@@ -1734,6 +1734,15 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
      * Drags with the real mouse from {@code source} (element or x/y) to {@code target} (element or x/y): press, move,
      * release, all as trusted input, so the page sees the browser's own drag and drop events.
      */
+    /** Read-only: whether pressing on the element starts the browser's own HTML5 drag (draggable, links, images). */
+    private static final String HTML5_DRAGGABLE = """
+            element => { for (let node = element; node; node = node.parentElement) if (node.draggable) return true;
+              return false; }""";
+    static final String HTML5_DRAG_LIMIT = "The source is an HTML5 draggable element. Firefox/Camoufox does not finish "
+            + "native drag and drop started by automated input (Mozilla bug 1515879): no drop or dragend reaches the page "
+            + "and it may stay mid-drag. Drags handled with pointer or mouse events (sliders, maps, sortable lists in "
+            + "fallback mode) work. Check the result, e.g. with browser_snapshot, before relying on it.";
+
     public Map<String, Object> drag(String source, Double fromX, Double fromY, String target, Double toX, Double toY,
                                     String tabId) {
         boolean fromElement = source != null && !source.isBlank();
@@ -1748,6 +1757,7 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
             Page p = pageFor(tabId);
             Resolved from = fromElement ? resolve(p, source) : null;
             Resolved to = toElement ? resolve(p, target) : null;
+            boolean nativeDrag = from != null && Boolean.TRUE.equals(RealInput.onElement(from.locator(), HTML5_DRAGGABLE, null));
             HumanMotion.Point[] points = drag.drag(p,
                     from != null ? RealDrag.End.of(from.locator()) : RealDrag.End.at(fromX, fromY),
                     to != null ? RealDrag.End.of(to.locator()) : RealDrag.End.at(toX, toY));
@@ -1759,6 +1769,7 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
             result.put("fromY", (long) points[0].y());
             result.put("toX", (long) points[1].x());
             result.put("toY", (long) points[1].y());
+            if (nativeDrag) result.put("warning", HTML5_DRAG_LIMIT);
             return result;
         });
     }

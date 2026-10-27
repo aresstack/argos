@@ -66,8 +66,15 @@ class PointerRegressionBrowserTest {
 
             // 2. Hover scrolls a far element with a fractional centre into view and ends on top of it.
             browser.hover("role=button name=\"Weit unten\"", null);
+            // Read-only diagnosis in the message: where the pointer is, what is under it, and which chain holds :hover.
             assertEquals(Boolean.TRUE, browser.evaluate(
-                    "() => scrollY > 0 && document.getElementById('far').matches(':hover')"));
+                    "() => scrollY > 0 && document.getElementById('far').matches(':hover')"), () -> String.valueOf(
+                    browser.evaluate("() => { const r = document.getElementById('far').getBoundingClientRect();"
+                            + " const [x, y] = lastMove.split(',').map(Number);"
+                            + " const hit = document.elementFromPoint(x, y);"
+                            + " return 'scrollY=' + scrollY + ' far=' + r.top + '..' + r.bottom + ' lastMove=' + lastMove"
+                            + " + ' hit=' + (hit && (hit.id || hit.tagName))"
+                            + " + ' hovered=' + [...document.querySelectorAll(':hover')].map(e => e.id || e.tagName).join('>'); }")));
 
             // 3. A link the page cannot scroll higher than the bottom edge is still clicked.
             browser.clickTarget("role=link name=\"Ganz unten\"");

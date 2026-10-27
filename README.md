@@ -339,6 +339,14 @@ Im GitHub Release liegen die **direkt ausführbare `argos.jar`** und optional `a
 .\gradlew.bat test --tests com.aresstack.argos.CamoufoxNetworkBoundaryTest -PtestCamoufox=true
 ```
 
+Alle Camoufox-Browsertests auf einmal (auch die Eingabetests `FieldSelectionBrowserTest`, `KeyboardShortcutBrowserTest`, `HumanInputBrowserTest`, die ohne `-PtestHumanBrowser` automatisch `ARGOS_CAMOUFOX_EXECUTABLE` verwenden). `-PtestCamoufox` ohne Wert gilt ebenfalls als eingeschaltet:
+
+```powershell
+$env:ARGOS_CAMOUFOX_EXECUTABLE = "C:\Pfad\zu\camoufox.exe"
+.\gradlew.bat test -PtestCamoufox=true `
+  --tests "*BrowserTest*" --tests "*Camoufox*"
+```
+
 `CamoufoxNetworkBoundaryTest` prüft mit dem echten Camoufox, dass ein Redirect auf `127.0.0.2`, ein `<img>` ins LAN und WebRTC-UDP zu einem lokalen STUN-Port abgewiesen werden, während die freigegebene Testseite normal lädt. DNS-Rebinding prüft `Socks5ProxyTest` mit einem steuerbaren Resolver.
 
 Der zweite Befehl verwendet eine **separate temporäre Headless-Camoufox-Instanz** und einen lokalen HTTP-Testserver. Er überprüft Navigation, Seitentext, DOM-Inspektion, Eingaben, Klicks, JavaScript, Screenshots und Netzwerkereignisse sowie mit den Fixtures aus `src/test/resources/fixtures` alle Dokumenttypen (RSS, XML, JSON, Text, PDF) und die Seitenbereitschaft einer verzögert rendernden Single-Page-Anwendung. Die Dokumenttyp- und Bereitschaftslogik ist zusätzlich ohne Browser gegen einen lokalen HTTP-Testserver getestet und läuft in der CI. Bereits laufende GPT-Desktop-Sitzungen werden nicht verwendet oder beendet.

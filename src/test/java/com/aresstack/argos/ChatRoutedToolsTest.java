@@ -26,17 +26,43 @@ class ChatRoutedToolsTest {
     private final List<Path> started = new ArrayList<>();
     private final AtomicInteger closed = new AtomicInteger();
 
-    /** A fake stack per profile: "whoami" answers its profile directory, "set"/"get" keep per-profile state. */
+    /**
+     * A fake browser per profile: "whoami" answers profile and user context, "set"/"get" keep per-context
+     * cookies (and write them to the context's cookie file, as CamoufoxBrowser does).
+     */
     private ChatRoutedTools.Workspace fake(Path profile) {
         started.add(profile);
-        Map<String, String> state = new HashMap<>();
+        Map<String, String> cookies = new HashMap<>();
+        String[] active = {"start"};
+        Path[] file = {null};
         return new ChatRoutedTools.Workspace(List.of(
-                ArgosTools.textTool("whoami", "", Map.of(), List.of(), args -> profile.toString()),
+                ArgosTools.textTool("whoami", "", Map.of(), List.of(), args -> profile + "|" + active[0]),
                 ArgosTools.textTool("set", "", Map.of(), List.of(), args -> {
-                    state.put("cookie", (String) args.get("value"));
+                    cookies.put(active[0], (String) args.get("value"));
+                    if (file[0] != null) {
+                        try {
+                            Files.createDirectories(file[0].getParent());
+                            Files.writeString(file[0], (String) args.get("value"));
+                        } catch (java.io.IOException e) {
+                            throw new IllegalStateException(e);
+                        }
+                    }
                     return "ok";
                 }),
-                ArgosTools.textTool("get", "", Map.of(), List.of(), args -> String.valueOf(state.get("cookie")))),
+                ArgosTools.textTool("get", "", Map.of(), List.of(), args -> {
+                    if (!cookies.containsKey(active[0]) && file[0] != null && Files.isRegularFile(file[0])) {
+                        try {
+                            cookies.put(active[0], Files.readString(file[0]));
+                        } catch (java.io.IOException e) {
+                            throw new IllegalStateException(e);
+                        }
+                    }
+                    return String.valueOf(cookies.get(active[0]));
+                })),
+                (id, cookieFile) -> {
+                    active[0] = id;
+                    file[0] = cookieFile;
+                },
                 closed::incrementAndGet);
     }
 
@@ -72,6 +98,7 @@ class ChatRoutedToolsTest {
         assertEquals(a1, a2);
         assertNotEquals(a1, b);
         assertTrue(a1.startsWith(root.toString()));
+        assertTrue(a1.endsWith("profile|start"));
         assertFalse(a1.contains("conv-A"), "the conversation id must not appear in the path");
         call(tools, "set", "conv-A", Map.of("value", "login-A"));
         assertEquals("null", text(call(tools, "get", "conv-B", Map.of())));
@@ -106,9 +133,11 @@ class ChatRoutedToolsTest {
         assertEquals("Created and activated context context-2.", text(call(tools, "browser_context_new", "conv-A", Map.of())));
         String second = text(call(tools, "whoami", "conv-A", Map.of()));
         assertNotEquals(start, second);
+        assertEquals(start.replace("|start", "|context-2"), second, "same browser profile, other user context");
         assertEquals("null", text(call(tools, "get", "conv-A", Map.of())));
+        call(tools, "set", "conv-A", Map.of("value", "second-login"));
         assertEquals("  start\n* context-2 (active)", text(call(tools, "browser_contexts", "conv-A", Map.of())));
-        assertEquals("start", Path.of(text(call(tools, "whoami", "conv-B", Map.of()))).getFileName().toString());
+        assertTrue(text(call(tools, "whoami", "conv-B", Map.of())).endsWith("|start"));
 
         // Another conversation neither sees nor selects conv-A's context-2.
         assertEquals("* start (active)", text(call(tools, "browser_contexts", "conv-B", Map.of())));
@@ -118,6 +147,7 @@ class ChatRoutedToolsTest {
         // A restarted server finds the same contexts and the same active one.
         Map<String, SyncToolSpecification> restarted = tools(routed(4));
         assertEquals(second, text(call(restarted, "whoami", "conv-A", Map.of())));
+        assertEquals("second-login", text(call(restarted, "get", "conv-A", Map.of())));
         call(restarted, "browser_context_select", "conv-A", Map.of("context", "start"));
         assertEquals(start, text(call(restarted, "whoami", "conv-A", Map.of())));
     }

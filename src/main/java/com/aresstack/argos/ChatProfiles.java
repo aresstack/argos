@@ -23,9 +23,12 @@ import java.util.regex.Pattern;
  * {@code ResearchBotSessionDirectory}, a missing identity is an error: there is no shared default profile and
  * no fallback to another conversation.
  * <p>
- * Layout: {@code <root>/<chat key>/<context id>/} is one Camoufox profile directory; {@code <chat key>} is a
- * truncated SHA-256 of the conversation id, so neither the id nor anything derived from model input becomes a
- * path. {@code <root>/<chat key>/contexts.properties} lists the conversation's contexts and the active one.
+ * Like AskAI's research plugin ({@code ResearchAgentSessionFactory}: one workspace directory per chat, handed to
+ * the browser at start), each conversation owns one directory, {@code <root>/<chat key>/profile}, which is the
+ * Camoufox profile its browser starts with; {@code <chat key>} is a truncated SHA-256 of the conversation id, so
+ * neither the id nor anything derived from model input becomes a path. Additional user contexts are WebDriver
+ * BiDi user contexts inside that browser; {@code <root>/<chat key>/contexts.properties} lists them and the
+ * active one, and {@code <root>/<chat key>/contexts/<id>.cookies.json} keeps each one's cookies across restarts.
  */
 public final class ChatProfiles {
     public static final String SESSION_META_KEY = "openai/session";
@@ -47,8 +50,15 @@ public final class ChatProfiles {
         }
     }
 
-    /** One context of a conversation: its id, its profile directory and whether it is the active one. */
-    public record Context(String id, Path profile, boolean active) { }
+    /** One context of a conversation: its id, where its cookies are kept (null for start), whether active. */
+    public record Context(String id, Path cookies, boolean active) { }
+
+    /** The conversation's browser profile directory, handed to Camoufox at start. */
+    public Path profile(Chat chat) throws IOException {
+        Path profile = root.resolve(chat.key()).resolve("profile");
+        Files.createDirectories(profile);
+        return profile;
+    }
 
     /** Thrown when a call does not carry the conversation id; the message is safe for the model. */
     public static final class MissingChatIdentity extends IllegalStateException {
@@ -99,7 +109,7 @@ public final class ChatProfiles {
         return contexts;
     }
 
-    /** A new, empty context with its own profile directory; it becomes active at once. */
+    /** A new, empty user context; it becomes active at once. */
     public synchronized Context create(Chat chat) throws IOException {
         active(chat);
         State state = load(chat);
@@ -130,9 +140,9 @@ public final class ChatProfiles {
     }
 
     private Context context(Chat chat, State state, String id) throws IOException {
-        Path profile = root.resolve(chat.key()).resolve(id);
-        Files.createDirectories(profile);
-        return new Context(id, profile, id.equals(state.active));
+        Path cookies = START_CONTEXT.equals(id) ? null
+                : root.resolve(chat.key()).resolve("contexts").resolve(id + ".cookies.json");
+        return new Context(id, cookies, id.equals(state.active));
     }
 
     private static final class State {

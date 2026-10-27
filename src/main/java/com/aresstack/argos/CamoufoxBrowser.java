@@ -2145,6 +2145,14 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
                 tabId == null || tabId.isBlank() ? null : pageFor(tabId)));
     }
 
+    /**
+     * The durable consumer of response bodies (the chat's Search History): reuses this browser's protocol network
+     * events, reads only bodies the browser already received, never issues a request. Null switches it off.
+     */
+    public void contentSink(com.aresstack.argos.network.ResponseContentSink sink) {
+        network.contentSink(sink);
+    }
+
     public Map<String, Object> clearNetwork() {
         return onBrowser(() -> {
             network.clear();

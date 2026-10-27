@@ -19,7 +19,6 @@ import java.util.Set;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
-import static com.aresstack.argos.history.HistoryFixtures.html;
 import static com.aresstack.argos.history.HistoryFixtures.page;
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -41,13 +40,16 @@ class SearchHistoryExporterTest {
                 new HistoryEvent.Result(1, "Example", "https://example.com/", "snippet one"),
                 new HistoryEvent.Result(2, "Not opened", "https://unopened.example/", null)));
         history.recordPage(page("https://example.com/", "Example: Home/../etc", "Home text",
-                "https://example.com/docs"), "start", "web_open", true, html("<html><body>home</body></html>"));
+                "https://example.com/docs"), "start", "web_open", true);
+        // Explicit browser_archive_html results; no automatic archive exists.
+        history.archiveHtml(page("https://example.com/", "Example: Home/../etc", "Home text",
+                "https://example.com/docs"), "start", "<html><body>home</body></html>");
         history.recordPage(page("https://example.com/docs", "Example: Home/../etc", "Docs text"), "context-2",
-                "web_open", true, null);
-        history.recordPage(page("https://example.com/", "Example: Home/../etc", "Home text"), "start", "web_back",
-                true, null);
-        history.recordPage(page("https://openai.com/", "", "OpenAI"), "start", "web_open", true,
-                html("<html><body>openai</body></html>"));
+                "web_open", true);
+        history.recordPage(page("https://example.com/", "Example: Home/../etc", "Home text",
+                "https://example.com/docs"), "start", "web_back", true);
+        history.recordPage(page("https://openai.com/", "", "OpenAI"), "start", "web_open", true);
+        history.archiveHtml(page("https://openai.com/", "", "OpenAI"), "start", "<html><body>openai</body></html>");
     }
 
     @Test void txtListsVisitedUrlsInOrderOptionallyUnique() throws Exception {

@@ -11,7 +11,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Stream;
 
-import static com.aresstack.argos.history.HistoryFixtures.html;
 import static com.aresstack.argos.history.HistoryFixtures.page;
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -33,7 +32,7 @@ class SearchHistoryTest {
         first.recordSearch("camoufox license", "duckduckgo.com", "start",
                 List.of(new HistoryEvent.Result(1, "Camoufox", "https://camoufox.com/", "Anti-detect browser")));
         first.recordPage(page("https://camoufox.com/", "Camoufox", "Camoufox is MPL licensed."), "context-2",
-                "web_open", true, null);
+                "web_open", true);
 
         SearchHistoryRepository reopened = new SearchHistoryRepository(historyOf("a"));
         assertEquals(2, reopened.lastSeq());
@@ -63,7 +62,7 @@ class SearchHistoryTest {
     @Test void storedPageTextIsFoundAndTheIndexIsRebuiltFromCanonicalData() throws Exception {
         SearchHistory history = new SearchHistory(historyOf("a"));
         history.recordPage(page("https://example.org/fox", "Foxes", "The quick brown fox jumps over the dog."),
-                "start", "web_open", true, null);
+                "start", "web_open", true);
         history.recordSearch("zebra migration", null, "start", List.of());
 
         List<SearchHistory.Found> found = history.search("brown fox", 10);
@@ -95,10 +94,10 @@ class SearchHistoryTest {
     @Test void chatsAreStrictlySeparatedButContextsOfOneChatShareTheHistory() throws Exception {
         SearchHistory chatA = new SearchHistory(historyOf("a"));
         SearchHistory chatB = new SearchHistory(historyOf("b"));
-        chatA.recordPage(page("https://a.example/", "Alpha", "secret alpha research"), "start", "web_open", true, null);
+        chatA.recordPage(page("https://a.example/", "Alpha", "secret alpha research"), "start", "web_open", true);
         chatA.recordPage(page("https://a2.example/", "Alpha two", "alpha from another context"), "context-2",
-                "web_open", true, null);
-        chatB.recordPage(page("https://b.example/", "Beta", "beta research"), "start", "web_open", true, null);
+                "web_open", true);
+        chatB.recordPage(page("https://b.example/", "Beta", "beta research"), "start", "web_open", true);
 
         List<SearchHistory.Found> inA = chatA.search("alpha", 10);
         assertEquals(2, inA.size(), "both user contexts of chat A share one index");
@@ -110,53 +109,50 @@ class SearchHistoryTest {
 
     @Test void repeatedReadsReuseTheSnapshotAndChangedContentCreatesANewOne() throws Exception {
         SearchHistory history = new SearchHistory(historyOf("a"));
-        int[] collected = {0};
-        SearchHistory.HtmlArchive archive = () -> {
-            collected[0]++;
-            return java.util.Optional.of("<html><body>v1</body></html>");
-        };
         SearchHistory.Recorded first = history.recordPage(page("https://x.example/", "X", "version one"), "start",
-                "web_open", true, archive);
+                "web_open", true);
         assertTrue(first.newSnapshot());
-        assertTrue(first.htmlArchived());
-        assertNull(history.recordPage(page("https://x.example/", "X", "version one"), "start", "web_read", false,
-                archive).visit(), "web_read part 2 of the same page is no new visit");
+        assertFalse(first.htmlArchived(), "recording a page never archives HTML");
+        assertNull(history.recordPage(page("https://x.example/", "X", "version one"), "start", "web_read", false).visit(), "web_read part 2 of the same page is no new visit");
         SearchHistory.Recorded reopened = history.recordPage(page("https://x.example/", "X", "version one"), "start",
-                "web_open", true, archive);
+                "web_open", true);
         assertNotNull(reopened.visit(), "opening again is a new visit");
         assertFalse(reopened.newSnapshot(), "... with the same snapshot");
         assertEquals(first.visit().snapshotId(), reopened.visit().snapshotId());
-        assertEquals(1, collected[0], "the archive of an existing snapshot is not collected again");
 
         SearchHistory.Recorded changed = history.recordPage(page("https://x.example/", "X", "version two"), "start",
-                "web_read", false, html("<html><body>v2</body></html>"));
+                "web_read", false);
         assertTrue(changed.newSnapshot(), "changed content is a new snapshot");
         assertNotEquals(first.visit().snapshotId(), changed.visit().snapshotId());
         try (Stream<Path> files = Files.list(historyOf("a").resolve("pages"))) {
-            assertEquals(4, files.count(), "two snapshots: json + html each, no resource folders");
+            assertEquals(2, files.count(), "two snapshots, json only: no automatic HTML archive");
         }
         assertEquals(SearchHistoryRepository.contentHash("X", "version  one "),
                 SearchHistoryRepository.contentHash("X", "version one"), "hash ignores whitespace, has no time");
     }
 
-    @Test void aFailingArchiveKeepsTheTextRecordAndSaysWhy() throws Exception {
+    @Test void anExplicitArchiveBelongsToTheSnapshotAndRecordsNoSecondVisit() throws Exception {
         SearchHistory history = new SearchHistory(historyOf("a"));
         SearchHistory.Recorded recorded = history.recordPage(page("https://x.example/", "X", "text"), "start",
-                "web_open", true, () -> {
-                    throw new IllegalStateException("page closed");
-                });
-        assertNotNull(recorded.visit());
-        assertFalse(recorded.htmlArchived());
-        StoredPage stored = history.repository().page(recorded.visit().snapshotId()).orElseThrow();
-        assertEquals("text", stored.content());
-        assertTrue(stored.htmlNote().contains("IllegalStateException"), stored.htmlNote());
+                "web_open", true);
+        StoredPage before = history.repository().page(recorded.visit().snapshotId()).orElseThrow();
+        assertEquals(SearchHistory.NO_ARCHIVE, before.htmlNote());
+        SearchHistory.Archived archived = history.archiveHtml(page("https://x.example/", "X", "text"), "start",
+                "<html><body><script>x()</script><input name=pw value=geheim>archived</body></html>");
+        assertEquals(recorded.visit().snapshotId(), archived.snapshotId());
+        assertFalse(archived.html().contains("<script") || archived.html().contains("geheim"), archived.html());
+        assertTrue(history.repository().hasHtml(archived.snapshotId()));
+        assertNull(history.repository().page(archived.snapshotId()).orElseThrow().htmlNote());
+        List<HistoryEvent> events = new java.util.ArrayList<>();
+        history.repository().forEach(0, events::add);
+        assertEquals(1, events.size(), "archiving the recorded page adds no visit");
     }
 
     @Test void secretUrlParametersAreRedacted() throws Exception {
         SearchHistory history = new SearchHistory(historyOf("a"));
         SearchHistory.Recorded recorded = history.recordPage(new SearchHistory.PageRead(
                 "https://user:pw@x.example/cb?code=abc123&page=2#access_token=tok", null, "X", 200, "t",
-                List.of("https://x.example/next?token=zzz")), "start", "web_open", true, null);
+                List.of("https://x.example/next?token=zzz")), "start", "web_open", true);
         String url = recorded.visit().url();
         assertFalse(url.contains("abc123") || url.contains("pw@") || url.contains("tok"), url);
         assertTrue(url.contains("page=2"), url);

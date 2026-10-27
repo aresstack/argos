@@ -27,8 +27,11 @@ import java.util.zip.ZipOutputStream;
 
 /**
  * Exports one chat's history from its canonical data (never from the Lucene index) into {@code history/exports/}:
- * a URL list ({@code .txt}), every event with readable content ({@code .jsonl}) and the single-file HTML archive
- * ({@code .zip}). Every export streams the event log; only small per-snapshot metadata is held in memory. File names
+ * a URL list ({@code .txt}, visited pages only, never network resources), every event with readable content
+ * ({@code .jsonl}, text bodies of captured responses inline up to {@link #MAX_JSONL_BODY_BYTES}, binary bodies as
+ * reference only) and the archive ({@code .zip}: one HTML file per snapshot, explicit single-file archive or a marked
+ * text fallback, plus {@code resources/} with every captured body and {@code resources/manifest.json}). An export
+ * never runs the HTML collector and never touches the browser. Every export streams the event log; only small per-snapshot metadata is held in memory. File names
  * are chosen here, never taken from model arguments.
  */
 public final class SearchHistoryExporter {
@@ -40,6 +43,9 @@ public final class SearchHistoryExporter {
             "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8", "com9",
             "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9");
     private static final ObjectMapper JSON = new ObjectMapper();
+
+    /** Text bodies up to this size are written into the JSONL record; larger ones and binaries as reference. */
+    static final long MAX_JSONL_BODY_BYTES = 1024 * 1024;
 
     private final SearchHistoryRepository repository;
 
@@ -107,6 +113,9 @@ public final class SearchHistoryExporter {
                 case HistoryEvent.Search search -> {
                     if (includeResults) search.results().forEach(result -> urls.add(result.url()));
                 }
+                case HistoryEvent.NetworkResource ignored -> {
+                    // One page loads hundreds of assets: resource URLs never enter the URL list.
+                }
             }
             for (String url : urls) {
                 if (url == null || url.isBlank() || (unique && !seen.add(url))) continue;
@@ -163,6 +172,32 @@ public final class SearchHistoryExporter {
                     json.writeBooleanField("htmlArchived", repository.hasHtml(visit.snapshotId()));
                     json.writeStringField("source", visit.source());
                 }
+                case HistoryEvent.NetworkResource observed -> {
+                    StoredResource resource = repository.resource(observed.resourceId()).orElse(null);
+                    json.writeStringField("type", "network_resource");
+                    json.writeStringField("url", observed.url());
+                    json.writeStringField("pageUrl", observed.pageUrl());
+                    json.writeStringField("capturedAt", observed.at().toString());
+                    json.writeNumberField("status", observed.status());
+                    json.writeStringField("mimeType", observed.mimeType());
+                    json.writeStringField("category", observed.category());
+                    json.writeStringField("resourceType", observed.resourceType());
+                    json.writeStringField("contextId", observed.contextId());
+                    json.writeStringField("resourceId", observed.resourceId());
+                    json.writeStringField("contentHash", observed.contentHash());
+                    json.writeNumberField("size", observed.size());
+                    json.writeBooleanField("complete", observed.complete());
+                    json.writeBooleanField("masked", observed.masked());
+                    if (observed.contentRange() != null) json.writeStringField("contentRange", observed.contentRange());
+                    // ZIP path of the body; the JSONL never embeds binary data (no base64).
+                    json.writeStringField("bodyRef", "resources/" + resourceFileName(observed.resourceId(),
+                            observed.mimeType()));
+                    if (resource != null && resource.textual() && resource.size() <= MAX_JSONL_BODY_BYTES
+                            && Files.isRegularFile(repository.resourceBody(resource.resourceId()))) {
+                        json.writeStringField("body", Files.readString(repository.resourceBody(
+                                resource.resourceId()), StandardCharsets.UTF_8));
+                    }
+                }
             }
             json.writeEndObject();
             json.writeRaw('\n');
@@ -182,7 +217,17 @@ public final class SearchHistoryExporter {
         ZipOutputStream zip = new ZipOutputStream(out, StandardCharsets.UTF_8);
         Map<String, Row> rows = new LinkedHashMap<>();
         Set<String> names = new HashSet<>(Set.of("index.html"));
+        Map<String, String> written = new LinkedHashMap<>();
+        // The manifest holds metadata only (one small record per observation), the bodies stream into the ZIP.
+        java.io.ByteArrayOutputStream manifestBytes = new java.io.ByteArrayOutputStream();
+        JsonGenerator manifest = JSON.getFactory().createGenerator(manifestBytes, JsonEncoding.UTF8).useDefaultPrettyPrinter();
+        manifest.writeStartArray();
+        JsonGenerator entries = manifest;
         repository.forEach(0, event -> {
+            if (event instanceof HistoryEvent.NetworkResource observed) {
+                writeResource(zip, written, entries, observed);
+                return;
+            }
             if (!(event instanceof HistoryEvent.PageVisit visit)) return;
             Row known = rows.get(visit.snapshotId());
             if (known != null) {
@@ -207,8 +252,73 @@ public final class SearchHistoryExporter {
         zip.putNextEntry(new ZipEntry("index.html"));
         zip.write(indexHtml(rows.values()).getBytes(StandardCharsets.UTF_8));
         zip.closeEntry();
+        manifest.writeEndArray();
+        manifest.flush();
+        if (!written.isEmpty()) {
+            zip.putNextEntry(new ZipEntry("resources/manifest.json"));
+            manifestBytes.writeTo(zip);
+            zip.closeEntry();
+        }
         zip.finish();
         return rows.size();
+    }
+
+    /**
+     * One captured response: its body once per resource id under {@code resources/} (observed bytes, not a page
+     * reconstruction) and one manifest record per observation.
+     */
+    private void writeResource(ZipOutputStream zip, Map<String, String> written, JsonGenerator manifest,
+                               HistoryEvent.NetworkResource observed) throws IOException {
+        String name = written.get(observed.resourceId());
+        if (name == null && repository.hasResource(observed.resourceId())) {
+            name = "resources/" + resourceFileName(observed.resourceId(), observed.mimeType());
+            zip.putNextEntry(new ZipEntry(name));
+            Files.copy(repository.resourceBody(observed.resourceId()), zip);
+            zip.closeEntry();
+            written.put(observed.resourceId(), name);
+        }
+        if (name == null) return; // body missing from the canonical data: no manifest row pointing at nothing
+        manifest.writeStartObject();
+        manifest.writeStringField("file", name);
+        manifest.writeStringField("url", observed.url());
+        manifest.writeStringField("pageUrl", observed.pageUrl());
+        manifest.writeStringField("mimeType", observed.mimeType());
+        manifest.writeStringField("category", observed.category());
+        manifest.writeStringField("resourceType", observed.resourceType());
+        manifest.writeNumberField("status", observed.status());
+        manifest.writeNumberField("size", observed.size());
+        manifest.writeStringField("sha256", observed.contentHash());
+        manifest.writeStringField("capturedAt", observed.at().toString());
+        manifest.writeBooleanField("complete", observed.complete());
+        manifest.writeBooleanField("masked", observed.masked());
+        if (observed.contentRange() != null) manifest.writeStringField("contentRange", observed.contentRange());
+        manifest.writeEndObject();
+    }
+
+    /** {@code <resourceId>.<ext>} from the MIME type; the id is validated hex, so no path can come from it. */
+    static String resourceFileName(String resourceId, String mimeType) {
+        String mime = mimeType == null ? "" : mimeType;
+        String extension = switch (mime) {
+            case "text/html" -> "html";
+            case "application/xhtml+xml" -> "xhtml";
+            case "application/json" -> "json";
+            case "application/xml", "text/xml" -> "xml";
+            case "text/plain" -> "txt";
+            case "text/markdown", "text/x-markdown" -> "md";
+            case "text/csv" -> "csv";
+            case "text/css" -> "css";
+            case "application/pdf" -> "pdf";
+            case "image/png" -> "png";
+            case "image/jpeg" -> "jpg";
+            case "image/gif" -> "gif";
+            case "image/webp" -> "webp";
+            case "image/svg+xml" -> "svg";
+            case "font/woff2" -> "woff2";
+            case "font/woff" -> "woff";
+            default -> mime.endsWith("+json") ? "json" : mime.endsWith("+xml") ? "xml"
+                    : mime.contains("javascript") || mime.contains("ecmascript") ? "js" : "bin";
+        };
+        return resourceId + "." + extension;
     }
 
     /** As cam-tool's PageArchiver::sanitizeFileName plus a safe character set: never a path from a title. */

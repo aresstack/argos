@@ -88,7 +88,7 @@ public final class ArgosTools {
         if (research != null) tools.addAll(research.specifications());
         // Search History of the calling chat (per-chat profiles only); the legacy set stays unchanged.
         if (history != null && profile != ToolProfile.LEGACY) {
-            tools.addAll(new SearchHistoryTools(history.history()).specifications());
+            tools.addAll(new SearchHistoryTools(history.history(), history::archiveHtml).specifications());
         }
         return List.copyOf(tools);
     }

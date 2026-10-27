@@ -99,7 +99,8 @@ public final class ArgosApplication {
 
     static final String SINGLE_PROFILE_HISTORY = "Search History is disabled: ARGOS_PROFILE_ISOLATION=single has no "
             + "reliable chat key, and Argos keeps no global history. Start Argos with ARGOS_PROFILE_ISOLATION=chat "
-            + "(the default) to use search_history and search_history_export.";
+            + "(the default) to use search_history, search_history_export, search_history_capture_settings and "
+            + "browser_archive_html.";
     static final String HISTORY_SWITCHED_OFF = "Search History is switched off on this Argos server "
             + "(ARGOS_SEARCH_HISTORY=false).";
 
@@ -115,7 +116,8 @@ public final class ArgosApplication {
         UrlPolicy urlPolicy = UrlPolicy.from(config.network());
         ResearchDocuments documents = new ResearchDocuments(browser, new DocumentStore(), urlPolicy);
         SearchHistoryCapture history = historyDirectory == null ? null : new SearchHistoryCapture(
-                new SearchHistory(historyDirectory), new SearchHistoryCapture.LivePages() {
+                new SearchHistory(historyDirectory, historySettings.captureDefaults()),
+                new SearchHistoryCapture.LivePages() {
                     @Override
                     public com.aresstack.argos.web.PageCapture capture(String tabId) {
                         return browser.capturePage(tabId);
@@ -125,7 +127,9 @@ public final class ArgosApplication {
                     public Object evaluate(String function, String tabId) {
                         return browser.evaluate(function, tabId);
                     }
-                }, historySettings.archiveHtml(), historySettings.collectorTimeoutMillis());
+                }, historySettings.collectorTimeoutMillis());
+        // Received response bodies of this chat's browser go into this chat's history only.
+        if (history != null) browser.contentSink(history.networkContent());
         com.aresstack.argos.web.WebSearchPort search = new BrowserWebSearch(browser);
         if (history != null) search = history.capturingSearch(search);
         List<SyncToolSpecification> tools = new ArgosTools(browser,

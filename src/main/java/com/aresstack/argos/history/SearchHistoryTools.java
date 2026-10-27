@@ -15,9 +15,26 @@ import java.util.Map;
  */
 public final class SearchHistoryTools {
     private final SearchHistory history;
+    /** Non-null when this server keeps no history: both tools stay listed and answer with this message. */
+    private final String disabledReason;
 
     public SearchHistoryTools(SearchHistory history) {
         this.history = history;
+        this.disabledReason = null;
+    }
+
+    private SearchHistoryTools(String disabledReason) {
+        this.history = null;
+        this.disabledReason = disabledReason;
+    }
+
+    /**
+     * The same two tools for a server without Search History (ARGOS_PROFILE_ISOLATION=single or
+     * ARGOS_SEARCH_HISTORY=false), so clients such as ChatGPT always see a stable tool list; every call answers with
+     * {@code reason} as an error and touches no data.
+     */
+    public static SearchHistoryTools disabled(String reason) {
+        return new SearchHistoryTools(reason);
     }
 
     public List<SyncToolSpecification> specifications() {
@@ -41,6 +58,7 @@ public final class SearchHistoryTools {
     }
 
     private String search(Map<String, Object> arguments) throws Exception {
+        if (disabledReason != null) throw new IllegalStateException(disabledReason);
         Object query = arguments.get("query");
         if (!(query instanceof String text) || text.isBlank()) throw new IllegalArgumentException("Empty query.");
         int limit = arguments.get("limit") instanceof Number n ? n.intValue()
@@ -64,6 +82,7 @@ public final class SearchHistoryTools {
     }
 
     private String export(Map<String, Object> arguments) throws Exception {
+        if (disabledReason != null) throw new IllegalStateException(disabledReason);
         Object format = arguments.get("format");
         SearchHistoryExporter.Format chosen = SearchHistoryExporter.format(format instanceof String s ? s : null);
         SearchHistoryExporter.Export export = new SearchHistoryExporter(history.repository())

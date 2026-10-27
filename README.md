@@ -257,9 +257,9 @@ Welche Werkzeuge Argos veröffentlicht, bestimmt `ARGOS_TOOL_PROFILE` (Property 
 
 | Profil | Werkzeuge | Gedacht für |
 | --- | --- | --- |
-| `legacy` (Standard) | die neun `browser_*`-Werkzeuge oben | bestehende Clients, unverändert |
+| `legacy` | die neun `browser_*`-Werkzeuge oben | bestehende Clients, unverändert |
 | `compact` | nur `web_search`, `web_open`, `web_read`, `web_find`, `web_links`, `web_follow`, `web_back` | kleine lokale Modelle (wie in AskAI erprobt) |
-| `expert` | `web_*`, `browser_*`, Tabs/Historie/Bedienelemente/Extraktion, `browser_wait`, Dokumente und Batches, Netzwerkanalyse | leistungsfähige Modelle |
+| `expert` (Standard) | `web_*`, `browser_*`, Tabs/Historie/Bedienelemente/Extraktion, Maus, Tastatur, Drag-and-drop, `browser_wait`, Dokumente und Batches, Netzwerkanalyse | leistungsfähige Modelle |
 
 Mit `ARGOS_RESEARCH=true` kommen in jedem Profil `web_research` und `web_research_stop` hinzu. `web_open`/`web_read` lesen Feeds, XML, JSON und Text wie `browser_snapshot` aus dem Antwort-Body und melden Binärdokumente mit Hinweis auf die Dokumentwerkzeuge. Antwortet der Server für das Hauptdokument mit Status 400 oder höher, steht in `web_open`, `web_follow`, `web_read` und `web_back` nach `TITLE` die Zeile `HTTP error: 500 Internal Server Error — the requested content may not be available on this page.` (Standard-Reason-Phrase nach RFC 9110, bei unbekanntem Code nur die Zahl): Kleine Modelle lasen „TITLE: 500 Internal Server Error" samt Servertext sonst als Inhalt und blieben an der Adresse hängen, statt den nächsten Treffer zu öffnen (Phase 7, `broken-link`). Mehr geschieht nicht: keine automatische Navigation, keine Bewertung des Inhalts. Der Status stammt aus der Navigationsantwort, die Argos ohnehin für Dokumenttyp und Bereitschaft aus den Protokollereignissen liest; ohne bekannte Antwort entfällt die Zeile (etwa wenn die Seite ihre Adresse nach dem Laden per Skript geändert hat; `web_back` lädt das Dokument neu, weil Argos den Back-Forward-Cache abschaltet, und kennt den Status). Es wird dafür kein Seitenskript ausgeführt.
 

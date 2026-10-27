@@ -20,7 +20,7 @@ public record ArgosConfig(
         boolean networkBodies) {
 
     public ArgosConfig {
-        toolProfile = toolProfile == null ? ToolProfile.LEGACY : toolProfile;
+        toolProfile = toolProfile == null ? ToolProfile.EXPERT : toolProfile;
         if (readiness == null) readiness = ReadinessPolicy.balanced();
         network = network == null ? NetworkSettings.strict() : network;
     }
@@ -29,7 +29,7 @@ public record ArgosConfig(
     public ArgosConfig(String host, int port, Path executable, Path launchOptions,
                        Path profile, boolean headless) {
         this(host, port, executable, launchOptions, profile, headless,
-                null, "central-oauth", null, "argos", ToolProfile.LEGACY, ReadinessPolicy.balanced(),
+                null, "central-oauth", null, "argos", ToolProfile.EXPERT, ReadinessPolicy.balanced(),
                 NetworkSettings.strict(), false);
     }
 
@@ -37,7 +37,7 @@ public record ArgosConfig(
                        boolean headless, String publicOrigin, String securityMode,
                        String centralOauthIssuer, String requiredScope) {
         this(host, port, executable, launchOptions, profile, headless, publicOrigin, securityMode,
-                centralOauthIssuer, requiredScope, ToolProfile.LEGACY, ReadinessPolicy.balanced(),
+                centralOauthIssuer, requiredScope, ToolProfile.EXPERT, ReadinessPolicy.balanced(),
                 NetworkSettings.strict(), false);
     }
 

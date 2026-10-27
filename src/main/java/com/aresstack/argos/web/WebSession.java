@@ -50,6 +50,16 @@ public final class WebSession {
 
     private enum Listing { RESULTS, LINKS }
 
+    /**
+     * Notified about every page the web_* tools read, after the URL policy accepted it and while the browser
+     * still shows it (the Search History records and archives it there). {@code newVisit} is false when the shown
+     * page is only read again (web_read, web_find, web_links). A failing listener never fails the tool.
+     */
+    @FunctionalInterface
+    public interface PageListener {
+        void pageRead(PageCapture capture, String requestedUrl, boolean newVisit, String tool);
+    }
+
     private final BrowserPagePort browser;
     private final UrlPolicy policy;
     private final WebSearchPort search;
@@ -65,6 +75,7 @@ public final class WebSession {
     private PageCapture page;
     /** Where the browser stood after the last web_search: the provider's page, which is not adopted. */
     private String searchPage = "";
+    private volatile PageListener pageListener;
 
     public WebSession(BrowserPagePort browser, UrlPolicy policy, WebSearchPort search) {
         this(browser, policy, search, DEFAULT_PART_CHARACTERS, DEFAULT_MAX_LINKS);
@@ -78,6 +89,11 @@ public final class WebSession {
         this.partCharacters = partCharacters;
         this.maxLinks = maxLinks;
         this.links = new LinkRegistry(maxLinks);
+    }
+
+    /** Registers the listener for read pages (at most one; null removes it). */
+    public void onPageRead(PageListener listener) {
+        this.pageListener = listener;
     }
 
     /** The search backend, shared with the optional research orchestration. */
@@ -127,12 +143,14 @@ public final class WebSession {
         markResultAttempted(requestedUrl);
         String referer = page == null ? null : page.url();
         PageCapture capture = accept(browser.open(requestedUrl, referer));
+        notifyRead(capture, requestedUrl, true, "web_open");
         return show(capture, 1, requestedUrl);
     }
 
     public synchronized String read(int part) {
         requireShownPage();
         PageCapture capture = accept(browser.current());
+        notifyRead(capture, null, false, "web_read");
         return show(capture, part, capture.url());
     }
 
@@ -146,6 +164,7 @@ public final class WebSession {
         if (query == null || query.isBlank()) throw new IllegalArgumentException("Empty search text.");
         requireShownPage();
         PageCapture capture = accept(browser.current());
+        notifyRead(capture, null, false, "web_find");
         String text = capture.text().strip();
         String searched = DASHES.matcher(text).replaceAll("-");
         StringBuilder phrase = new StringBuilder();
@@ -218,7 +237,7 @@ public final class WebSession {
     public synchronized String links() {
         String shown = requireShownPage();
         if (page == null || !WebAddress.withoutFragment(page.url()).equals(WebAddress.withoutFragment(shown))) {
-            accept(browser.current());
+            notifyRead(accept(browser.current()), null, false, "web_links");
         }
         lastListing = Listing.LINKS;
         List<PageLink> current = links.links();
@@ -262,6 +281,7 @@ public final class WebSession {
         PageCapture previous = browser.back();
         if (previous == null) throw new IllegalStateException("No previous page in history.");
         PageCapture capture = accept(previous);
+        notifyRead(capture, null, true, "web_back");
         return show(capture, 1, capture.url());
     }
 
@@ -278,6 +298,16 @@ public final class WebSession {
         page = capture;
         links.update(capture.url(), extractor.extract(capture.html(), capture.url()));
         return capture;
+    }
+
+    private void notifyRead(PageCapture capture, String requestedUrl, boolean newVisit, String tool) {
+        PageListener listener = pageListener;
+        if (listener == null) return;
+        try {
+            listener.pageRead(capture, requestedUrl, newVisit, tool);
+        } catch (RuntimeException ignored) {
+            // Recording is a side effect; the page the agent asked for is delivered regardless.
+        }
     }
 
     /** The line that marks an error page: {@code HTTP error: 404 Not Found — the requested content ...}. */

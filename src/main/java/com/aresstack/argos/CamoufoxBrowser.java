@@ -896,6 +896,11 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
         return onBrowser(() -> captureWhenLoaded(activePage(), 0));
     }
 
+    /** Like {@link #current()} for any tab (null = current tab), without changing which tab is current. */
+    public PageCapture capturePage(String tabId) {
+        return onBrowser(() -> capture(pageFor(tabId)));
+    }
+
     private static final long LOADING_GRACE_MILLIS = 8_000;
     private static final Pattern LOADING_HINT = Pattern.compile(
             "(?iu)\\b(loading|wird geladen|lädt|bitte warten|please wait)\\b");

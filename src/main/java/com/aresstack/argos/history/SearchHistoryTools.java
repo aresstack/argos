@@ -1,0 +1,110 @@
+package com.aresstack.argos.history;
+
+import io.modelcontextprotocol.server.McpServerFeatures.SyncToolSpecification;
+import io.modelcontextprotocol.spec.McpSchema.CallToolResult;
+import io.modelcontextprotocol.spec.McpSchema.JsonSchema;
+import io.modelcontextprotocol.spec.McpSchema.Tool;
+
+import java.util.List;
+import java.util.Map;
+
+/**
+ * MCP tools of the Search History: {@code search_history} (full-text search over this chat's history) and
+ * {@code search_history_export} (txt, jsonl or zip). Both act on the calling chat only; the export's location is
+ * chosen by Argos, never by an argument.
+ */
+public final class SearchHistoryTools {
+    private final SearchHistory history;
+
+    public SearchHistoryTools(SearchHistory history) {
+        this.history = history;
+    }
+
+    public List<SyncToolSpecification> specifications() {
+        return List.of(
+                tool("search_history", "Search everything this chat searched and read before (queries, results "
+                                + "and page texts). Returns matching pages and searches, best match first. "
+                                + "Example: {\"query\": \"camoufox license\"}",
+                        Map.of("query", Map.of("type", "string", "description", "Words to find"),
+                                "limit", Map.of("type", "integer", "description", "Maximum hits (1-50, default 10)")),
+                        List.of("query"), this::search),
+                tool("search_history_export", "Export this chat's search history to a file on the Argos host: "
+                                + "txt (visited URLs, one per line), jsonl (all searches and page visits with text) "
+                                + "or zip (one self-contained HTML file per page plus index.html). "
+                                + "Example: {\"format\": \"zip\"}",
+                        Map.of("format", Map.of("type", "string", "description", "txt | jsonl | zip"),
+                                "unique", Map.of("type", "boolean", "description",
+                                        "txt only: each URL once, in order of its first visit"),
+                                "include_results", Map.of("type", "boolean", "description",
+                                        "txt only: also list the URLs of search results that were not opened")),
+                        List.of("format"), this::export));
+    }
+
+    private String search(Map<String, Object> arguments) throws Exception {
+        Object query = arguments.get("query");
+        if (!(query instanceof String text) || text.isBlank()) throw new IllegalArgumentException("Empty query.");
+        int limit = arguments.get("limit") instanceof Number n ? n.intValue()
+                : arguments.get("limit") instanceof String s && s.strip().matches("\\d{1,3}")
+                ? Integer.parseInt(s.strip()) : 10;
+        List<SearchHistory.Found> found = history.search(text, limit);
+        if (found.isEmpty()) return "No matches in this chat's search history for \"" + abbreviate(text) + "\".";
+        StringBuilder out = new StringBuilder();
+        int number = 1;
+        for (SearchHistory.Found hit : found) {
+            out.append(number++).append(". ");
+            if ("page".equals(hit.type())) {
+                out.append("PAGE ").append(hit.title().isBlank() ? "(no title)" : hit.title())
+                        .append(" — ").append(hit.url()).append(" (visited ").append(hit.at()).append(")\n");
+                if (hit.snippet() != null && !hit.snippet().isBlank()) out.append("   ").append(hit.snippet()).append('\n');
+            } else {
+                out.append("SEARCH \"").append(hit.title()).append("\" (").append(hit.at()).append(")\n");
+            }
+        }
+        return out.toString().stripTrailing();
+    }
+
+    private String export(Map<String, Object> arguments) throws Exception {
+        Object format = arguments.get("format");
+        SearchHistoryExporter.Format chosen = SearchHistoryExporter.format(format instanceof String s ? s : null);
+        SearchHistoryExporter.Export export = new SearchHistoryExporter(history.repository())
+                .export(chosen, flag(arguments, "unique"), flag(arguments, "include_results"));
+        String what = switch (chosen) {
+            case TXT -> " URLs";
+            case JSONL -> " records";
+            case ZIP -> " archived pages";
+        };
+        return "Exported " + export.records() + what + " to " + export.file();
+    }
+
+    private static boolean flag(Map<String, Object> arguments, String name) {
+        Object value = arguments.get(name);
+        return value instanceof Boolean b ? b : value instanceof String text && Boolean.parseBoolean(text.strip());
+    }
+
+    @FunctionalInterface
+    private interface Handler {
+        String apply(Map<String, Object> arguments) throws Exception;
+    }
+
+    private static SyncToolSpecification tool(String name, String description, Map<String, Object> properties,
+                                              List<String> required, Handler handler) {
+        return SyncToolSpecification.builder()
+                .tool(Tool.builder().name(name).description(description)
+                        .inputSchema(new JsonSchema("object", properties, required, false, Map.of(), Map.of()))
+                        .build())
+                .callHandler((exchange, request) -> {
+                    try {
+                        String answer = handler.apply(request.arguments() == null ? Map.of() : request.arguments());
+                        return CallToolResult.builder().addTextContent(answer).build();
+                    } catch (Exception error) {
+                        String message = error.getMessage() == null ? error.getClass().getSimpleName()
+                                : error.getMessage();
+                        return CallToolResult.builder().isError(true).addTextContent(message).build();
+                    }
+                }).build();
+    }
+
+    private static String abbreviate(String text) {
+        return text.length() <= 80 ? text : text.substring(0, 80) + "…";
+    }
+}

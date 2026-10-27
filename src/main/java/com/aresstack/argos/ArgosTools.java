@@ -1,5 +1,7 @@
 package com.aresstack.argos;
 
+import com.aresstack.argos.history.SearchHistoryCapture;
+import com.aresstack.argos.history.SearchHistoryTools;
 import com.aresstack.argos.research.CamoufoxResearchPageReader;
 import com.aresstack.argos.research.ResearchService;
 import com.aresstack.argos.research.ResearchSettings;
@@ -35,6 +37,8 @@ public final class ArgosTools {
     private final ArgosBrowsingTools browsing;
     /** browser_download, browser_document, browser_open_many; null in tests without a document store. */
     private final DocumentAndBatchTools documents;
+    /** Search History of this workspace's chat; null when it is off (single profile, ARGOS_SEARCH_HISTORY=false). */
+    private final SearchHistoryCapture history;
 
     public ArgosTools(CamoufoxBrowser browser) {
         this(browser, new WebSession(browser, UrlPolicy.publicOnly(), null));
@@ -50,13 +54,26 @@ public final class ArgosTools {
 
     public ArgosTools(CamoufoxBrowser browser, WebSession web, ResearchSettings researchSettings,
                       DocumentAndBatchTools documents) {
+        this(browser, web, researchSettings, documents, null);
+    }
+
+    /**
+     * With the chat's Search History: web_* pages are reported through {@link WebSession#onPageRead}, the
+     * research reader and browser_navigate/browser_snapshot are recorded here. The search port inside {@code web}
+     * must already be the capturing one (one event per search call, shared with web_research).
+     */
+    public ArgosTools(CamoufoxBrowser browser, WebSession web, ResearchSettings researchSettings,
+                      DocumentAndBatchTools documents, SearchHistoryCapture history) {
         this.browser = browser;
         this.documents = documents;
         this.web = web;
+        this.history = history;
         this.browsing = new ArgosBrowsingTools(browser);
+        if (history != null) web.onPageRead(history.webPages());
+        com.aresstack.argos.research.ResearchPageReader reader = new CamoufoxResearchPageReader(browser);
+        if (history != null) reader = history.capturingReader(reader);
         this.research = researchSettings.enabled() && web.searchPort() != null
-                ? new ResearchTools(new ResearchService(web.searchPort(), new CamoufoxResearchPageReader(browser),
-                        researchSettings.budget()))
+                ? new ResearchTools(new ResearchService(web.searchPort(), reader, researchSettings.budget()))
                 : null;
     }
 
@@ -69,6 +86,10 @@ public final class ArgosTools {
         List<SyncToolSpecification> tools = new ArrayList<>(profileTools(profile));
         // Opt-in (ARGOS_RESEARCH=true): one-call research suits small models, so every profile gets it.
         if (research != null) tools.addAll(research.specifications());
+        // Search History of the calling chat (per-chat profiles only); the legacy set stays unchanged.
+        if (history != null && profile != ToolProfile.LEGACY) {
+            tools.addAll(new SearchHistoryTools(history.history()).specifications());
+        }
         return List.copyOf(tools);
     }
 
@@ -155,13 +176,23 @@ public final class ArgosTools {
         tools.add(tool("browser_navigate", "Navigate the current tab or the specified tab id to an http(s) URL. Omit tab to keep current-tab behavior.",
                 Map.of("url", field("string", "Full http(s) website URL"),
                         "tab", field("string", "Optional tab id from browser_tabs, e.g. t2")),
-                List.of("url"), args -> browser.navigate(string(args, "url"), optionalString(args, "tab"))));
+                List.of("url"), args -> {
+                    Map<String, Object> result = browser.navigate(string(args, "url"), optionalString(args, "tab"));
+                    if (history != null) {
+                        history.browserPage(optionalString(args, "tab"), string(args, "url"), true, "browser_navigate");
+                    }
+                    return result;
+                }));
         tools.add(tool("browser_snapshot", "Read the current tab or the specified tab id as text. Works for HTML (visible text), "
                         + "XML/RSS/Atom feeds (numbered entries), JSON and plain text; binary documents such as "
                         + "PDF are reported with documentType 'binary' and a hint instead of text.",
                 Map.of("maxCharacters", field("integer", "Maximum characters (1000–60000, default 16000)"),
                         "tab", field("string", "Optional tab id from browser_tabs, e.g. t2")),
-                List.of(), args -> browser.snapshot(number(args, "maxCharacters", 16_000), optionalString(args, "tab"))));
+                List.of(), args -> {
+                    Object snapshot = browser.snapshot(number(args, "maxCharacters", 16_000), optionalString(args, "tab"));
+                    if (history != null) history.browserPage(optionalString(args, "tab"), null, false, "browser_snapshot");
+                    return snapshot;
+                }));
         tools.add(tool("browser_inspect", "Inspect DOM elements matching a CSS selector in the current or specified tab, including text, links and attributes.",
                 Map.of("selector", field("string", "CSS selector"),
                         "limit", field("integer", "Maximum elements (1–50, default 20)"),

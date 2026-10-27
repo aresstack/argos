@@ -289,6 +289,8 @@ Die `web_*`-Werkzeuge folgen dem Browser: `web_read` und `web_links` lesen auch 
 
 Optional (`ARGOS_RESEARCH=true`, Standard aus) kommen `web_research(question)` und `web_research_stop()` hinzu: eine begrenzte, deterministische Recherche nach dem Vorbild des AskAI-`ResearchLoop` (Suche → relevante Seiten lesen → relevanten Links folgen → nummerierte Quellen mit Zitat), ohne KI-Modell und ohne Seiten-Skripte. Details: [docs/research.md](docs/research.md).
 
+Search History (Standard an, nur mit `ARGOS_PROFILE_ISOLATION=chat`): Argos speichert je Chat alle Suchen, Treffer und gelesenen Seiten dauerhaft unter `~/.argos/profiles/chats/<hash>/history/`, durchsuchbar per Lucene (`search_history`) und exportierbar als TXT, JSONL oder Single-File-HTML-ZIP (`search_history_export`). Details und Stealth-Hinweis: [docs/search-history.md](docs/search-history.md).
+
 Modellvergleich (Phase 7): `gradlew evalModels` lässt lokale Ollama-Modelle (Standard: `gemma4:e2b` und `gpt-oss:20b`) Argos über MCP gegen eine lokale Fixture-Welt bedienen und schreibt einen JSON- und Markdown-Bericht. Details: [docs/model-evaluation.md](docs/model-evaluation.md).
 
 ## Netzwerkgrenze (SSRF-Schutz)

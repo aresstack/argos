@@ -31,6 +31,7 @@ class PointerRegressionBrowserTest {
               #pad { position: fixed; inset: 0; z-index: -1; }
             </style></head><body>
             <div id="pad"></div>
+            <button id="near" style="position:absolute;left:40px;top:80px">Nah</button>
             <button id="far">Weit unten</button>
             <a id="last" href="#ende">Ganz unten</a>
             <script>
@@ -79,6 +80,53 @@ class PointerRegressionBrowserTest {
             // 3. A link the page cannot scroll higher than the bottom edge is still clicked.
             browser.clickTarget("role=link name=\"Ganz unten\"");
             assertEquals("#ende", browser.evaluate("() => location.hash"));
+        } finally {
+            site.stop(0);
+        }
+    }
+
+    /**
+     * Bisects the hover-after-scroll failure (empty :hover chain although mouse events hit the button): each variant
+     * runs in a fresh browser and reports instead of failing, so one run shows which step loses the hover state.
+     */
+    @Test @Timeout(value = 240, unit = TimeUnit.SECONDS)
+    void hoverStateBisection() throws Exception {
+        Assumptions.assumeTrue(Boolean.getBoolean("argos.testCamoufox"), "Opt-in real browser test");
+        StringBuilder report = new StringBuilder();
+        report.append("A near, no corner move: ").append(variant(false, "Nah")).append('\n');
+        report.append("B near, after corner move: ").append(variant(true, "Nah")).append('\n');
+        report.append("C far (wheel scroll), no corner move: ").append(variant(false, "Weit unten")).append('\n');
+        report.append("D far (wheel scroll), after corner move: ").append(variant(true, "Weit unten")).append('\n');
+        System.out.println("[hover-bisection]\n" + report);
+        java.nio.file.Files.writeString(Path.of("build", "hover-bisection.txt"), report.toString());
+    }
+
+    private String variant(boolean cornerFirst, String name) throws Exception {
+        ArgosConfig local = ArgosConfig.fromEnvironment();
+        local.requireBrowserConfiguration();
+        byte[] html = PAGE.getBytes(StandardCharsets.UTF_8);
+        HttpServer site = HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0);
+        site.createContext("/", exchange -> {
+            exchange.getResponseHeaders().add("Content-Type", "text/html; charset=utf-8");
+            exchange.sendResponseHeaders(200, html.length);
+            try (var out = exchange.getResponseBody()) { out.write(html); }
+        });
+        site.start();
+        try (CamoufoxBrowser browser = new CamoufoxBrowser(new ArgosConfig(
+                "127.0.0.1", 0, local.executable(), local.launchOptions(),
+                temporary.resolve("profile-" + cornerFirst + name.length()), true).withNetwork(TestNetworks.LOOPBACK))) {
+            browser.navigate("http://localhost:" + site.getAddress().getPort() + "/");
+            if (cornerFirst) {
+                List<?> size = (List<?>) browser.evaluate("() => [innerWidth, innerHeight]");
+                browser.mouseMove(((Number) size.get(0)).intValue() - 1, ((Number) size.get(1)).intValue() - 1, null);
+            }
+            browser.hover("role=button name=\"" + name + "\"", null);
+            return String.valueOf(browser.evaluate("() => { const [x, y] = lastMove.split(',').map(Number);"
+                    + " const hit = document.elementFromPoint(x, y);"
+                    + " return 'scrollY=' + scrollY + ' lastMove=' + lastMove + ' hit=' + (hit && (hit.id || hit.tagName))"
+                    + " + ' hovered=' + [...document.querySelectorAll(':hover')].map(e => e.id || e.tagName).join('>'); }"));
+        } catch (RuntimeException failed) {
+            return "error: " + failed;
         } finally {
             site.stop(0);
         }

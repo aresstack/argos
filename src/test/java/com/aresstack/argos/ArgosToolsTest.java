@@ -126,7 +126,8 @@ class ArgosToolsTest {
             Set<String> compact = browsing.compact().stream().map(spec -> spec.tool().name()).collect(Collectors.toSet());
             assertEquals(Set.of("browser_tabs", "browser_tab_new", "browser_tab_select", "browser_tab_close",
                     "browser_back", "browser_forward", "browser_reload", "browser_controls",
-                    "browser_click_target", "browser_fill_target", "browser_extract"), expert);
+                    "browser_click_target", "browser_fill_target", "browser_extract", "browser_mouse_move",
+                    "browser_mouse_click", "browser_hover", "browser_scroll"), expert);
             assertEquals(Set.of("web_controls", "web_click", "web_fill"), compact);
             for (var spec : browsing.compact()) {
                 assertTrue(spec.tool().inputSchema().properties().size() <= 2, spec.tool().name());
@@ -137,6 +138,68 @@ class ArgosToolsTest {
                     names(new ArgosTools(browser).forProfile(ToolProfile.COMPACT))),
                     "compact interaction tools wait for the small-model test");
         }
+    }
+
+    @Test void pointerToolsDeclareViewportCoordinatesAndTheirParameters() {
+        try (CamoufoxBrowser browser = browser()) {
+            Map<String, SyncToolSpecification> tools = new ArgosBrowsingTools(browser).expert().stream()
+                    .collect(Collectors.toMap(spec -> spec.tool().name(), spec -> spec));
+            assertEquals(Set.of("x", "y", "tab"), tools.get("browser_mouse_move").tool().inputSchema().properties().keySet());
+            assertEquals(List.of("x", "y"), tools.get("browser_mouse_move").tool().inputSchema().required());
+            assertEquals(Set.of("x", "y", "button", "tab"),
+                    tools.get("browser_mouse_click").tool().inputSchema().properties().keySet());
+            assertEquals(List.of("x", "y"), tools.get("browser_mouse_click").tool().inputSchema().required());
+            assertEquals(List.of("target"), tools.get("browser_hover").tool().inputSchema().required());
+            assertEquals(Set.of("delta_x", "delta_y", "target", "x", "y", "tab"),
+                    tools.get("browser_scroll").tool().inputSchema().properties().keySet());
+            assertEquals(List.of(), tools.get("browser_scroll").tool().inputSchema().required());
+            for (String name : List.of("browser_mouse_move", "browser_mouse_click", "browser_scroll")) {
+                String description = tools.get(name).tool().description();
+                assertTrue(description.contains("CSS pixels") && description.contains("viewport"), name);
+                assertEquals("number", ((Map<?, ?>) tools.get(name).tool().inputSchema().properties().get("x"))
+                        .get("type"), name);
+            }
+            assertTrue(tools.get("browser_hover").tool().description().contains("without clicking"));
+        }
+    }
+
+    @Test void pointerToolsRejectInvalidInputBeforeTouchingTheBrowser() {
+        try (CamoufoxBrowser browser = browser()) {
+            List<SyncToolSpecification> tools = new ArgosBrowsingTools(browser).expert();
+            assertError(tools, "browser_mouse_move", Map.of("x", 10), "Missing number field: y");
+            assertError(tools, "browser_mouse_move", Map.of("x", "left", "y", 5), "Missing number field: x");
+            assertError(tools, "browser_mouse_click", Map.of("x", 1, "y", 1, "button", "back"),
+                    "button must be left, middle or right");
+            assertError(tools, "browser_hover", Map.of("target", " "), "target is required");
+            assertError(tools, "browser_scroll", Map.of(), "delta_y");
+            assertError(tools, "browser_scroll", Map.of("delta_y", 100, "x", 5), "both x and y");
+            assertError(tools, "browser_scroll", Map.of("delta_y", 100, "x", 5, "y", 5, "target", "Suchen"),
+                    "either target or x/y");
+            assertError(tools, "browser_scroll", Map.of("delta_y", 1e6), "at most 20000");
+            assertEquals(false, browser.status().get("started"), "validation must not launch the browser");
+        }
+    }
+
+    @Test void pointerToolsReportAMissingBrowserSessionAsToolError() {
+        try (CamoufoxBrowser browser = browser()) {
+            CallToolResult result = call(new ArgosBrowsingTools(browser).expert(), "browser_mouse_move",
+                    Map.of("x", 10, "y", 10));
+            assertTrue(result.isError());
+            assertTrue(((TextContent) result.content().get(0)).text().contains("ARGOS_CAMOUFOX_EXECUTABLE"));
+        }
+    }
+
+    private static void assertError(List<SyncToolSpecification> tools, String name, Map<String, Object> arguments,
+                                    String expected) {
+        CallToolResult result = call(tools, name, arguments);
+        assertTrue(result.isError(), name + " " + arguments);
+        String message = ((TextContent) result.content().get(0)).text();
+        assertTrue(message.contains(expected), message);
+    }
+
+    private static CallToolResult call(List<SyncToolSpecification> tools, String name, Map<String, Object> arguments) {
+        return tools.stream().filter(spec -> spec.tool().name().equals(name)).findFirst().orElseThrow()
+                .callHandler().apply(null, new CallToolRequest(name, arguments));
     }
 
     @Test void publishesNetworkAnalysisOnlyInExpertProfile() {

@@ -23,9 +23,13 @@ class RealInputTest {
         }
 
         @Override public void move(double x, double y) { calls.add("move " + x + "," + y); }
-        @Override public void down() { calls.add("down"); }
-        @Override public void up() { calls.add("up"); }
-        @Override public void wheel(double deltaX, double deltaY) { calls.add("wheel " + deltaY); }
+        @Override public void down(MouseButton button) {
+            calls.add(button == MouseButton.LEFT ? "down" : "down " + button);
+        }
+        @Override public void up(MouseButton button) { calls.add(button == MouseButton.LEFT ? "up" : "up " + button); }
+        @Override public void wheel(double deltaX, double deltaY) {
+            calls.add(deltaX == 0 ? "wheel " + deltaY : "wheel " + deltaX + "," + deltaY);
+        }
 
         @Override public void keyDown(String key) {
             if (!unicodeKeys && key.codePointCount(0, key.length()) == 1 && !HumanTyping.inLayout(key.codePointAt(0))) {
@@ -182,6 +186,16 @@ class RealInputTest {
         List<String> keys = device.calls;
         assertTrue(keys.indexOf("keyDown Shift") < keys.indexOf("keyDown B"));
         assertTrue(keys.indexOf("keyUp B") < keys.indexOf("keyUp Shift"));
+    }
+
+    @Test void wheelTurnsExactlyTheRequestedDistanceInNotches() {
+        RecordingDevice device = new RecordingDevice(false);
+        input(HumanInputSettings.UnicodePolicy.STRICT).playWheel(device, 0, 250);
+        assertEquals(List.of("wheel 100.0", "wheel 100.0", "wheel 50.0"), device.calls);
+
+        RecordingDevice sideways = new RecordingDevice(false);
+        input(HumanInputSettings.UnicodePolicy.STRICT).playWheel(sideways, -150, 40);
+        assertEquals(List.of("wheel -100.0,40.0", "wheel -50.0,0.0"), sideways.calls);
     }
 
     /** The text a field would contain after these key downs. */

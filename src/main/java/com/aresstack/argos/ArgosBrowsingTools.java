@@ -25,6 +25,10 @@ public final class ArgosBrowsingTools {
             + "(e.g. e12), a semantic locator (e.g. role=button name=\"Suchen\", label=\"E-Mail\", "
             + "placeholder=\"Search\", text=\"Weiter\") or simply the visible name (e.g. Suchen).";
 
+    private static final String POINT_HELP = "Coordinates are CSS pixels in the browser viewport (the visible part "
+            + "of the page, as in browser_screenshot): x=0, y=0 is its top left corner and does not move when the page "
+            + "scrolls.";
+
     private final CamoufoxBrowser browser;
 
     public ArgosBrowsingTools(CamoufoxBrowser browser) {
@@ -76,6 +80,44 @@ public final class ArgosBrowsingTools {
                 List.of("target", "text"),
                 args -> interactionAsJson(browser.fillTarget(
                         string(args, "target"), string(args, "text"), optionalString(args, "tab")))));
+        tools.add(tool("browser_mouse_move",
+                "Move the mouse pointer to a point in the current or specified tab without clicking. " + POINT_HELP,
+                Map.of("x", field("number", "Horizontal position in CSS pixels from the viewport's left edge"),
+                        "y", field("number", "Vertical position in CSS pixels from the viewport's top edge"),
+                        "tab", field("string", "Optional tab id from browser_tabs, e.g. t2")),
+                List.of("x", "y"), args -> browser.mouseMove(decimal(args, "x"), decimal(args, "y"),
+                        optionalString(args, "tab"))));
+        tools.add(tool("browser_mouse_click",
+                "Click with real mouse input at a point in the current or specified tab. Prefer browser_click_target "
+                        + "when the element is a listed control; use this for canvases, maps or spots without a name. "
+                        + POINT_HELP,
+                Map.of("x", field("number", "Horizontal position in CSS pixels from the viewport's left edge"),
+                        "y", field("number", "Vertical position in CSS pixels from the viewport's top edge"),
+                        "button", field("string", "left (default), middle or right"),
+                        "tab", field("string", "Optional tab id from browser_tabs, e.g. t2")),
+                List.of("x", "y"), args -> browser.mouseClick(decimal(args, "x"), decimal(args, "y"),
+                        optionalString(args, "button"), optionalString(args, "tab"))));
+        tools.add(tool("browser_hover",
+                "Rest the mouse pointer on an element in the current or specified tab without clicking, e.g. to open a "
+                        + "hover menu or show a tooltip. Scrolls it into view with the mouse wheel if needed. " + TARGET_HELP,
+                Map.of("target", field("string", "What to hover, e.g. role=menuitem name=\"Produkte\""),
+                        "tab", field("string", "Optional tab id from browser_tabs, e.g. t2")),
+                List.of("target"), args -> browser.hover(string(args, "target"), optionalString(args, "tab"))));
+        tools.add(tool("browser_scroll",
+                "Turn the mouse wheel in the current or specified tab. Positive delta_y scrolls down, negative up; "
+                        + "positive delta_x scrolls right, negative left (CSS pixels, about 100 per notch). The element "
+                        + "under the pointer scrolls: give a target or x/y to scroll a list or panel instead of the page. "
+                        + POINT_HELP,
+                Map.of("delta_x", field("number", "Horizontal wheel distance in CSS pixels (default 0)"),
+                        "delta_y", field("number", "Vertical wheel distance in CSS pixels (default 0)"),
+                        "target", field("string", "Optional element to scroll over. " + TARGET_HELP),
+                        "x", field("number", "Optional pointer x in CSS pixels; requires y"),
+                        "y", field("number", "Optional pointer y in CSS pixels; requires x"),
+                        "tab", field("string", "Optional tab id from browser_tabs, e.g. t2")),
+                List.of(), args -> browser.scroll(optionalDecimal(args, "delta_x", 0), optionalDecimal(args, "delta_y", 0),
+                        args.get("x") == null ? null : decimal(args, "x"),
+                        args.get("y") == null ? null : decimal(args, "y"),
+                        optionalString(args, "target"), optionalString(args, "tab"))));
         tools.add(tool("browser_extract",
                 "Extract structure from the current or specified tab's HTML page. kind: overview (default), headings, links, tables, "
                         + "lists, metadata (description, Open Graph, citation_* tags), jsonld.",
@@ -109,6 +151,23 @@ public final class ArgosBrowsingTools {
                 List.of("target", "text"), args -> plain(() -> interactionAsText("Typed into",
                         browser.fillTarget(string(args, "target"), string(args, "text"))))));
         return List.copyOf(tools);
+    }
+
+    /** A required finite number; small models often send numbers as strings ("120"). */
+    static double decimal(Map<String, Object> args, String name) {
+        Object value = args.get(name);
+        double number;
+        if (value instanceof Number n) {
+            number = n.doubleValue();
+        } else if (value instanceof String text && text.strip().matches("-?\\d{1,7}(\\.\\d+)?")) {
+            number = Double.parseDouble(text.strip());
+        } else throw new IllegalArgumentException("Missing number field: " + name);
+        if (!Double.isFinite(number)) throw new IllegalArgumentException(name + " must be a finite number");
+        return number;
+    }
+
+    static double optionalDecimal(Map<String, Object> args, String name, double fallback) {
+        return args.get(name) == null ? fallback : decimal(args, name);
     }
 
     private Map<String, Object> controlsAsJson(String filter, int limit) {

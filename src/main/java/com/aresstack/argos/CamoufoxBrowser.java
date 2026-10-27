@@ -1614,6 +1614,94 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
         });
     }
 
+    // ---- Pointer --------------------------------------------------------------------------------------------
+    // Coordinates are CSS pixels in the tab's viewport: (0, 0) is its top left corner, scrolling does not shift it.
+
+    public Map<String, Object> mouseMove(double x, double y, String tabId) {
+        return onBrowser(() -> {
+            Page p = pageFor(tabId);
+            return pointerResult(p, "moved", input.moveTo(p, x, y), null);
+        });
+    }
+
+    public Map<String, Object> mouseClick(double x, double y, String button, String tabId) {
+        MouseButton pressed = MouseButton.parse(button);
+        return onBrowser(() -> {
+            Page p = pageFor(tabId);
+            Set<String> before = tabs.all().keySet();
+            HumanMotion.Point point = input.clickAt(p, x, y, pressed);
+            leaveSavedDocument(p);
+            settle(p);
+            boolean preserveCurrentTab = tabId != null && !tabId.isBlank();
+            String opened = adoptOpenedTab(before, !preserveCurrentTab);
+            Map<String, Object> result = pointerResult(preserveCurrentTab ? p : activePage(), "clicked", point, null);
+            result.put("button", pressed.name().toLowerCase(java.util.Locale.ROOT));
+            if (opened != null) result.put("openedTab", opened);
+            return result;
+        });
+    }
+
+    public Map<String, Object> hover(String target, String tabId) {
+        if (target == null || target.isBlank()) throw new IllegalArgumentException("target is required");
+        return onBrowser(() -> {
+            Page p = pageFor(tabId);
+            Resolved resolved = resolve(p, target);
+            return pointerResult(p, "hovered", input.hover(p, resolved.locator()), resolved.description());
+        });
+    }
+
+    /**
+     * Turns the mouse wheel by the given CSS pixels (positive: down/right). The pointer first goes to {@code target}
+     * or to ({@code x}, {@code y}) when given, so the scrolling container under it receives the wheel.
+     */
+    public Map<String, Object> scroll(double deltaX, double deltaY, Double x, Double y, String target, String tabId) {
+        if (!Double.isFinite(deltaX) || !Double.isFinite(deltaY) || (deltaX == 0 && deltaY == 0)) {
+            throw new IllegalArgumentException("Give delta_x and/or delta_y in CSS pixels, e.g. delta_y=600");
+        }
+        if (Math.abs(deltaX) > 20_000 || Math.abs(deltaY) > 20_000) {
+            throw new IllegalArgumentException("Scroll at most 20000 CSS pixels per call");
+        }
+        if ((x == null) != (y == null)) throw new IllegalArgumentException("Give both x and y, or neither");
+        if (x != null && target != null && !target.isBlank()) {
+            throw new IllegalArgumentException("Give either target or x/y, not both");
+        }
+        return onBrowser(() -> {
+            Page p = pageFor(tabId);
+            String description = null;
+            if (target != null && !target.isBlank()) {
+                Resolved resolved = resolve(p, target);
+                input.hover(p, resolved.locator());
+                description = resolved.description();
+            } else if (x != null) {
+                input.moveTo(p, x, y);
+            }
+            input.wheel(p, deltaX, deltaY);
+            p.waitForTimeout(150); // smooth scrolling and scroll events settle
+            Map<String, Object> result = pointerResult(p, "scrolled", null, description);
+            result.put("deltaX", deltaX);
+            result.put("deltaY", deltaY);
+            Object position = p.evaluate("() => [scrollX, scrollY]");
+            if (position instanceof List<?> values && values.size() == 2) {
+                result.put("pageScrollX", values.get(0));
+                result.put("pageScrollY", values.get(1));
+            }
+            return result;
+        });
+    }
+
+    private static Map<String, Object> pointerResult(Page p, String action, HumanMotion.Point point, String target) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("action", action);
+        if (target != null) result.put("target", target);
+        if (point != null) {
+            result.put("x", (long) point.x());
+            result.put("y", (long) point.y());
+        }
+        result.put("url", p.url());
+        result.put("title", safeTitle(p));
+        return result;
+    }
+
     private record Resolved(Locator locator, String description) { }
 
     /**

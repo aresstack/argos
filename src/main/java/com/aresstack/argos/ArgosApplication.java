@@ -1,7 +1,10 @@
 package com.aresstack.argos;
 
 import com.aresstack.argos.history.SearchHistory;
+import com.aresstack.argos.convenience.ConvenienceSession;
+import com.aresstack.argos.convenience.DomainCoordinator;
 import com.aresstack.argos.history.SearchHistoryCapture;
+import com.aresstack.argos.search.ParallelWebSearch;
 import com.aresstack.argos.history.SearchHistoryDownloadServlet;
 import com.aresstack.argos.history.SearchHistoryDownloads;
 import com.aresstack.argos.history.SearchHistorySettings;
@@ -66,7 +69,7 @@ public final class ArgosApplication {
             // directory is never written (its handlers are never called).
             ChatRoutedTools.Workspace template = workspace(config, historySettings.enabled()
                     ? isolation.chatRoot().resolve("_template").resolve("history") : null, historySettings);
-            tools = routed.specifications(template.tools(), config.toolProfile().includesExpertTools());
+            tools = routed.specifications(template.tools(), config.toolProfile() == ToolProfile.EXPERT);
             template.resources().close();
             browsers = routed;
         } else {
@@ -132,10 +135,13 @@ public final class ArgosApplication {
         if (history != null) browser.contentSink(history.networkContent());
         com.aresstack.argos.web.WebSearchPort search = new BrowserWebSearch(browser);
         if (history != null) search = history.capturingSearch(search);
-        List<SyncToolSpecification> tools = new ArgosTools(browser,
+        ArgosTools argosTools = new ArgosTools(browser,
                 new WebSession(browser, urlPolicy, search),
-                ResearchSettings.fromEnvironment(), new DocumentAndBatchTools(documents), history)
-                .forProfile(config.toolProfile());
+                ResearchSettings.fromEnvironment(), new DocumentAndBatchTools(documents), history);
+        if (config.toolProfile() == ToolProfile.CONVENIENCE) {
+            argosTools.withConvenience(new ConvenienceTools(convenienceSession(browser, urlPolicy, history)));
+        }
+        List<SyncToolSpecification> tools = argosTools.forProfile(config.toolProfile());
         if (history == null && historySettings != null && config.toolProfile() != ToolProfile.LEGACY) {
             List<SyncToolSpecification> all = new java.util.ArrayList<>(tools);
             all.addAll(com.aresstack.argos.history.SearchHistoryTools.disabled(historySettings.enabled()
@@ -151,6 +157,30 @@ public final class ArgosApplication {
             browser.close();
             documents.close();
         });
+    }
+
+    /**
+     * The convenience profile's research session of one workspace: parallel search over all engines in their own
+     * tabs, every navigation under the process-wide domain coordinator (shared by all chats), pages recorded in the
+     * chat's Search History (one event per web_search).
+     */
+    static ConvenienceSession convenienceSession(CamoufoxBrowser browser, UrlPolicy urlPolicy,
+                                                 SearchHistoryCapture history) {
+        DomainCoordinator coordinator = DomainCoordinator.shared();
+        ParallelWebSearch search = ParallelWebSearch.fromEnvironment(browser, coordinator);
+        ConvenienceSession.History recorder = history == null ? null : new ConvenienceSession.History() {
+            @Override
+            public void search(String query, String providers, List<com.aresstack.argos.web.SearchHit> hits) {
+                history.search(query, providers, hits);
+            }
+
+            @Override
+            public void page(com.aresstack.argos.web.PageCapture capture, String requestedUrl, boolean newVisit,
+                             String tool, String tab) {
+                history.tabPage(capture, requestedUrl, newVisit, tool, tab);
+            }
+        };
+        return new ConvenienceSession(browser, coordinator, urlPolicy, search::search, recorder);
     }
 
     /** The started HTTP endpoint: Streamable HTTP MCP at the root, /health and protected-resource metadata. */
@@ -176,8 +206,8 @@ public final class ArgosApplication {
                         .mcpEndpoint("/").build();
         McpSyncServer mcp = McpServer.sync(transport)
                 .serverInfo("argos", ArgosTools.VERSION)
-                .instructions(ArgosTools.INSTRUCTIONS)
                 .capabilities(ServerCapabilities.builder().tools(true).build())
+                .instructions(config.toolProfile() == ToolProfile.CONVENIENCE ? ConvenienceTools.INSTRUCTIONS : null)
                 .tools(tools).build();
 
         Server server = new Server(new InetSocketAddress(config.host(), config.port()));

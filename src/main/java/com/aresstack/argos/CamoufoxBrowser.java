@@ -1,5 +1,8 @@
 package com.aresstack.argos;
 
+import com.aresstack.argos.convenience.ConvenienceBrowser;
+import com.aresstack.argos.convenience.NavigationGate;
+import com.aresstack.argos.search.ChallengeCheck;
 import com.aresstack.argos.web.BrowserPagePort;
 import com.aresstack.argos.web.PageCapture;
 import com.aresstack.argos.web.PageText;
@@ -77,7 +80,7 @@ import java.util.regex.Pattern;
  * Owns one persistent Camoufox browser and serializes every Playwright API call
  * onto a single driver thread. Never attaches to an existing user's browser.
  */
-public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAccess, AutoCloseable {
+public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAccess, ConvenienceBrowser, AutoCloseable {
     /** Source documents above this size are not pulled through the protocol for a snapshot. */
     private static final long MAX_SOURCE_BYTES = 8_000_000;
     private static final long SAVED_DOCUMENT_WAIT_NANOS = 5_000_000_000L;
@@ -879,13 +882,8 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
     // DOM in Playwright's isolated utility world; title, text and links are derived in Java.
     @Override
     public PageCapture open(String url, String referer) {
-        return open(url, referer, null);
-    }
-
-    @Override
-    public PageCapture open(String url, String referer, String tabId) {
         return onBrowser(() -> {
-            Page p = pageFor(tabId);
+            Page p = activePage();
             Page.NavigateOptions options = new Page.NavigateOptions()
                     .setWaitUntil(WaitUntilState.DOMCONTENTLOADED).setTimeout(45_000);
             if (referer != null && !referer.isBlank()) options.setReferer(referer);
@@ -898,12 +896,7 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
 
     @Override
     public PageCapture current() {
-        return current(null);
-    }
-
-    @Override
-    public PageCapture current(String tabId) {
-        return onBrowser(() -> captureWhenLoaded(pageFor(tabId), 0));
+        return onBrowser(() -> captureWhenLoaded(activePage(), 0));
     }
 
     /** Like {@link #current()} for any tab (null = current tab), without changing which tab is current. */
@@ -935,13 +928,8 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
 
     @Override
     public PageCapture back() {
-        return back(null);
-    }
-
-    @Override
-    public PageCapture back(String tabId) {
         return onBrowser(() -> {
-            Page p = pageFor(tabId);
+            Page p = activePage();
             if (document(p).saved != null) {
                 // As in traverse("back"): the saved feed is no history entry of its own, back returns to the
                 // page the tab shows behind it.
@@ -957,103 +945,10 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
 
     @Override
     public void clear() {
-        clear(null);
-    }
-
-    @Override
-    public void clear(String tabId) {
         onBrowser(() -> {
-            pageFor(tabId).navigate("about:blank");
+            activePage().navigate("about:blank");
             return null;
         });
-    }
-
-    // Research tabs of the web_* tools (BrowserPagePort): the same tab registry as browser_tab_*.
-
-    @Override
-    public boolean supportsTabs() {
-        return true;
-    }
-
-    /** The current tab's id without starting the browser; "" before it started. */
-    @Override
-    public String currentTab() {
-        return onBrowser(() -> {
-            String id = tabs.currentId();
-            return id == null ? "" : id;
-        });
-    }
-
-    @Override
-    public boolean hasTab(String tabId) {
-        return onBrowser(() -> tabs.all().containsKey(BrowserTabs.normalize(tabId)));
-    }
-
-    @Override
-    public String currentUrl(String tabId) {
-        if (tabId == null || tabId.isBlank()) return currentUrl();
-        return onBrowser(() -> {
-            Page page = tabs.all().get(BrowserTabs.normalize(tabId));
-            return page == null ? "" : shownUrl(page);
-        });
-    }
-
-    @Override
-    public void showTab(String tabId) {
-        onBrowser(() -> {
-            activePage();
-            // Only Argos' own notion of the current tab changes; no focus or bringToFront reaches the pages.
-            tabs.select(tabId);
-            return null;
-        });
-    }
-
-    @Override
-    public String newTab() {
-        return onBrowser(() -> {
-            activePage();
-            return adopt(context.newPage());
-        });
-    }
-
-    @Override
-    public void discardTab(String tabId) {
-        closeTab(tabId);
-    }
-
-    /**
-     * New tabs loaded with the bounded overlap of {@link #navigatePages} (commit, then load per page), each read
-     * once afterwards like {@link #open}. No tab becomes current here.
-     */
-    @Override
-    public List<TabPage> openInNewTabs(List<String> urls, int parallel) {
-        if (urls == null || urls.isEmpty() || urls.size() > 10) {
-            throw new IllegalArgumentException("Give between 1 and 10 URLs");
-        }
-        return onBrowser(() -> {
-            activePage();
-            List<PageNavigationRequest> requests = new ArrayList<>(urls.size());
-            for (String url : urls) requests.add(new PageNavigationRequest(adopt(context.newPage()), url));
-            List<Map<String, Object>> navigated = navigatePagesOnDriver(requests,
-                    Math.max(1, Math.min(4, parallel)), 20_000);
-            List<TabPage> pages = new ArrayList<>(urls.size());
-            for (int i = 0; i < requests.size(); i++) {
-                String tab = requests.get(i).tab();
-                Map<String, Object> result = navigated.get(i);
-                if (!"SUCCESS".equals(result.get("outcome"))) {
-                    Object error = result.getOrDefault("error", result.getOrDefault("hint", result.get("outcome")));
-                    pages.add(new TabPage(tab, null, String.valueOf(error)));
-                    continue;
-                }
-                try {
-                    int status = result.get("status") instanceof Number number ? number.intValue() : 0;
-                    pages.add(new TabPage(tab, captureWhenLoaded(tabs.get(tab), status), ""));
-                } catch (RuntimeException unreadable) {
-                    pages.add(new TabPage(tab, null, errorMessage(unreadable)));
-                }
-            }
-            return pages;
-        }, 300);
     }
 
     private PageCapture capture(Page p) {
@@ -1097,6 +992,339 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
             case TEXT -> DocumentText.plainText(source);
             default -> DocumentText.feed(source).orElseGet(() -> DocumentText.xml(source));
         };
+    }
+
+    // ---- Convenience profile: tab-addressed loads under the shared NavigationGate -----------------------------
+
+    private static final double COMMIT_SLICE_MILLIS = 2_000;
+
+    private static final class LoadJob {
+        final int index;
+        final TabLoadRequest request;
+        final long queuedAt;
+        NavigationGate.Lease lease;
+        Page page;
+        String tab;
+        int status;
+        MainDocument previousDocument;
+        boolean committed;
+        long startedAt;
+        long domContentLoadedAt;
+        TabLoad result;
+
+        LoadJob(int index, TabLoadRequest request, long queuedAt) {
+            this.index = index;
+            this.request = request;
+            this.queuedAt = queuedAt;
+        }
+    }
+
+    /**
+     * Loads several pages with overlap, entirely on the driver thread (Playwright objects never leave it): a job
+     * starts when the gate grants its domain and fewer than {@code parallel} loads run; each start returns at
+     * response commit, then every running page is polled for its load state with short protocol waits, so the
+     * documents load concurrently in Firefox. A page counts as loaded at DOMContentLoaded plus up to 5 s for the
+     * load event (as {@link #loadHtml}). A job that waits for its domain or loads longer than {@code timeoutMillis}
+     * ends as TIMEOUT; a new tab that timed out is closed, so no navigation keeps running. Results keep the order
+     * of {@code requests}; failures stay local to their page.
+     */
+    @Override
+    public List<TabLoad> loadTabs(List<TabLoadRequest> requests, NavigationGate gate, int parallel,
+                                  long timeoutMillis) {
+        if (requests == null || requests.isEmpty() || requests.size() > 10) {
+            throw new IllegalArgumentException("Give between 1 and 10 pages to load");
+        }
+        int limit = Math.max(1, Math.min(4, parallel));
+        long timeout = Math.max(1_000, Math.min(60_000, timeoutMillis));
+        return onBrowser(() -> loadTabsOnDriver(requests, gate, limit, timeout), 300);
+    }
+
+    private List<TabLoad> loadTabsOnDriver(List<TabLoadRequest> requests, NavigationGate gate, int parallel,
+                                           long timeout) throws Exception {
+        List<LoadJob> jobs = new ArrayList<>();
+        try {
+            return runLoadJobs(requests, gate, parallel, timeout, jobs);
+        } finally {
+            // A driver failure must not keep a domain slot of the shared gate.
+            jobs.forEach(job -> release(job, 0, 0, false));
+        }
+    }
+
+    private List<TabLoad> runLoadJobs(List<TabLoadRequest> requests, NavigationGate gate, int parallel,
+                                      long timeout, List<LoadJob> jobs) throws Exception {
+        Page pump = activePage();
+        long now = System.currentTimeMillis();
+        for (int i = 0; i < requests.size(); i++) jobs.add(new LoadJob(i, requests.get(i), now));
+        for (LoadJob job : jobs) {
+            try {
+                requireWebUrl(job.request.url());
+            } catch (IllegalArgumentException refused) {
+                job.result = failedLoad(job, TabLoadOutcome.FAILED, refused.getMessage(), 0);
+            }
+        }
+        while (jobs.stream().anyMatch(job -> job.result == null)) {
+            boolean progressed = false;
+            long running = jobs.stream().filter(job -> job.result == null && job.page != null).count();
+            for (LoadJob job : jobs) {
+                if (job.result != null || job.page != null || running >= parallel) continue;
+                now = System.currentTimeMillis();
+                long cooldown = gate.cooldownMillis(job.request.domain());
+                if (cooldown > 0) {
+                    job.result = failedLoad(job, TabLoadOutcome.COOLING_DOWN, job.request.domain()
+                            + " refused recent requests", (cooldown + 999) / 1000);
+                    progressed = true;
+                    continue;
+                }
+                if (now - job.queuedAt > timeout) {
+                    job.result = failedLoad(job, TabLoadOutcome.TIMEOUT, "waited too long for "
+                            + job.request.domain() + " (another navigation of that domain was running)", 0);
+                    progressed = true;
+                    continue;
+                }
+                NavigationGate.Lease lease = gate.tryAcquire(job.request.domain());
+                if (lease == null) continue;
+                job.lease = lease;
+                startLoad(job, timeout);
+                progressed = true;
+                if (job.result == null) running++;
+            }
+            for (LoadJob job : jobs) {
+                if (job.result != null || job.page == null) continue;
+                if (pollLoad(job, timeout)) progressed = true;
+            }
+            if (!progressed) pump.waitForTimeout(20);
+        }
+        List<TabLoad> results = new ArrayList<>();
+        jobs.forEach(job -> results.add(job.result));
+        return results;
+    }
+
+    private void startLoad(LoadJob job, long timeout) {
+        try {
+            Page page;
+            if (job.request.tab() == null) {
+                page = context.newPage();
+                job.tab = adopt(page);
+            } else {
+                job.tab = BrowserTabs.normalize(job.request.tab());
+                page = tabs.get(job.tab);
+            }
+            job.page = page;
+            job.startedAt = System.currentTimeMillis();
+            job.previousDocument = document(page).mainDocument;
+            // At most a short wait for the response commit, so a server that stalls before answering does not hold
+            // back the next start; on that timeout the navigation keeps running in Firefox and is polled below.
+            NavigationAttempt attempt = startNavigation(page, job.request.url(), WaitUntilState.COMMIT,
+                    COMMIT_SLICE_MILLIS);
+            job.committed = true;
+            if (attempt.immediateResult() != null) {
+                // A download: a saved feed/JSON/text document is readable, anything else is reported.
+                SavedDocument saved = document(page).saved;
+                if (saved != null) {
+                    finishLoad(job, capture(page), saved.contentType());
+                } else {
+                    job.result = failedLoad(job, TabLoadOutcome.DOWNLOAD,
+                            String.valueOf(attempt.immediateResult().getOrDefault("hint", "download")), 0);
+                    release(job, 0, 0, false);
+                }
+                return;
+            }
+            job.status = attempt.response() == null ? 0 : attempt.response().status();
+        } catch (RuntimeException failed) {
+            if (job.page != null && failed instanceof TimeoutError) return; // still loading; polled below
+            boolean timedOut = failed instanceof TimeoutError;
+            job.result = failedLoad(job, timedOut ? TabLoadOutcome.TIMEOUT : TabLoadOutcome.FAILED,
+                    errorMessage(failed), 0);
+            release(job, 0, 0, false);
+            abandon(job);
+        }
+    }
+
+    /** @return true when the job finished */
+    private boolean pollLoad(LoadJob job, long timeout) {
+        long now = System.currentTimeMillis();
+        try {
+            if (!job.committed) {
+                // The load state below belongs to the old document until the new one answered (non-redirect).
+                MainDocument main = document(job.page).mainDocument;
+                job.committed = main != null && main != job.previousDocument
+                        && (main.status() < 300 || main.status() >= 400);
+            }
+            if (job.committed && job.domContentLoadedAt == 0) {
+                if (reached(job.page, LoadState.DOMCONTENTLOADED)) job.domContentLoadedAt = System.currentTimeMillis();
+            }
+            if (job.domContentLoadedAt > 0 && (reached(job.page, LoadState.LOAD)
+                    || System.currentTimeMillis() - job.domContentLoadedAt > 5_000)) {
+                MainDocument main = document(job.page).mainDocument;
+                finishLoad(job, capture(job.page, job.status), main == null ? null : main.contentType());
+                return true;
+            }
+        } catch (RuntimeException failed) {
+            job.result = failedLoad(job, TabLoadOutcome.FAILED, errorMessage(failed), 0);
+            release(job, 0, 0, false);
+            abandon(job);
+            return true;
+        }
+        if (now - job.startedAt > timeout) {
+            job.result = failedLoad(job, TabLoadOutcome.TIMEOUT, "the page did not finish loading in time", 0);
+            release(job, 0, 0, false);
+            abandon(job);
+            return true;
+        }
+        return false;
+    }
+
+    private static boolean reached(Page page, LoadState state) {
+        try {
+            page.waitForLoadState(state, new Page.WaitForLoadStateOptions().setTimeout(15));
+            return true;
+        } catch (TimeoutError notYet) {
+            return false;
+        }
+    }
+
+    private void finishLoad(LoadJob job, PageCapture capture, String contentType) {
+        boolean challenge = ChallengeCheck.isChallenge(capture.html(), capture.url(), capture.text());
+        long retryAfter = retryAfterSeconds(job.page);
+        job.result = new TabLoad(job.tab, job.request.url(), TabLoadOutcome.OK, capture, contentType, retryAfter,
+                challenge, "");
+        release(job, capture.status(), retryAfter, challenge);
+    }
+
+    private static void release(LoadJob job, int status, long retryAfter, boolean challenge) {
+        if (job.lease != null) {
+            job.lease.release(status, retryAfter, challenge);
+            job.lease = null;
+        }
+    }
+
+    /**
+     * A failed new tab is closed, which stops its navigation (the context's last tab goes to about:blank); an
+     * existing tab keeps whatever it shows, so a failed link never throws away the agent's page.
+     */
+    private void abandon(LoadJob job) {
+        if (job.page == null) return;
+        try {
+            if (job.request.tab() == null && tabs.size() > 1) {
+                job.page.close();
+                tabs.forget(job.page);
+            } else if (job.request.tab() == null) {
+                job.page.navigate("about:blank");
+            }
+        } catch (RuntimeException ignored) {
+            // The tab is unusable either way.
+        }
+    }
+
+    private static TabLoad failedLoad(LoadJob job, TabLoadOutcome outcome, String error, long retryAfter) {
+        return new TabLoad(job.tab == null ? "" : job.tab, job.request.url(), outcome, null, null, retryAfter, false,
+                error == null ? "" : error);
+    }
+
+    /** Retry-After of the tab's main document response: seconds, or an HTTP date; 0 without one. */
+    private long retryAfterSeconds(Page page) {
+        MainDocument main = document(page).mainDocument;
+        if (main == null) return 0;
+        String value;
+        try {
+            value = main.response.headerValue("retry-after");
+        } catch (RuntimeException unavailable) {
+            return 0;
+        }
+        if (value == null || value.isBlank()) return 0;
+        String trimmed = value.trim();
+        if (trimmed.matches("\\d{1,7}")) return Long.parseLong(trimmed);
+        try {
+            long at = java.time.ZonedDateTime.parse(trimmed, java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME)
+                    .toInstant().toEpochMilli();
+            return Math.max(0, (at - System.currentTimeMillis() + 999) / 1000);
+        } catch (RuntimeException unparsable) {
+            return 0;
+        }
+    }
+
+    /** Reads a tab again (one serialized DOM, no navigation). */
+    @Override
+    public TabLoad readTab(String tabId) {
+        return onBrowser(() -> {
+            activePage();
+            String tab = BrowserTabs.normalize(tabId);
+            Page page = tabs.get(tab);
+            PageCapture capture = capture(page);
+            MainDocument main = document(page).mainDocument;
+            return new TabLoad(tab, capture.url(), TabLoadOutcome.OK, capture, main == null ? null : main.contentType(),
+                    0, ChallengeCheck.isChallenge(capture.html(), capture.url(), capture.text()), "");
+        });
+    }
+
+    /** Goes back one history entry in a tab and reads it; null without history. The caller holds the domain slot. */
+    @Override
+    public TabLoad backTab(String tabId) {
+        return onBrowser(() -> {
+            activePage();
+            String tab = BrowserTabs.normalize(tabId);
+            Page page = tabs.get(tab);
+            Response previous = page.goBack(new Page.GoBackOptions()
+                    .setWaitUntil(WaitUntilState.DOMCONTENTLOADED).setTimeout(45_000));
+            if (previous == null) return null;
+            settleLoad(page);
+            PageCapture capture = capture(page, previous.status());
+            MainDocument main = document(page).mainDocument;
+            return new TabLoad(tab, capture.url(), TabLoadOutcome.OK, capture, main == null ? null : main.contentType(),
+                    retryAfterSeconds(page), ChallengeCheck.isChallenge(capture.html(), capture.url(), capture.text()), "");
+        });
+    }
+
+    /** {@link #clickWithTrustedInput} in a given tab (the search's consent banner). */
+    @Override
+    public boolean clickInTab(String selector, String tabId) {
+        return onBrowser(() -> {
+            activePage();
+            Page p = tabs.get(tabId);
+            Locator target = p.locator(selector).first();
+            if (target.count() == 0) return false;
+            TabDocument tab = document(p);
+            int navigations = tab.navigations;
+            MainDocument before = tab.mainDocument;
+            try {
+                input.click(p, target);
+            } catch (RuntimeException unreachable) {
+                return false;
+            }
+            leaveSavedDocument(p);
+            awaitNavigationAfterInput(p, tab, navigations, before);
+            settleLoad(p);
+            return true;
+        });
+    }
+
+    /** True while the tab is open in the browser context the calls go to. */
+    @Override
+    public boolean hasOpenTab(String tabId) {
+        return onBrowser(() -> tabs.all().containsKey(BrowserTabs.normalize(tabId)));
+    }
+
+    /** Closes a tab; the last tab of the context is emptied instead (about:blank). */
+    @Override
+    public void closeTabQuietly(String tabId) {
+        onBrowser(() -> {
+            String tab = BrowserTabs.normalize(tabId);
+            Page page = tabs.all().get(tab);
+            if (page == null) return null;
+            if (tabs.size() <= 1) {
+                page.navigate("about:blank");
+            } else {
+                page.close();
+                tabs.forget(page);
+            }
+            return null;
+        });
+    }
+
+    /** The browser context (BiDi user context) the calls go to. */
+    @Override
+    public String contextId() {
+        return onBrowser(() -> activeContext);
     }
 
     public PageSnapshot snapshot(int maxCharacters) {

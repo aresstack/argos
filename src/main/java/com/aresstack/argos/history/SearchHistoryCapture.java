@@ -81,6 +81,26 @@ public final class SearchHistoryCapture {
         };
     }
 
+    /**
+     * The convenience profile's web_search: one event for the whole call, all engines together ({@code providers}
+     * names each engine with its status), with the merged result list in its answer order.
+     */
+    public void search(String query, String providers, List<SearchHit> hits) {
+        try {
+            List<HistoryEvent.Result> results = new ArrayList<>();
+            int rank = 1;
+            for (SearchHit hit : hits) results.add(new HistoryEvent.Result(rank++, hit.title(), hit.url(), hit.snippet()));
+            history.recordSearch(query, providers, contextId, results);
+        } catch (Exception failed) {
+            log("web_search", failed);
+        }
+    }
+
+    /** A page a convenience tool loaded or read in {@code tabId}; the capture is the one the tool answered with. */
+    public void tabPage(PageCapture capture, String requestedUrl, boolean newVisit, String tool, String tabId) {
+        record(capture, requestedUrl, newVisit, tool, tabId);
+    }
+
     /** The provider host(s) the search path reports as {@code PROVIDER: host} notes; null when unknown. */
     static String provider(List<String> notes) {
         List<String> hosts = new ArrayList<>();

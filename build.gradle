@@ -39,6 +39,8 @@ dependencies {
     // Link extraction and search-page analysis from the serialized DOM on the Java side
     // (no page-visible scripts).
     implementation 'org.jsoup:jsoup:1.18.3'
+    // Registrable domains (Public Suffix List) for the convenience profile's per-domain navigation limit.
+    implementation 'com.google.guava:guava:33.4.0-jre'
     // Search History: classic full-text search per chat (as AskAI research-knowledge-lucene); no vectors.
     implementation 'org.apache.lucene:lucene-core:8.11.3'
     implementation 'org.apache.lucene:lucene-analyzers-common:8.11.3'

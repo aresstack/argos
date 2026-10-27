@@ -61,35 +61,30 @@ class WebSessionTest {
         site.stop(0);
     }
 
-    @Test void opensAPageAndReturnsTitleTextAndLinksWithoutUrls() {
+    @Test void opensAPageAndReportsTitleTextAndLinkCount() {
         String answer = web.open(base + "/");
-        assertEquals("TITLE: Start\n\nWelcome\nRead the article About us Mail\n\n"
-                + "LINKS (open with web_follow link_id):\n"
-                + "link-1: Read the article\n"
-                + "link-2: About us", answer);
-        assertFalse(answer.contains(base), "no target URL and no page URL in a page answer: " + answer);
+        assertTrue(answer.startsWith("URL: " + base + "/\nTITLE: Start\nLINKS: 2"), answer);
+        assertTrue(answer.contains("Welcome"));
         assertFalse(answer.contains("HTTP error:"), "a delivered page carries no error line: " + answer);
     }
 
     @Test void anErrorPageIsMarkedWithItsHttpStatus() {
         String answer = web.open(base + "/broken");
-        assertTrue(answer.startsWith("TITLE: 500 Internal Server Error\n"
+        assertTrue(answer.startsWith("URL: " + base + "/broken\nTITLE: 500 Internal Server Error\n"
                 + "HTTP error: 500 Internal Server Error \u2014 the requested content may not be available on this page.\n"
                 + "NEXT ACTION: Do not retry this failed URL immediately. Call web_search with a query for the same information from an alternative source.\n"
-                + "\n"), answer);
-        assertTrue(answer.endsWith("LINKS: none"), answer);
+                + "LINKS: 0"), answer);
         assertTrue(answer.contains("Try again later."), "the server's message is still shown: " + answer);
         assertTrue(web.read(1).contains("\nHTTP error: 500 Internal Server Error \u2014"), "web_read keeps the status");
         assertFalse(web.open(base + "/about").contains("HTTP error:"), "a delivered page carries no error line");
         // The double fetches again on back(); Camoufox reloads the document too (bfcache off), so the status is known.
         assertTrue(web.back().contains("\nHTTP error: 500 Internal Server Error \u2014"), "going back marks it again");
         pages.put("/", "<title>Start</title><a href='/missing'>Gone</a> <a href='/about'>About us</a>");
-        String start = web.open(base + "/");
-        assertTrue(web.follow(idOf(start, "Gone")).contains("TITLE: Missing\nHTTP error: 404 Not Found \u2014 the requested"),
+        web.open(base + "/");
+        assertTrue(web.follow("link-1").contains("TITLE: Missing\nHTTP error: 404 Not Found \u2014 the requested"),
                 "a followed 404 is marked");
-        String back = web.back();
-        assertFalse(back.contains("HTTP error:"), "the start page carries no error line");
-        assertTrue(web.follow(idOf(back, "About us")).startsWith("TITLE: About\n\nAbout page\n\nLINKS: none"));
+        assertFalse(web.back().contains("HTTP error:"), "the start page carries no error line");
+        assertTrue(web.follow("link-2").startsWith("URL: " + base + "/about\nTITLE: About\nLINKS: 0"));
         assertEquals("HTTP error: 599 \u2014 the requested content may not be available on this page.",
                 WebSession.errorLine(599), "an unknown code is shown without a reason phrase");
     }
@@ -103,11 +98,11 @@ class WebSessionTest {
         searching.search("observatory dark-sky zone");
 
         String firstFailure = searching.follow("result-1");
-        assertTrue(firstFailure.contains("NEXT ACTION: Do not retry this failed URL. Open the next untried search result now: result-2. Call web_open_result result_id=\"result-2\"."),
+        assertTrue(firstFailure.contains("NEXT ACTION: Do not retry this failed URL. Open the next untried search result now: result-2. Call web_follow link_id=\"result-2\"."),
                 firstFailure);
 
         String secondFailure = searching.follow("result-2");
-        assertTrue(secondFailure.contains("NEXT ACTION: Do not retry this failed URL. Open the next untried search result now: result-3. Call web_open_result result_id=\"result-3\"."),
+        assertTrue(secondFailure.contains("NEXT ACTION: Do not retry this failed URL. Open the next untried search result now: result-3. Call web_follow link_id=\"result-3\"."),
                 secondFailure);
         assertTrue(searching.follow("result-3").contains("TITLE: Article"));
     }
@@ -121,7 +116,7 @@ class WebSessionTest {
 
         assertTrue(failure.contains("NEXT ACTION: No untried result remains from the last search. Call web_search query=\"observatory dark-sky zone alternative source\""),
                 failure);
-        assertFalse(failure.contains("result_id=\"result-1\""), failure);
+        assertFalse(failure.contains("Call web_follow link_id=\"result-1\""), failure);
     }
     @Test void aCaptureWithoutAKnownStatusRendersAsBefore() {
         // Status 0: no response recorded for the shown address, or a port that does not know the status.
@@ -134,7 +129,7 @@ class WebSessionTest {
             @Override public PageCapture back() { return null; }
             @Override public void clear() { }
         };
-        assertEquals("TITLE: Start\n\nWelcome\n\nLINKS: none",
+        assertEquals("URL: http://h.example/\nTITLE: Start\nLINKS: 0 (see web_links)\n\nWelcome",
                 new WebSession(unknown, UrlPolicy.off(), null).open("http://h.example/"));
         assertFalse(new PageCapture("u", "t", "x", "", 399).isError(), "399 is not an error");
         assertTrue(new PageCapture("u", "t", "x", "", 400).isError(), "400 is");
@@ -142,7 +137,8 @@ class WebSessionTest {
 
     @Test void listsLinksWithShortIdsAndFollowsThem() {
         web.open(base + "/");
-        assertEquals("link-1: Read the article\nlink-2: About us", web.links());
+        assertEquals("link-1: Read the article — " + base + "/article\n"
+                + "link-2: About us — " + base + "/about", web.links());
         assertTrue(web.follow("link-1").contains("TITLE: Article"));
         assertEquals(base + "/", browser.lastReferer, "a followed link carries its referer");
     }
@@ -150,10 +146,10 @@ class WebSessionTest {
     @Test void acceptsSloppyLinkIdsFromSmallModels() {
         web.open(base + "/");
         assertTrue(web.follow("2").contains("TITLE: About"));
-        String number = idOf(web.back(), "About us").substring("link-".length());
-        assertTrue(web.follow(" Link-" + number + " ").contains("TITLE: About"));
-        number = idOf(web.back(), "About us").substring("link-".length());
-        assertTrue(web.follow("[" + number + "]").contains("TITLE: About"));
+        web.back();
+        assertTrue(web.follow(" Link-2 ").contains("TITLE: About"));
+        web.back();
+        assertTrue(web.follow("[2]").contains("TITLE: About"));
     }
 
     @Test void keepsLinkIdsStableWhenThePageLoadsMoreLinks() {
@@ -169,12 +165,9 @@ class WebSessionTest {
     }
 
     @Test void linkIdsOfAnotherPageAreRejected() {
-        web.open(base + "/");
         web.open(base + "/about");
-        var stale = assertThrows(IllegalArgumentException.class, () -> web.follow("link-1"));
-        assertTrue(stale.getMessage().startsWith("Stale link id: link-1 belongs to an earlier page"), stale.getMessage());
-        var unknown = assertThrows(IllegalArgumentException.class, () -> web.follow("link-9"));
-        assertTrue(unknown.getMessage().startsWith("Unknown link id: link-9."), unknown.getMessage());
+        var error = assertThrows(IllegalArgumentException.class, () -> web.follow("link-1"));
+        assertTrue(error.getMessage().contains("call web_links first"));
     }
 
     @Test void goesBackToThePreviousPage() {
@@ -191,7 +184,7 @@ class WebSessionTest {
         assertTrue(first.contains("PART: 1 of 3 (next: web_read part=2)"), first);
         String last = web.read(3);
         assertTrue(last.contains("PART: 3 of 3\n"), last);
-        assertTrue(last.endsWith("abcdefghij\n\nLINKS: none"), last);
+        assertTrue(last.endsWith("abcdefghij"), last);
         assertThrows(IllegalArgumentException.class, () -> web.read(4));
     }
 
@@ -200,7 +193,7 @@ class WebSessionTest {
                 + "<p>Its founding Director was Margit Solberg, who led it until 1988.</p>");
         web.open(base + "/archive");
         String answer = web.find("founding  director");
-        assertTrue(answer.startsWith("TITLE: Archive\nFOUND: 1 match for \"founding  director\"\n"), answer);
+        assertTrue(answer.startsWith("URL: " + base + "/archive\nFOUND: 1 match for \"founding  director\"\n"), answer);
         assertTrue(answer.contains("hit 1 (part 3): "), answer);
         assertTrue(answer.contains("Its founding Director was Margit Solberg"), answer);
         assertTrue(answer.endsWith("Read a whole part with web_read part=N."), answer);
@@ -252,12 +245,12 @@ class WebSessionTest {
         web.open(base + "/");
         web.find("Welcome");
         assertEquals(base + "/", browser.currentUrl());
-        assertEquals("link-1: Read the article\nlink-2: About us", web.links(), "link ids stay valid");
+        assertEquals("link-1: Read the article — " + base + "/article\n"
+                + "link-2: About us — " + base + "/about", web.links(), "link ids stay valid");
     }
 
     @Test void reportsTheFinalUrlAfterRedirects() {
-        assertTrue(web.open(base + "/moved").startsWith("TITLE: Article"));
-        assertEquals(base + "/article", web.url("t1"), "the reached URL stays available on request");
+        assertTrue(web.open(base + "/moved").startsWith("URL: " + base + "/article"));
     }
 
     @Test void requiresAPageBeforeReading() {
@@ -268,9 +261,8 @@ class WebSessionTest {
     @Test void readsThePageAnotherToolOpened() {
         browser.moveTo(base + "/article");                 // browser_navigate in the expert profile
         String answer = web.read(1);
-        assertTrue(answer.startsWith("TITLE: Article\n"), answer);
-        assertTrue(answer.endsWith("LINKS (open with web_follow link_id):\nlink-1: Home"), answer);
-        assertEquals("link-1: Home", web.links());
+        assertTrue(answer.startsWith("URL: " + base + "/article\nTITLE: Article\nLINKS: 1"), answer);
+        assertEquals("link-1: Home — " + base + "/", web.links());
         assertTrue(web.follow("link-1").contains("TITLE: Start"));
         assertEquals(base + "/article", browser.lastReferer, "the adopted page is the referer");
     }
@@ -278,7 +270,7 @@ class WebSessionTest {
     @Test void linkIdsFollowTheBrowserWhenAnotherToolMovedIt() {
         web.open(base + "/");
         browser.moveTo(base + "/article");
-        assertEquals("link-3: Home", web.links(), "ids belong to the page the browser shows");
+        assertEquals("link-1: Home — " + base + "/", web.links(), "ids belong to the page the browser shows");
         browser.clear();                                   // a blank tab is nothing to read
         var error = assertThrows(IllegalStateException.class, web::links);
         assertTrue(error.getMessage().startsWith("No page is open yet"), error.getMessage());
@@ -293,7 +285,7 @@ class WebSessionTest {
         searching.search("camoufox");
         browser.show(base + "/about?q=camoufox&ia=web#top");    // history.replaceState by the engine's script
         var error = assertThrows(IllegalStateException.class, () -> searching.read(1));
-        assertTrue(error.getMessage().contains("web_open_result result_id=\"result-1\""), error.getMessage());
+        assertTrue(error.getMessage().contains("web_follow link_id=\"result-1\""), error.getMessage());
         browser.moveTo(base + "/");                               // another path on the same host is a page
         assertTrue(searching.read(1).contains("TITLE: Start"));
     }
@@ -363,7 +355,7 @@ class WebSessionTest {
         WebSession searching = new WebSession(browser, UrlPolicy.off(), engine);
         searching.search("camoufox");
         var error = assertThrows(IllegalStateException.class, () -> searching.read(1));
-        assertTrue(error.getMessage().contains("web_open_result result_id=\"result-1\""), error.getMessage());
+        assertTrue(error.getMessage().contains("web_follow link_id=\"result-1\""), error.getMessage());
         browser.moveTo(base + "/article");                 // browser_navigate after the search
         assertTrue(searching.read(1).contains("TITLE: Article"));
         assertTrue(searching.follow("result-1").contains("TITLE: Article"), "results stay valid");
@@ -411,13 +403,11 @@ class WebSessionTest {
     @Test void searchResultsAreNumberedAndFollowable() throws Exception {
         WebSession searching = searching();
         String answer = searching.search("camoufox");
-        assertEquals("result-1: Article\n   About Camoufox\n"
-                + "result-2: About\n"
-                + "Open results with web_open_result result_id=\"result-1\".\n"
+        assertEquals("result-1: Article — " + base + "/article\n   About Camoufox\n"
+                + "result-2: About — " + base + "/about\n"
+                + "Open a result with web_follow link_id=\"result-1\".\n"
                 + "ATTEMPT: local ORGANIC_RESULTS", answer);
-        assertFalse(answer.contains(base), "no target URL in search results: " + answer);
-        assertTrue(searching.openResult("result-2").contains("TITLE: About"));
-        assertEquals(base + "/about", browser.currentUrl(), "opened without the model passing a URL");
+        assertTrue(searching.follow("result-2").contains("TITLE: About"));
     }
 
     @Test void searchThenLinksThenFollowPicksTheSearchResult() throws Exception {
@@ -425,7 +415,7 @@ class WebSessionTest {
         searching.open(base + "/");
         searching.search("camoufox");
         var error = assertThrows(IllegalStateException.class, searching::links);
-        assertTrue(error.getMessage().contains("web_open_result result_id=\"result-1\""), error.getMessage());
+        assertTrue(error.getMessage().contains("web_follow link_id=\"result-1\""), error.getMessage());
         assertTrue(searching.follow("1").contains("TITLE: Article"), "bare 1 = result-1 of the last search");
         assertTrue(searching.follow("2").contains("TITLE: About"), "still the result list until web_links");
     }
@@ -436,8 +426,6 @@ class WebSessionTest {
         searching.follow("result-1");              // Article page: link-1 = Home
         searching.links();
         assertTrue(searching.follow("1").contains("TITLE: Start"), "after web_links a bare 1 is link-1");
-        var stale = assertThrows(IllegalArgumentException.class, () -> searching.follow("link-1"));
-        assertTrue(stale.getMessage().startsWith("Stale link id"), stale.getMessage());
         assertTrue(searching.follow("result-2").contains("TITLE: About"), "results survive page navigation");
         var unknown = assertThrows(IllegalArgumentException.class, () -> searching.follow("result-7"));
         assertTrue(unknown.getMessage().contains("result-1 to result-2"), unknown.getMessage());
@@ -449,14 +437,7 @@ class WebSessionTest {
         searching.links();
         searching.search("camoufox");
         var error = assertThrows(IllegalArgumentException.class, () -> searching.follow("link-1"));
-        assertTrue(error.getMessage().startsWith("Stale link id: link-1"), error.getMessage());
-    }
-
-    /** The id the answer lists for the link with {@code text}. */
-    static String idOf(String answer, String text) {
-        return answer.lines().filter(line -> line.matches("link-\\d+: " + java.util.regex.Pattern.quote(text)))
-                .map(line -> line.substring(0, line.indexOf(':'))).findFirst()
-                .orElseThrow(() -> new AssertionError("no link " + text + " in " + answer));
+        assertTrue(error.getMessage().contains("call web_links first"));
     }
 
     @Test void unconfiguredSearchFailsWithAHelpfulMessage() {

@@ -90,7 +90,7 @@ public final class ArgosApplication {
                 new WebSession(browser, urlPolicy, new BrowserWebSearch(browser)),
                 ResearchSettings.fromEnvironment(), new DocumentAndBatchTools(documents))
                 .forProfile(config.toolProfile());
-        return new ChatRoutedTools.Workspace(tools, () -> {
+        return new ChatRoutedTools.Workspace(tools, browser::useContext, () -> {
             browser.close();
             documents.close();
         });

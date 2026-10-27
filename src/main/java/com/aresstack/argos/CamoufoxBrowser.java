@@ -91,7 +91,21 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
     private final ObjectMapper mapper = new ObjectMapper();
     private final SecretMasker masker = new SecretMasker();
     private final NetworkRecorder network;
-    private final BrowserTabs tabs = new BrowserTabs();
+    /** The tabs of the active user context; each context keeps its own. */
+    private BrowserTabs tabs = new BrowserTabs();
+    /** The persistent profile's own context ("start") and its tabs while another user context is active. */
+    private BrowserContext startContext;
+    private final BrowserTabs startTabs = tabs;
+    /** Additional WebDriver BiDi user contexts in this browser, by context id. */
+    private final Map<String, UserContext> userContexts = new java.util.LinkedHashMap<>();
+    /** The user context the next task should run in, and where its cookies are kept between browser starts. */
+    private volatile String wantedContext = START_CONTEXT;
+    private volatile Path wantedCookies;
+    private String activeContext = START_CONTEXT;
+    static final String START_CONTEXT = "start";
+
+    /** One BiDi user context: isolated cookies and storage inside the same Camoufox. */
+    private record UserContext(BrowserContext context, BrowserTabs tabs, Path cookies) { }
     private final Map<Page, PageControls> controlSnapshots = new IdentityHashMap<>();
     private final RealInput input;
     private final RealDrag drag;
@@ -152,10 +166,12 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
             startedAt.set(System.nanoTime());
             if (!claimed.compareAndSet(false, true)) return null; // the caller was already told nothing was done
             try {
+                switchToWantedContext();
                 return action.call();
             } finally {
                 // Outside Playwright event handlers, so protocol calls are safe here.
                 if (context != null) network.captureQueuedBodies();
+                saveCookiesQuietly();
             }
         });
         long budget = TimeUnit.SECONDS.toNanos(timeoutSeconds);
@@ -270,6 +286,8 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
             }
         }
         context = null;
+        startContext = null;
+        forgetUserContexts();
         playwright = null;
         driverProcesses.clear();
         launchingSince = null;
@@ -388,6 +406,7 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
                 driverProcesses.addAll(childrenSince(before));
                 launchingSince = null;
                 context = playwright.firefox().launchPersistentContext(config.profile(), options);
+                startContext = context;
                 if (proxy != null) verifyNetworkBoundary();
             } catch (Exception error) {
                 Set<Long> launching = launchingSince;
@@ -399,10 +418,7 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
             }
             probeUnicode();
             // Tabs opened by websites (target=_blank, window.open) are adopted like our own.
-            context.onPage(this::adopt);
-            // Protocol events: when a download's transfer ended (its request may not belong to the tab any more).
-            context.onRequestFinished(finishedRequests::add);
-            context.onRequestFailed(failedRequests::add);
+            observe(context);
         }
     }
 
@@ -2120,6 +2136,84 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
         });
     }
 
+    /**
+     * Selects the WebDriver BiDi user context for the following calls. {@code start} is the persistent
+     * profile's own context; any other id is a separate user context in the same Camoufox (Playwright
+     * {@code newContext}), created on first use. Its cookies are kept in {@code cookies} between browser starts,
+     * read and written over the protocol only (no page script). Takes effect with the next browser task.
+     */
+    public void useContext(String id, Path cookies) {
+        wantedCookies = cookies;
+        wantedContext = id;
+    }
+
+    /** Protocol observers for a context; only the ACTIVE context's new tabs are adopted. */
+    private void observe(BrowserContext observed) {
+        // Tabs opened by websites (target=_blank, window.open) are adopted like our own.
+        observed.onPage(page -> {
+            if (context == observed) adopt(page);
+        });
+        // Protocol events: when a download's transfer ended (its request may not belong to the tab any more).
+        observed.onRequestFinished(finishedRequests::add);
+        observed.onRequestFailed(failedRequests::add);
+    }
+
+    private void switchToWantedContext() throws Exception {
+        String wanted = wantedContext;
+        if (wanted.equals(activeContext) && (context != null || START_CONTEXT.equals(wanted))) return;
+        ensureContext();
+        if (wanted.equals(activeContext)) return;
+        saveCookiesQuietly();
+        controlSnapshots.clear();
+        if (START_CONTEXT.equals(wanted)) {
+            context = startContext;
+            tabs = startTabs;
+        } else {
+            UserContext user = userContexts.get(wanted);
+            if (user == null) {
+                com.microsoft.playwright.Browser owner = startContext.browser();
+                if (owner == null) {
+                    throw new IllegalStateException("This Camoufox session cannot create additional user contexts.");
+                }
+                BrowserContext created = owner.newContext();
+                Path cookies = wantedCookies;
+                if (cookies != null && Files.isRegularFile(cookies)) {
+                    List<com.microsoft.playwright.options.Cookie> saved = List.of(mapper.readValue(
+                            Files.readString(cookies), com.microsoft.playwright.options.Cookie[].class));
+                    if (!saved.isEmpty()) created.addCookies(saved);
+                }
+                observe(created);
+                user = new UserContext(created, new BrowserTabs(), cookies);
+                userContexts.put(wanted, user);
+            }
+            context = user.context();
+            tabs = user.tabs();
+        }
+        activeContext = wanted;
+    }
+
+    /** Writes the active user context's cookies (protocol only); the start context keeps them in its profile. */
+    private void saveCookiesQuietly() {
+        UserContext user = userContexts.get(activeContext);
+        if (user == null || user.cookies() == null || context != user.context()) return;
+        try {
+            Path temporary = user.cookies().resolveSibling(user.cookies().getFileName() + ".tmp");
+            Files.createDirectories(user.cookies().getParent());
+            Files.writeString(temporary, mapper.writeValueAsString(user.context().cookies()));
+            Files.move(temporary, user.cookies(), java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+                    java.nio.file.StandardCopyOption.ATOMIC_MOVE);
+        } catch (Exception error) {
+            System.err.println("Argos: could not save the cookies of context " + activeContext + ": "
+                    + error.getClass().getSimpleName());
+        }
+    }
+
+    private void forgetUserContexts() {
+        userContexts.clear();
+        tabs = startTabs;
+        activeContext = START_CONTEXT;
+    }
+
     public Map<String, Object> status() {
         return onBrowser(() -> Map.of("started", context != null, "profile", config.profile().toString(),
                 "url", tabs.current().map(this::shownUrl).orElse(""),
@@ -2224,10 +2318,14 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
 
     private void shutDown() {
         try {
-            if (context != null) context.close();
+            saveCookiesQuietly();
+            for (UserContext user : userContexts.values()) user.context().close();
+            if (startContext != null) startContext.close();
             if (playwright != null) playwright.close();
         } finally {
             context = null;
+            startContext = null;
+            forgetUserContexts();
             playwright = null;
             driverProcesses.clear();
             // The proxy goes last: until then the browser still has its only route through it.

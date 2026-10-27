@@ -9,21 +9,26 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.BiConsumer;
 import java.util.function.Function;
 
 /**
  * Routes every {@code tools/call} to the browser of the calling ChatGPT conversation's active context.
  * <p>
- * No second browser architecture: each profile directory gets the unchanged Argos tool stack (one
- * {@link CamoufoxBrowser} = one Camoufox process with its own persistent profile, plus its WebSession and
+ * No second browser architecture: each conversation's profile directory gets the unchanged Argos tool stack
+ * (one {@link CamoufoxBrowser} = one Camoufox process started with that profile, plus its WebSession and
  * documents), built by the same factory the single-profile server uses. This class only picks which stack
- * answers. Idle stacks beyond {@code maxBrowsers} are closed (least recently used first); their profile stays on
+ * answers and which BiDi user context it uses. Idle stacks beyond {@code maxBrowsers} are closed (least recently used first); their profile stays on
  * disk and the browser starts again with the next call.
  */
 public final class ChatRoutedTools implements AutoCloseable {
 
-    /** The tools of one profile and what to close when the profile's browser is stopped. */
-    public record Workspace(List<SyncToolSpecification> tools, AutoCloseable resources) { }
+    /**
+     * The tools of one conversation's browser, how to select its user context (id, cookie file) and what to close
+     * when the browser is stopped.
+     */
+    public record Workspace(List<SyncToolSpecification> tools, BiConsumer<String, Path> contexts,
+                            AutoCloseable resources) { }
 
     private final ChatProfiles profiles;
     private final Function<Path, Workspace> factory;
@@ -34,11 +39,13 @@ public final class ChatRoutedTools implements AutoCloseable {
     private static final class Entry {
         final Map<String, SyncToolSpecification> tools = new LinkedHashMap<>();
         final AutoCloseable resources;
+        final BiConsumer<String, Path> contexts;
         int calls;
 
         Entry(Workspace workspace) {
             workspace.tools().forEach(tool -> tools.put(tool.tool().name(), tool));
             this.resources = workspace.resources();
+            this.contexts = workspace.contexts();
         }
     }
 
@@ -67,17 +74,20 @@ public final class ChatRoutedTools implements AutoCloseable {
                                  CallToolRequest request) {
         ChatProfiles.Chat chat;
         ChatProfiles.Context context;
+        Path profile;
         try {
             chat = ChatProfiles.chatOf(request.meta());
             context = profiles.active(chat);
+            profile = profiles.profile(chat);
         } catch (Exception error) {
             log("refused " + name + ": " + (error instanceof ChatProfiles.MissingChatIdentity
                     ? "no openai/session" : error.getClass().getSimpleName()));
             return ArgosTools.failure(error);
         }
         log(name + " chat=" + chat.shortKey() + " context=" + context.id());
-        Entry entry = acquire(context.profile());
+        Entry entry = acquire(profile);
         try {
+            entry.contexts.accept(context.id(), context.cookies());
             SyncToolSpecification tool = entry.tools.get(name);
             if (tool == null) return ArgosTools.failure(new IllegalStateException("Unknown tool " + name));
             return tool.callHandler().apply(exchange, request);
@@ -129,8 +139,8 @@ public final class ChatRoutedTools implements AutoCloseable {
     private List<SyncToolSpecification> contextTools() {
         List<SyncToolSpecification> tools = new ArrayList<>();
         tools.add(contextTool("browser_context_new",
-                "Create a new, empty browser user context for this conversation and switch to it. It has its own "
-                        + "persistent profile: no cookies or logins from other contexts. Returns its id.",
+                "Create a new, empty browser user context for this conversation and switch to it. It shares no "
+                        + "cookies, storage or logins with other contexts; its cookies are kept. Returns its id.",
                 Map.of(), List.of(), (chat, args) -> {
                     ChatProfiles.Context created = profiles.create(chat);
                     log("context_new chat=" + chat.shortKey() + " context=" + created.id());

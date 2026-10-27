@@ -136,3 +136,17 @@ Echte Suchmaschinen prüft nur die Abnahme über ChatGPT.
 - Anders als `web_read` gibt es kein zweites Lesen von „Loading…“-Seiten (Single-Page-Apps).
 - Ein Consent-Klick in einem Hintergrund-Tab ist auf echtem Camoufox noch nicht geprüft. Er geschieht nur mit `ARGOS_SEARCH_CONSENT_ACCEPT=true` oder bei „Ablehnen“-Schaltflächen.
 - Die Tab-, Such- und Link-Register leben im Speicher des Chat-Workspaces und gehen bei Idle-Shutdown oder Neustart verloren. Alte IDs werden dann als unbekannt abgelehnt.
+
+## Screenshot and the developer profile
+
+`web_screenshot` (tabId, mode viewport|full) is part of convenience. `ARGOS_TOOL_PROFILE=developer` publishes all
+convenience tools plus `web_evaluate`, `web_inspect`, `web_extract`, `web_network`, `web_network_detail`,
+`web_network_json`, `web_network_har` and `web_network_clear`. They reuse the expert implementations and the one
+NetworkRecorder, but accept only tab ids opened by the convenience tools; the current browser tab is never used
+implicitly. `web_evaluate` runs in exactly the given tab, cuts the JSON result at `maxCharacters` (default 8000,
+max 60000), reports script errors as `ok=false` and `navigated=true` when the script left the page.
+
+What the recorder really holds: the newest 200 requests with masked headers and POST data (8000 chars). Response
+bodies are read from the browser (Playwright `Response.body()`, no new request) only for text/JSON/XML up to 2 MB,
+masked and cut at 32000 characters; binary bodies are never included. The HAR therefore contains a body only where
+one was already read, and is not a complete recording.

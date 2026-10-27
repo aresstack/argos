@@ -16,11 +16,14 @@ class ToolProfileTest {
     @Test void parsesCaseInsensitively() {
         assertEquals(ToolProfile.COMPACT, ToolProfile.parse("compact"));
         assertEquals(ToolProfile.EXPERT, ToolProfile.parse(" Expert "));
+        assertEquals(ToolProfile.DEVELOPER, ToolProfile.parse("developer"));
+        assertTrue(ToolProfile.DEVELOPER.convenienceBased());
+        assertFalse(ToolProfile.EXPERT.convenienceBased());
     }
 
     @Test void rejectsUnknownProfiles() {
         IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
                 () -> ToolProfile.parse("everything"));
-        assertTrue(error.getMessage().contains("'convenience', 'expert', 'compact' or 'legacy'"), error.getMessage());
+        assertTrue(error.getMessage().contains("'convenience', 'developer', 'expert', 'compact' or 'legacy'"), error.getMessage());
     }
 }

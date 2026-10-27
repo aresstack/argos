@@ -32,8 +32,29 @@ class ConvenienceToolsTest {
             List<String> names = tools.forProfile(ToolProfile.CONVENIENCE).stream().map(spec -> spec.tool().name()).toList();
 
             assertEquals(List.of("web_search", "web_select_results", "web_select_links", "web_follow_link",
-                    "web_read_tab", "web_back", "web_open_url", "web_get_url", "web_close_tabs"), names);
+                    "web_read_tab", "web_back", "web_open_url", "web_get_url", "web_close_tabs", "web_screenshot"), names);
             assertThrows(IllegalStateException.class, () -> new ArgosTools(browser, web).forProfile(ToolProfile.CONVENIENCE));
+        }
+    }
+
+    @Test void developerProfileIsConveniencePlusDiagnosisOnTheSameTabIds() {
+        try (CamoufoxBrowser browser = new CamoufoxBrowser(new ArgosConfig("127.0.0.1", 0, null, null, temp, true))) {
+            WebSession web = new WebSession(browser, UrlPolicy.publicOnly(), query -> new SearchResults(List.of(), List.of()));
+            ArgosTools tools = new ArgosTools(browser, web).withConvenience(new ConvenienceTools(session(browser)));
+            List<SyncToolSpecification> developer = tools.forProfile(ToolProfile.DEVELOPER);
+            List<String> names = developer.stream().map(spec -> spec.tool().name()).toList();
+            List<String> expected = new java.util.ArrayList<>(tools.forProfile(ToolProfile.CONVENIENCE).stream()
+                    .map(spec -> spec.tool().name()).toList());
+            expected.addAll(TabDiagnosticTools.DEVELOPER_NAMES);
+            assertEquals(expected, names);
+
+            SyncToolSpecification evaluate = developer.stream().filter(spec -> spec.tool().name().equals("web_evaluate"))
+                    .findFirst().orElseThrow();
+            assertEquals(List.of("tabId", "expression"), evaluate.tool().inputSchema().required());
+            CallToolResult foreign = evaluate.callHandler().apply(null, new CallToolRequest("web_evaluate",
+                    Map.of("tabId", "t1", "expression", "() => 1")));
+            assertTrue(foreign.isError());
+            assertTrue(((TextContent) foreign.content().get(0)).text().contains("Unknown tab"));
         }
     }
 

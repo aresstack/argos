@@ -91,10 +91,13 @@ public final class ArgosTools {
     }
 
     public List<SyncToolSpecification> forProfile(ToolProfile profile) {
-        if (profile == ToolProfile.CONVENIENCE) {
+        if (profile.convenienceBased()) {
             // Its own tool set only: no expert browser/network tools and no ResearchTools (even with ARGOS_RESEARCH).
             if (convenience == null) throw new IllegalStateException("The convenience profile needs its research session.");
             List<SyncToolSpecification> tools = new ArrayList<>(convenience.specifications());
+            TabDiagnosticTools diagnostics = new TabDiagnosticTools(browser, convenience.session());
+            tools.add(diagnostics.screenshot());
+            if (profile == ToolProfile.DEVELOPER) tools.addAll(diagnostics.developer());
             if (history != null) tools.addAll(new SearchHistoryTools(history.history(), history::archiveHtml).specifications());
             return List.copyOf(tools);
         }
@@ -125,7 +128,7 @@ public final class ArgosTools {
                 if (documents != null) tools.addAll(documents.all());
                 yield List.copyOf(tools);
             }
-            case CONVENIENCE -> throw new IllegalStateException("handled in forProfile");
+            case CONVENIENCE, DEVELOPER -> throw new IllegalStateException("handled in forProfile");
         };
     }
 

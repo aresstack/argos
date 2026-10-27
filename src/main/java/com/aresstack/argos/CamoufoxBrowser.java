@@ -2383,6 +2383,30 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
         return onBrowser(() -> pageFor(tabId).evaluate(expression));
     }
 
+    /**
+     * Evaluates in exactly this tab (never the current one) and reports whether the script made the tab leave its
+     * page, so a navigation by the caller's script is visible in the answer. Other tabs are not touched.
+     */
+    public Map<String, Object> evaluateInTab(String expression, String tabId) {
+        if (tabId == null || tabId.isBlank()) throw new IllegalArgumentException("Give the tabId to evaluate in.");
+        return onBrowser(() -> {
+            Page page = tabs.get(tabId);
+            if (page == null) throw new IllegalArgumentException("Tab " + tabId + " is not open.");
+            String before = page.url();
+            Map<String, Object> answer = new LinkedHashMap<>();
+            try {
+                answer.put("result", page.evaluate(expression));
+                answer.put("ok", true);
+            } catch (RuntimeException error) {
+                answer.put("ok", false);
+                answer.put("error", error.getMessage() == null ? error.getClass().getSimpleName()
+                        : error.getMessage().lines().findFirst().orElse(""));
+            }
+            if (!before.equals(page.url())) answer.put("navigated", true);
+            return answer;
+        });
+    }
+
     public byte[] screenshot() {
         return screenshot(null);
     }

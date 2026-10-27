@@ -138,7 +138,7 @@ public final class ArgosApplication {
         ArgosTools argosTools = new ArgosTools(browser,
                 new WebSession(browser, urlPolicy, search),
                 ResearchSettings.fromEnvironment(), new DocumentAndBatchTools(documents), history);
-        if (config.toolProfile() == ToolProfile.CONVENIENCE) {
+        if (config.toolProfile().convenienceBased()) {
             argosTools.withConvenience(new ConvenienceTools(convenienceSession(browser, urlPolicy, history)));
         }
         List<SyncToolSpecification> tools = argosTools.forProfile(config.toolProfile());
@@ -207,7 +207,7 @@ public final class ArgosApplication {
         McpSyncServer mcp = McpServer.sync(transport)
                 .serverInfo("argos", ArgosTools.VERSION)
                 .capabilities(ServerCapabilities.builder().tools(true).build())
-                .instructions(config.toolProfile() == ToolProfile.CONVENIENCE ? ConvenienceTools.INSTRUCTIONS : null)
+                .instructions(config.toolProfile().convenienceBased() ? ConvenienceTools.INSTRUCTIONS : null)
                 .tools(tools).build();
 
         Server server = new Server(new InetSocketAddress(config.host(), config.port()));

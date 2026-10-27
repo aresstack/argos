@@ -28,6 +28,10 @@ public final class ConvenienceTools {
         this.session = session;
     }
 
+    ConvenienceSession session() {
+        return session;
+    }
+
     public List<SyncToolSpecification> specifications() {
         List<SyncToolSpecification> tools = new ArrayList<>();
         tools.add(ArgosTools.tool("web_search",

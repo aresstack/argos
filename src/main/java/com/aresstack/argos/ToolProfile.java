@@ -12,7 +12,9 @@ public enum ToolProfile {
     LEGACY,
     COMPACT,
     EXPERT,
-    CONVENIENCE;
+    CONVENIENCE,
+    /** Convenience plus page, DOM and network diagnosis on the same tab ids. */
+    DEVELOPER;
 
     public static ToolProfile parse(String value) {
         if (value == null || value.isBlank()) return CONVENIENCE;
@@ -20,7 +22,12 @@ public enum ToolProfile {
             return valueOf(value.trim().toUpperCase(Locale.ROOT));
         } catch (IllegalArgumentException unknown) {
             throw new IllegalArgumentException(
-                    "ARGOS_TOOL_PROFILE must be 'convenience', 'expert', 'compact' or 'legacy': " + value);
+                    "ARGOS_TOOL_PROFILE must be 'convenience', 'developer', 'expert', 'compact' or 'legacy': " + value);
         }
+    }
+
+    /** Convenience and developer share the id-based research tools and their tab ids. */
+    public boolean convenienceBased() {
+        return this == CONVENIENCE || this == DEVELOPER;
     }
 }

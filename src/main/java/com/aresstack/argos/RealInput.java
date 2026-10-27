@@ -38,13 +38,26 @@ final class RealInput {
               const hit = document.elementFromPoint(x, y);
               return !!hit && (hit === element || element.contains(hit) || hit.control === element);
             }""";
-    /** "multi" for text areas and editable content, "single" for one-line inputs, "" when not editable. */
+    /**
+     * "multi" for text areas and editable content, "single" for one-line inputs, "segmented:&lt;type&gt;" for date
+     * and time inputs (no text selection, Ctrl+A there selects the whole page), "" when not editable.
+     */
     private static final String EDITABLE = """
             element => element.isContentEditable || (element.tagName === 'TEXTAREA' && !element.disabled
                   && !element.readOnly) ? 'multi'
               : element.tagName === 'INPUT' && !element.disabled && !element.readOnly
+                  && /^(date|time|datetime-local|month|week)$/i.test(element.type || '') ? 'segmented:' + element.type.toLowerCase()
+              : element.tagName === 'INPUT' && !element.disabled && !element.readOnly
                   && !/^(button|checkbox|radio|submit|reset|file|image|range|color|hidden)$/i.test(element.type || '')
                 ? 'single' : ''""";
+    /** Whether keys now reach the element (or, for editable content, a node inside it): transient and read-only. */
+    private static final String VALUE = "element => element.value";
+    private static final String FOCUSED = """
+            element => {
+              let active = element.ownerDocument.activeElement;
+              while (active && active.shadowRoot && active.shadowRoot.activeElement) active = active.shadowRoot.activeElement;
+              return active === element || (element.isContentEditable && element.contains(active));
+            }""";
     /** Our own probe page, never a website: records what its text area receives in the title. */
     private static final String PROBE_PAGE = """
             <html><head><title></title></head><body><textarea autofocus></textarea><script>
@@ -418,6 +431,7 @@ final class RealInput {
     /**
      * Focuses the field by a real click, replaces its content and types {@code text} key by key. Ctrl+A and
      * Backspace are always pressed: reading the current value would go through Playwright's marked element reads.
+     * Ctrl+A is only pressed once the field holds the focus; otherwise it would select the whole page.
      */
     void replaceText(Page page, Locator target, String text) {
         text = lineEnds(text);
@@ -425,21 +439,96 @@ final class RealInput {
         ElementHandle element = target.elementHandle(new Locator.ElementHandleOptions().setTimeout(ACTION_TIMEOUT_MS));
         try {
             Object kind = element.evaluate(EDITABLE);
-            if (!"single".equals(kind) && !"multi".equals(kind)) {
-                throw new IllegalStateException("Element is not an editable field");
+            if (kind instanceof String k && k.startsWith("segmented:")) {
+                fillSegments(page, element, k.substring("segmented:".length()), text);
+                return;
             }
-            if ("single".equals(kind) && lineBreakInside(text)) {
-                throw new IllegalArgumentException("A single-line field takes no line break inside the text: the"
-                        + " Enter key would submit the form halfway. Only a trailing newline presses Enter.");
-            }
+            checkFillable(kind, text);
             click(page, element);
+            if (!Boolean.TRUE.equals(element.evaluate(FOCUSED))) {
+                throw new IllegalStateException("The click did not put the focus into the field (an overlay or label"
+                        + " may have taken it). Nothing was typed and no select-all was pressed.");
+            }
+            InputDevice device = InputDevice.of(page);
+            device.sleep(motion.reactionPause());
+            playKeys(device, typing.clearField(), false);
         } finally {
             element.dispose();
         }
         InputDevice device = InputDevice.of(page);
-        device.sleep(motion.reactionPause());
-        playKeys(device, typing.clearField(), false);
         type(device, text);
+    }
+
+    /**
+     * Fills a native date or time input without any select-all: a real click on its first segment, then the digits
+     * of each segment. Typing into a segment replaces it and moves on by itself. The segment order and the 12/24 hour
+     * display depend on the browser locale, so the candidates are tried in turn and checked against the value.
+     */
+    private void fillSegments(Page page, ElementHandle element, String type, String text) {
+        List<String> candidates = segmentKeys(type, text.strip());
+        InputDevice device = InputDevice.of(page);
+        String expected = text.strip();
+        for (String keys : candidates) {
+            clickFirstSegment(page, device, element);
+            if (!Boolean.TRUE.equals(element.evaluate(FOCUSED))) {
+                throw new IllegalStateException("The click did not put the focus into the " + type + " field."
+                        + " Nothing was typed.");
+            }
+            device.sleep(motion.reactionPause());
+            playKeys(device, typing.type(keys), false);
+            if (expected.equals(element.evaluate(VALUE))) return;
+        }
+        throw new IllegalStateException("The " + type + " field did not take \"" + expected + "\" (it now holds \""
+                + element.evaluate(VALUE) + "\"). Its segments may follow another order in this browser locale.");
+    }
+
+    private void clickFirstSegment(Page page, InputDevice device, ElementHandle element) {
+        HumanMotion.Box field = stableBox(page, element);
+        // The first segment sits at the left, after the padding; aim at a narrow strip there, never the centre.
+        HumanMotion.Box first = new HumanMotion.Box(field.x() + Math.min(4, field.width() / 8), field.y(),
+                Math.max(1, Math.min(12, field.width() / 6)), field.height());
+        HumanMotion.Point point = reachablePoint(page, device, element, first);
+        moveTo(page, device, point, Math.min(first.width(), first.height()));
+        press(device, MouseButton.LEFT);
+    }
+
+    /**
+     * The key sequences that may put {@code value} into a native {@code type} input, most likely first. Values use
+     * the HTML formats: time {@code HH:MM}, date {@code YYYY-MM-DD}. Other inputs and malformed values are refused
+     * before any input.
+     */
+    static List<String> segmentKeys(String type, String value) {
+        switch (type) {
+            case "time" -> {
+                java.util.regex.Matcher m = java.util.regex.Pattern.compile("(\\d{2}):(\\d{2})").matcher(value);
+                if (!m.matches() || Integer.parseInt(m.group(1)) > 23 || Integer.parseInt(m.group(2)) > 59) {
+                    throw new IllegalArgumentException("A time field takes HH:MM in 24 hours, e.g. 18:30.");
+                }
+                int hour = Integer.parseInt(m.group(1));
+                String twelve = String.format("%02d", hour % 12 == 0 ? 12 : hour % 12);
+                return List.of(m.group(1) + m.group(2),
+                        twelve + m.group(2) + (hour < 12 ? "A" : "P"));
+            }
+            case "date" -> {
+                java.util.regex.Matcher m = java.util.regex.Pattern.compile("(\\d{4})-(\\d{2})-(\\d{2})").matcher(value);
+                if (!m.matches()) throw new IllegalArgumentException("A date field takes YYYY-MM-DD, e.g. 2026-10-27.");
+                String y = m.group(1), mo = m.group(2), d = m.group(3);
+                return List.of(mo + d + y, d + mo + y, y + mo + d);
+            }
+            default -> throw new IllegalStateException("A " + type + " field cannot be filled yet: select-all would"
+                    + " mark the whole page. Nothing was typed.");
+        }
+    }
+
+    /** Refuses, before any input, fields that {@link #replaceText} cannot clear and fill safely. */
+    static void checkFillable(Object kind, String text) {
+        if (!"single".equals(kind) && !"multi".equals(kind)) {
+            throw new IllegalStateException("Element is not an editable field");
+        }
+        if ("single".equals(kind) && lineBreakInside(text)) {
+            throw new IllegalArgumentException("A single-line field takes no line break inside the text: the"
+                    + " Enter key would submit the form halfway. Only a trailing newline presses Enter.");
+        }
     }
 
     /** Types {@code text} into the focused element. A trailing newline presses Enter. */

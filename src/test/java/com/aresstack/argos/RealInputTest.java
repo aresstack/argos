@@ -267,4 +267,20 @@ class RealInputTest {
         }
         return text.toString();
     }
+
+    @Test void fillableKindsAreCheckedBeforeAnyInput() {
+        assertThrows(IllegalStateException.class, () -> RealInput.checkFillable("", "x"));
+        RealInput.checkFillable("single", "abc");
+        RealInput.checkFillable("multi", "a\nb");
+        assertThrows(IllegalArgumentException.class, () -> RealInput.checkFillable("single", "a\nb"));
+    }
+
+    @Test void timeAndDateBecomeSegmentDigitsWithoutSelectAll() {
+        assertEquals(List.of("1830", "0630P"), RealInput.segmentKeys("time", "18:30"));
+        assertEquals(List.of("0005", "1205A"), RealInput.segmentKeys("time", "00:05"));
+        assertEquals(List.of("10272026", "27102026", "20261027"), RealInput.segmentKeys("date", "2026-10-27"));
+        assertThrows(IllegalArgumentException.class, () -> RealInput.segmentKeys("time", "6:30 pm"));
+        assertThrows(IllegalArgumentException.class, () -> RealInput.segmentKeys("time", "24:00"));
+        assertThrows(IllegalStateException.class, () -> RealInput.segmentKeys("week", "2026-W44"));
+    }
 }

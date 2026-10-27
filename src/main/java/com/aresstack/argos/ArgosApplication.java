@@ -66,7 +66,7 @@ public final class ArgosApplication {
             // directory is never written (its handlers are never called).
             ChatRoutedTools.Workspace template = workspace(config, historySettings.enabled()
                     ? isolation.chatRoot().resolve("_template").resolve("history") : null, historySettings);
-            tools = routed.specifications(template.tools(), config.toolProfile() == ToolProfile.EXPERT);
+            tools = routed.specifications(template.tools(), config.toolProfile().includesExpertTools());
             template.resources().close();
             browsers = routed;
         } else {
@@ -176,6 +176,7 @@ public final class ArgosApplication {
                         .mcpEndpoint("/").build();
         McpSyncServer mcp = McpServer.sync(transport)
                 .serverInfo("argos", ArgosTools.VERSION)
+                .instructions(ArgosTools.INSTRUCTIONS)
                 .capabilities(ServerCapabilities.builder().tools(true).build())
                 .tools(tools).build();
 

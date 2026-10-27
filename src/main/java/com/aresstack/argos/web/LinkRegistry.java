@@ -1,68 +1,89 @@
 package com.aresstack.argos.web;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
 /**
- * Hands out short link ids (link-1, link-2, ...) for the current page. Ids stay stable
- * while the agent stays on the same page: re-reading a page that loaded more content
- * keeps every known id and appends new links at the end. Navigating elsewhere starts a
- * fresh numbering, so an id never silently points to a link on another page.
+ * Hands out short link ids (link-1, link-2, ...) for the page each tab shows and keeps each link's exact URL,
+ * which the agent never sees. Ids stay stable while a tab stays on the same page: re-reading a page that loaded
+ * more content keeps every known id and appends new links at the end. Ids are never reused within a session and
+ * are shared by all tabs, so an id names its tab by itself, and an id of an earlier page or a closed tab is
+ * recognized as stale instead of silently pointing to a link elsewhere.
  */
 final class LinkRegistry {
+    /** A link of a tab's current page. */
+    record TabLink(String tab, PageLink link) {
+    }
+
+    private static final class TabLinks {
+        final Map<String, PageLink> byUrl = new LinkedHashMap<>();
+        String pageUrl = "";
+        boolean truncated;
+    }
+
     private final int maxLinks;
-    private final Map<String, PageLink> byUrl = new LinkedHashMap<>();
-    private String pageUrl = "";
-    private boolean truncated;
+    private final Map<String, TabLinks> tabs = new HashMap<>();
+    /** Number of the next new id; never goes back. */
+    private int next = 1;
 
     LinkRegistry(int maxLinks) {
         this.maxLinks = maxLinks;
     }
 
-    /** Record the links of {@code url}; restarts the numbering when the page changed. */
-    void update(String url, List<LinkExtractor.Anchor> anchors) {
-        if (!url.equals(pageUrl)) {
-            byUrl.clear();
-            pageUrl = url;
+    /** Record the links of {@code url} in {@code tab}; a new page of the tab gets new ids. */
+    void update(String tab, String url, List<LinkExtractor.Anchor> anchors) {
+        TabLinks state = tabs.computeIfAbsent(tab, any -> new TabLinks());
+        if (!url.equals(state.pageUrl)) {
+            state.byUrl.clear();
+            state.pageUrl = url;
         }
-        truncated = false;
+        state.truncated = false;
         for (LinkExtractor.Anchor anchor : anchors) {
-            PageLink known = byUrl.get(anchor.url());
+            PageLink known = state.byUrl.get(anchor.url());
             if (known != null) {
                 if (known.text().isEmpty() && !anchor.text().isEmpty()) {
-                    byUrl.put(anchor.url(), new PageLink(known.id(), anchor.text(), anchor.url()));
+                    state.byUrl.put(anchor.url(), new PageLink(known.id(), anchor.text(), anchor.url()));
                 }
                 continue;
             }
-            if (byUrl.size() >= maxLinks) {
-                truncated = true;
+            if (state.byUrl.size() >= maxLinks) {
+                state.truncated = true;
                 continue;
             }
-            byUrl.put(anchor.url(), new PageLink("link-" + (byUrl.size() + 1), anchor.text(), anchor.url()));
+            state.byUrl.put(anchor.url(), new PageLink("link-" + next++, anchor.text(), anchor.url()));
         }
     }
 
-    void clear() {
-        byUrl.clear();
-        pageUrl = "";
-        truncated = false;
+    /** Forgets the links of {@code tab}; their ids become stale. */
+    void clear(String tab) {
+        tabs.remove(tab);
     }
 
-    List<PageLink> links() {
-        return new ArrayList<>(byUrl.values());
+    List<PageLink> links(String tab) {
+        TabLinks state = tabs.get(tab);
+        return state == null ? List.of() : new ArrayList<>(state.byUrl.values());
     }
 
-    boolean truncated() {
-        return truncated;
+    boolean truncated(String tab) {
+        TabLinks state = tabs.get(tab);
+        return state != null && state.truncated;
     }
 
-    /** The link with id link-{@code number}, or null. */
-    PageLink find(int number) {
+    /** True when link-{@code number} was handed out but belongs to no tab's current page any more. */
+    boolean stale(int number) {
+        return number >= 1 && number < next && find(number) == null;
+    }
+
+    /** The link with id link-{@code number} and the tab whose page has it, or null. */
+    TabLink find(int number) {
         String id = "link-" + number;
-        for (PageLink link : byUrl.values()) {
-            if (link.id().equals(id)) return link;
+        for (Map.Entry<String, TabLinks> tab : tabs.entrySet()) {
+            for (PageLink link : tab.getValue().byUrl.values()) {
+                if (link.id().equals(id)) return new TabLink(tab.getKey(), link);
+            }
         }
         return null;
     }

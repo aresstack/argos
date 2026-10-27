@@ -879,8 +879,13 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
     // DOM in Playwright's isolated utility world; title, text and links are derived in Java.
     @Override
     public PageCapture open(String url, String referer) {
+        return open(url, referer, null);
+    }
+
+    @Override
+    public PageCapture open(String url, String referer, String tabId) {
         return onBrowser(() -> {
-            Page p = activePage();
+            Page p = pageFor(tabId);
             Page.NavigateOptions options = new Page.NavigateOptions()
                     .setWaitUntil(WaitUntilState.DOMCONTENTLOADED).setTimeout(45_000);
             if (referer != null && !referer.isBlank()) options.setReferer(referer);
@@ -893,7 +898,12 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
 
     @Override
     public PageCapture current() {
-        return onBrowser(() -> captureWhenLoaded(activePage(), 0));
+        return current(null);
+    }
+
+    @Override
+    public PageCapture current(String tabId) {
+        return onBrowser(() -> captureWhenLoaded(pageFor(tabId), 0));
     }
 
     /** Like {@link #current()} for any tab (null = current tab), without changing which tab is current. */
@@ -925,8 +935,13 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
 
     @Override
     public PageCapture back() {
+        return back(null);
+    }
+
+    @Override
+    public PageCapture back(String tabId) {
         return onBrowser(() -> {
-            Page p = activePage();
+            Page p = pageFor(tabId);
             if (document(p).saved != null) {
                 // As in traverse("back"): the saved feed is no history entry of its own, back returns to the
                 // page the tab shows behind it.
@@ -942,10 +957,103 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
 
     @Override
     public void clear() {
+        clear(null);
+    }
+
+    @Override
+    public void clear(String tabId) {
         onBrowser(() -> {
-            activePage().navigate("about:blank");
+            pageFor(tabId).navigate("about:blank");
             return null;
         });
+    }
+
+    // Research tabs of the web_* tools (BrowserPagePort): the same tab registry as browser_tab_*.
+
+    @Override
+    public boolean supportsTabs() {
+        return true;
+    }
+
+    /** The current tab's id without starting the browser; "" before it started. */
+    @Override
+    public String currentTab() {
+        return onBrowser(() -> {
+            String id = tabs.currentId();
+            return id == null ? "" : id;
+        });
+    }
+
+    @Override
+    public boolean hasTab(String tabId) {
+        return onBrowser(() -> tabs.all().containsKey(BrowserTabs.normalize(tabId)));
+    }
+
+    @Override
+    public String currentUrl(String tabId) {
+        if (tabId == null || tabId.isBlank()) return currentUrl();
+        return onBrowser(() -> {
+            Page page = tabs.all().get(BrowserTabs.normalize(tabId));
+            return page == null ? "" : shownUrl(page);
+        });
+    }
+
+    @Override
+    public void showTab(String tabId) {
+        onBrowser(() -> {
+            activePage();
+            // Only Argos' own notion of the current tab changes; no focus or bringToFront reaches the pages.
+            tabs.select(tabId);
+            return null;
+        });
+    }
+
+    @Override
+    public String newTab() {
+        return onBrowser(() -> {
+            activePage();
+            return adopt(context.newPage());
+        });
+    }
+
+    @Override
+    public void discardTab(String tabId) {
+        closeTab(tabId);
+    }
+
+    /**
+     * New tabs loaded with the bounded overlap of {@link #navigatePages} (commit, then load per page), each read
+     * once afterwards like {@link #open}. No tab becomes current here.
+     */
+    @Override
+    public List<TabPage> openInNewTabs(List<String> urls, int parallel) {
+        if (urls == null || urls.isEmpty() || urls.size() > 10) {
+            throw new IllegalArgumentException("Give between 1 and 10 URLs");
+        }
+        return onBrowser(() -> {
+            activePage();
+            List<PageNavigationRequest> requests = new ArrayList<>(urls.size());
+            for (String url : urls) requests.add(new PageNavigationRequest(adopt(context.newPage()), url));
+            List<Map<String, Object>> navigated = navigatePagesOnDriver(requests,
+                    Math.max(1, Math.min(4, parallel)), 20_000);
+            List<TabPage> pages = new ArrayList<>(urls.size());
+            for (int i = 0; i < requests.size(); i++) {
+                String tab = requests.get(i).tab();
+                Map<String, Object> result = navigated.get(i);
+                if (!"SUCCESS".equals(result.get("outcome"))) {
+                    Object error = result.getOrDefault("error", result.getOrDefault("hint", result.get("outcome")));
+                    pages.add(new TabPage(tab, null, String.valueOf(error)));
+                    continue;
+                }
+                try {
+                    int status = result.get("status") instanceof Number number ? number.intValue() : 0;
+                    pages.add(new TabPage(tab, captureWhenLoaded(tabs.get(tab), status), ""));
+                } catch (RuntimeException unreadable) {
+                    pages.add(new TabPage(tab, null, errorMessage(unreadable)));
+                }
+            }
+            return pages;
+        }, 300);
     }
 
     private PageCapture capture(Page p) {

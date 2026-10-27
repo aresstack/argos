@@ -69,11 +69,10 @@ class SearchHistoryCaptureTest {
 
         web.search("argos docs");
         web.search("argos docs");
-        web.follow("result-1");
+        web.openResult("result-3");                // the second search continues the ids
         web.read(1);
         web.find("documentation");
-        web.links();
-        web.follow("link-1");
+        web.follow("link-" + web.links().split(":")[0].substring("link-".length()));
         web.back();
 
         List<HistoryEvent> events = events();

@@ -258,27 +258,33 @@ Welche Werkzeuge Argos veröffentlicht, bestimmt `ARGOS_TOOL_PROFILE` (Property 
 | Profil | Werkzeuge | Gedacht für |
 | --- | --- | --- |
 | `legacy` | die neun `browser_*`-Werkzeuge oben | bestehende Clients, unverändert |
-| `compact` | nur `web_search`, `web_open`, `web_read`, `web_find`, `web_links`, `web_follow`, `web_back` | kleine lokale Modelle (wie in AskAI erprobt) |
-| `expert` (Standard) | `web_*`, `browser_*`, Tabs/Historie/Bedienelemente/Extraktion, Maus, Tastatur, Drag-and-drop, `browser_wait`, Dokumente und Batches, Netzwerkanalyse | leistungsfähige Modelle |
+| `compact` | nur `web_search`, `web_open_result`, `web_follow`, `web_open`, `web_read`, `web_find`, `web_links`, `web_back`, `web_get_url` | kleine lokale Modelle (wie in AskAI erprobt) |
+| `expert` | `web_*`, `browser_*`, Tabs/Historie/Bedienelemente/Extraktion, Maus, Tastatur, Drag-and-drop, `browser_wait`, Dokumente und Batches, Netzwerkanalyse | leistungsfähige Modelle |
+| `convenience` (Standard) | wie `expert`, dazu Recherche-Tabs: Treffer öffnen in eigenen Tabs (mehrere parallel), `web_tabs`, `web_close_tab`, optionaler `tab`-Parameter | Recherche über mehrere Seiten, siehe [docs/research-tabs.md](docs/research-tabs.md) |
+
+In allen Profilen navigiert das Modell über IDs: Suchtreffer (`result-N`) und Links (`link-N`) erscheinen ohne Ziel-URL, jede Seitenantwort enthält ihre Links, `web_open_result`/`web_follow` öffnen die exakt gespeicherte URL, `web_get_url` gibt sie nur auf ausdrücklichen Bedarf aus. Die MCP-Server-Anweisung lautet: „Every page response includes its available links with IDs. Navigate using those IDs. Never reconstruct, modify, or pass link URLs. Use web_get_url only when an actual URL is explicitly needed.“
 
 Mit `ARGOS_RESEARCH=true` kommen in jedem Profil `web_research` und `web_research_stop` hinzu. `web_open`/`web_read` lesen Feeds, XML, JSON und Text wie `browser_snapshot` aus dem Antwort-Body und melden Binärdokumente mit Hinweis auf die Dokumentwerkzeuge. Antwortet der Server für das Hauptdokument mit Status 400 oder höher, steht in `web_open`, `web_follow`, `web_read` und `web_back` nach `TITLE` die Zeile `HTTP error: 500 Internal Server Error — the requested content may not be available on this page.` (Standard-Reason-Phrase nach RFC 9110, bei unbekanntem Code nur die Zahl): Kleine Modelle lasen „TITLE: 500 Internal Server Error" samt Servertext sonst als Inhalt und blieben an der Adresse hängen, statt den nächsten Treffer zu öffnen (Phase 7, `broken-link`). Mehr geschieht nicht: keine automatische Navigation, keine Bewertung des Inhalts. Der Status stammt aus der Navigationsantwort, die Argos ohnehin für Dokumenttyp und Bereitschaft aus den Protokollereignissen liest; ohne bekannte Antwort entfällt die Zeile (etwa wenn die Seite ihre Adresse nach dem Laden per Skript geändert hat; `web_back` lädt das Dokument neu, weil Argos den Back-Forward-Cache abschaltet, und kennt den Status). Es wird dafür kein Seitenskript ausgeführt.
 
-Die `web_*`-Werkzeuge haben höchstens einen Parameter, Beispiele in der Beschreibung und antworten mit kurzem Klartext statt JSON:
+Die `web_*`-Werkzeuge haben im Profil `compact` höchstens einen Parameter, Beispiele in der Beschreibung und antworten mit kurzem Klartext statt JSON:
 
 ```text
-web_open url="https://example.org/"   → URL, TITLE, LINKS: 12, Seitentext (lange Seiten in Teilen: web_read part=2)
+web_open url="https://example.org/"   → TITLE, Seitentext (lange Seiten in Teilen: web_read part=2), danach
+                                         LINKS (open with web_follow link_id): link-1: Text …  (ohne URLs)
                                          Fehlerseite (HTTP 400+): zusätzlich HTTP error: 500 Internal Server Error —
                                          the requested content may not be available on this page.
 web_find text="founding director"      → FOUND: 2 matches, je Treffer ein Ausschnitt (höchstens 200 Zeichen,
                                          höchstens 10 Treffer) mit dem web_read-Teil, in dem er steht; ist die
                                          gefundene Phrase selbst länger, zeigt der Ausschnitt ihre ersten 200 Zeichen
                                          (an einer Wortgrenze gekürzt), die Phrase wird höchstens 80 Zeichen lang zitiert
-web_links                              → link-1: Text — https://…   (IDs bleiben auf derselben Seite stabil)
+web_links                              → link-1: Text   (nur noch nötig, um die Liste erneut zu sehen; IDs bleiben
+                                         auf derselben Seite stabil, werden nie wiederverwendet; veraltete IDs werden abgelehnt)
                                          Suchtreffer (result-N) und Seitenlinks (link-N) sind getrennt; eine
                                          bloße Zahl bezieht sich auf die zuletzt gezeigte Liste
 web_follow link_id="link-3"            → öffnet den Link als echte Navigation mit Referer, ohne Seitenskript
-web_back                               → vorherige Seite
-web_search query="…"                   → result-1: Titel — URL (öffnen mit web_follow link_id="result-1")
+web_back                               → vorherige Seite mit ihren Links
+web_search query="…"                   → result-1: Titel + Snippet, ohne URL (öffnen mit web_open_result result_id="result-1")
+web_get_url reference_id="link-3"      → exakt gespeicherte URL, navigiert nicht (nur wenn eine URL ausdrücklich gebraucht wird)
 ```
 
 Pro `web_open`/`web_read`/`web_find`/`web_back` liest Argos einmal `page.content()` in Playwrights isolierter Utility-Welt; Titel, Text und Links werden in Java (jsoup) daraus gewonnen. Nur eine Seite, die noch „Loading…"/„wird geladen" zeigt, während ihre eigenen Anfragen laufen (Single-Page-App), wird nach deren Ende ein zweites Mal gelesen (höchstens 8 s später); beobachtet werden dafür allein Protokollereignisse. `web_links` und `web_follow` lesen die Seite nicht erneut, solange der Browser dieselbe Adresse zeigt. So bleibt die Zahl der Protokoll-Evaluierungen minimal (jede trägt `userActivation`, siehe playwright4j #37); Locator-Aktionen, Screenshots und Viewport-Emulation werden nicht verwendet. Es wird kein für die Seite sichtbares Skript eingeschleust. `web_*` prüft jede Ziel-URL vor der Navigation und die finale URL danach mit derselben `NetworkPolicy`, die der Proxy durchsetzt (siehe [Netzwerkgrenze](#netzwerkgrenze-ssrf-schutz)); eine auf einem gesperrten Ziel gelandete Seite wird verworfen und der Tab auf `about:blank` gesetzt. Diese Prüfung liefert nur verständliche Fehlermeldungen; die Sperre selbst (Weiterleitungen, Unterressourcen, DNS-Rebinding) liegt im Proxy und gilt für alle Profile, auch für `legacy` und `browser_navigate`. Lokale Testziele werden mit `ARGOS_INTRANET_ALLOW` freigegeben.

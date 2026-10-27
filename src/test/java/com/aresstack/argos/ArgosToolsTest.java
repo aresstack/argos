@@ -17,8 +17,8 @@ import java.util.stream.Collectors;
 import static org.junit.jupiter.api.Assertions.*;
 
 class ArgosToolsTest {
-    private static final List<String> COMPACT = List.of(
-            "web_search", "web_open", "web_read", "web_find", "web_links", "web_follow", "web_back");
+    private static final List<String> COMPACT = List.of("web_search", "web_open_result", "web_follow", "web_open",
+            "web_read", "web_find", "web_links", "web_back", "web_get_url");
 
     @TempDir Path temp;
 
@@ -82,6 +82,44 @@ class ArgosToolsTest {
         }
     }
 
+    @Test void convenienceProfileIsExpertPlusResearchTabs() {
+        try (CamoufoxBrowser browser = browser()) {
+            Set<String> expert = names(new ArgosTools(browser).forProfile(ToolProfile.EXPERT));
+            Set<String> convenience = names(new ArgosTools(browser).forProfile(ToolProfile.CONVENIENCE));
+            assertTrue(convenience.containsAll(expert));
+            Set<String> added = new java.util.HashSet<>(convenience);
+            added.removeAll(expert);
+            assertEquals(Set.of("web_tabs", "web_close_tab"), added);
+            assertFalse(expert.contains("web_tabs"), "expert keeps a single research tab");
+            assertTrue(ToolProfile.CONVENIENCE.includesExpertTools());
+            assertFalse(ToolProfile.COMPACT.includesExpertTools());
+        }
+    }
+
+    /** Test 11: the same link navigation rules and descriptions in every profile with web tools. */
+    @Test void linkNavigationDescriptionsAreTheSameInCompactExpertAndConvenience() {
+        try (CamoufoxBrowser browser = browser()) {
+            for (ToolProfile profile : List.of(ToolProfile.COMPACT, ToolProfile.EXPERT, ToolProfile.CONVENIENCE)) {
+                Map<String, String> descriptions = new ArgosTools(browser).forProfile(profile).stream()
+                        .collect(Collectors.toMap(spec -> spec.tool().name(), spec -> spec.tool().description()));
+                assertTrue(descriptions.get("web_open_result").startsWith("Open "), profile.name());
+                assertTrue(descriptions.get("web_open_result").contains(
+                        "result_id. Use this instead of retrieving or reconstructing"), profile.name());
+                assertTrue(descriptions.get("web_follow").startsWith("Open a current-page link by its link_id. "
+                        + "Use this instead of retrieving or reconstructing its URL."), profile.name());
+                assertTrue(descriptions.get("web_get_url").startsWith("Return the exact stored URL for a known "
+                        + "result_id or link_id. Use only when the user asks for the URL or another tool requires it. "
+                        + "Never use for normal navigation."), profile.name());
+                assertTrue(descriptions.get("web_open").contains("For search results and page links use their ids"),
+                        profile.name());
+                assertFalse(descriptions.get("web_search").contains("url"), "search promises no URLs: " + profile);
+            }
+            assertEquals("Every page response includes its available links with IDs. Navigate using those IDs. "
+                    + "Never reconstruct, modify, or pass link URLs. Use web_get_url only when an actual URL is "
+                    + "explicitly needed.", ArgosTools.INSTRUCTIONS);
+        }
+    }
+
     @Test void parallelPageToolsRejectDuplicateTabMutationsBeforeLaunchingBrowser() {
         try (CamoufoxBrowser browser = browser()) {
             SyncToolSpecification navigate = new ParallelPageTools(browser).expertTools().stream()
@@ -107,7 +145,7 @@ class ArgosToolsTest {
                     "web_follow", java.util.Map.of("link_id", "link-9")));
             assertTrue(result.isError());
             String message = ((io.modelcontextprotocol.spec.McpSchema.TextContent) result.content().get(0)).text();
-            assertTrue(message.contains("call web_links first"), message);
+            assertTrue(message.startsWith("Unknown link id: link-9."), message);
         }
     }
 
@@ -213,8 +251,8 @@ class ArgosToolsTest {
     }
 
     @Test void parsesToolProfile() {
-        assertEquals(ToolProfile.EXPERT, ToolProfile.parse(null));
-        assertEquals(ToolProfile.EXPERT, ToolProfile.parse(" "));
+        assertEquals(ToolProfile.CONVENIENCE, ToolProfile.parse(null));
+        assertEquals(ToolProfile.CONVENIENCE, ToolProfile.parse(" "));
         assertEquals(ToolProfile.EXPERT, ToolProfile.parse("Expert"));
         assertThrows(IllegalArgumentException.class, () -> ToolProfile.parse("everything"));
         assertTrue(new ArgosTools(null).forProfile(ToolProfile.COMPACT).stream()

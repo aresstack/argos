@@ -29,6 +29,10 @@ import java.util.function.Function;
  */
 public final class ArgosTools {
     static final String VERSION = "0.1.0";
+    /** The one navigation rule for every profile, sent as the MCP server instructions. */
+    public static final String INSTRUCTIONS = "Every page response includes its available links with IDs. "
+            + "Navigate using those IDs. Never reconstruct, modify, or pass link URLs. "
+            + "Use web_get_url only when an actual URL is explicitly needed.";
     private static final ObjectMapper JSON = new ObjectMapper();
     private final CamoufoxBrowser browser;
     private final WebSession web;
@@ -83,6 +87,7 @@ public final class ArgosTools {
     }
 
     public List<SyncToolSpecification> forProfile(ToolProfile profile) {
+        web.useResearchTabs(profile == ToolProfile.CONVENIENCE);
         List<SyncToolSpecification> tools = new ArrayList<>(profileTools(profile));
         // Opt-in (ARGOS_RESEARCH=true): one-call research suits small models, so every profile gets it.
         if (research != null) tools.addAll(research.specifications());
@@ -97,9 +102,9 @@ public final class ArgosTools {
         return switch (profile) {
             case LEGACY -> browserTools();
             // Small models: only the short AskAI tools plus web_find, nothing else to choose from.
-            case COMPACT -> webTools();
-            case EXPERT -> {
-                List<SyncToolSpecification> tools = new ArrayList<>(webTools());
+            case COMPACT -> webTools(false);
+            case EXPERT, CONVENIENCE -> {
+                List<SyncToolSpecification> tools = new ArrayList<>(webTools(profile == ToolProfile.CONVENIENCE));
                 tools.addAll(browserTools());
                 // Tabs, history, semantic controls, extraction. browsing.compact() (web_controls,
                 // web_click, web_fill) joins COMPACT only after it has been tested with small models.
@@ -114,41 +119,77 @@ public final class ArgosTools {
     }
 
     /**
-     * The compact AskAI tool set: one task per tool, at most one parameter, plain
-     * numbered text answers. Names and parameters match AskAI's browser MCP server.
+     * The compact AskAI tool set: one task per tool, at most one parameter, plain numbered text answers. Names
+     * and parameters match AskAI's browser MCP server; web_open_result and web_get_url separate opening a
+     * reference from reading its URL.
      */
     public List<SyncToolSpecification> webTools() {
+        return webTools(false);
+    }
+
+    /**
+     * @param researchTabs the convenience profile: results open in their own tabs (several at once), page tools
+     *                     take an optional tab, plus web_tabs and web_close_tab
+     */
+    public List<SyncToolSpecification> webTools(boolean researchTabs) {
+        Map<String, Object> tab = field("string", "Optional tab id such as t2; default: current tab");
         List<SyncToolSpecification> tools = new ArrayList<>();
-        tools.add(text("web_search", "Search the web. Returns results result-1, result-2, ... with title, url and snippet. "
+        tools.add(text("web_search", "Search the web. Returns result ids with title and snippet. "
                         + "Example: {\"query\": \"camoufox webdriver bidi\"}",
                 Map.of("query", field("string", "What to search for")), List.of("query"),
                 args -> web.search(string(args, "query"))));
-        tools.add(text("web_open", "Open a web page and return its title and text. "
-                        + "An 'HTTP error:' line marks a page the server could not deliver; then try another page or result. "
+        tools.add(text("web_open_result", researchTabs
+                        ? "Open search results by their result_id. Use this instead of retrieving or reconstructing "
+                        + "their URLs. Several ids open in parallel tabs. Example: {\"result_id\": \"result-1, result-3\"}"
+                        : "Open a search result by its result_id. Use this instead of retrieving or reconstructing its URL. "
+                        + "Example: {\"result_id\": \"result-1\"}",
+                Map.of("result_id", field("string", researchTabs ? "One id or several separated by commas" : "Id such as result-1")),
+                List.of("result_id"), args -> args.get("result_id") instanceof List<?> ids
+                        ? web.openResult(ids.stream().map(String::valueOf).toList())
+                        : web.openResult(string(args, "result_id"))));
+        tools.add(text("web_follow", "Open a current-page link by its link_id. Use this instead of retrieving or "
+                        + "reconstructing its URL."
+                        + (researchTabs ? " new_tab=true keeps the current page open in its tab." : "")
+                        + " Example: {\"link_id\": \"link-3\"}",
+                researchTabs ? Map.of("link_id", field("string", "Id such as link-3"),
+                        "new_tab", field("boolean", "Open in a new tab, default false"))
+                        : Map.of("link_id", field("string", "Id such as link-3")),
+                List.of("link_id"), args -> web.follow(string(args, "link_id"), researchTabs && flag(args, "new_tab"))));
+        tools.add(text("web_open", "Open a URL the user gave you. For search results and page links use their ids. "
                         + "Example: {\"url\": \"https://en.wikipedia.org/wiki/Firefox\"}",
                 Map.of("url", field("string", "Full http(s) URL")), List.of("url"),
                 args -> web.open(string(args, "url"))));
-        tools.add(text("web_read", "Read the text of the page the browser shows, whichever tool opened it. "
-                        + "Long pages come in parts: the answer says PART 1 of 3, then ask for the next part. "
-                        + "Example: {\"part\": 2}",
-                Map.of("part", field("integer", "Part number, default 1")), List.of(),
-                args -> web.read(number(args, "part", 1))));
-        tools.add(text("web_find", "Find a word or phrase on the page the browser shows without reading the whole page. "
+        tools.add(text("web_read", "Read the page again with its links. Long pages come in parts: "
+                        + "the answer says PART 1 of 3, then ask for the next part. Example: {\"part\": 2}",
+                researchTabs ? Map.of("part", field("integer", "Part number, default 1"), "tab", tab)
+                        : Map.of("part", field("integer", "Part number, default 1")), List.of(),
+                args -> web.read(number(args, "part", 1), optionalString(args, "tab"))));
+        tools.add(text("web_find", "Find a word or phrase on the page without reading the whole page. "
                         + "Returns the number of matches and short snippets, each with the web_read part it is in. "
                         + "Example: {\"text\": \"opening hours\"}",
-                Map.of("text", field("string", "Word or phrase to find; case does not matter")), List.of("text"),
-                args -> web.find(string(args, "text"))));
-        tools.add(text("web_links", "List the links of the page the browser shows as link-1, link-2, ... "
-                        + "Use the id with web_follow. Call web_read first if the page loaded more content. Example: {}",
-                Map.of(), List.of(), args -> web.links()));
-        tools.add(text("web_follow", "Open a link by its id: link-3 from web_links or result-2 from web_search. "
-                        + "A bare number uses the list you saw last. "
-                        + "An 'HTTP error:' line marks a page the server could not deliver; then try another result or link. "
-                        + "Example: {\"link_id\": \"link-3\"}",
-                Map.of("link_id", field("string", "Id such as link-3 or result-2")), List.of("link_id"),
-                args -> web.follow(string(args, "link_id"))));
-        tools.add(text("web_back", "Go back to the previous page and return its text. Example: {}",
-                Map.of(), List.of(), args -> web.back()));
+                researchTabs ? Map.of("text", field("string", "Word or phrase to find; case does not matter"), "tab", tab)
+                        : Map.of("text", field("string", "Word or phrase to find; case does not matter")),
+                List.of("text"), args -> web.find(string(args, "text"), optionalString(args, "tab"))));
+        tools.add(text("web_links", "List the page's links again. Page answers already include them. Example: {}",
+                researchTabs ? Map.of("tab", tab) : Map.of(), List.of(),
+                args -> web.links(optionalString(args, "tab"))));
+        tools.add(text("web_back", "Go back to the previous page and return it with its links. Example: {}",
+                researchTabs ? Map.of("tab", tab) : Map.of(), List.of(),
+                args -> web.back(optionalString(args, "tab"))));
+        tools.add(text("web_get_url", "Return the exact stored URL for a known result_id or link_id. Use only when "
+                        + "the user asks for the URL or another tool requires it. Never use for normal navigation. "
+                        + "Example: {\"reference_id\": \"result-2\"}",
+                Map.of("reference_id", field("string", researchTabs ? "result-N, link-N or a tab id such as t2"
+                        : "result-N or link-N")), List.of("reference_id"),
+                args -> web.url(string(args, "reference_id"))));
+        if (researchTabs) {
+            tools.add(text("web_tabs", "List open research tabs: page title, how each started, pages read. Example: {}",
+                    Map.of(), List.of(), args -> web.tabs()));
+            tools.add(text("web_close_tab", "Close a tab whose research path is finished. Its link ids stop working. "
+                            + "Example: {\"tab\": \"t2\"}",
+                    Map.of("tab", field("string", "Tab id such as t2")), List.of("tab"),
+                    args -> web.closeTab(string(args, "tab"))));
+        }
         return List.copyOf(tools);
     }
 

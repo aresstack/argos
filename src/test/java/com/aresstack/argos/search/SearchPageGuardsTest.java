@@ -52,4 +52,28 @@ class SearchPageGuardsTest {
 
         assertTrue(SearchPageGuards.findConsentControl(page, false).isEmpty());
     }
+
+    @Test
+    void onlyNecessaryIsChosenWhenNoRejectControlExists() {
+        Document page = Jsoup.parse("<div class='consent'><button>Alle akzeptieren</button>"
+                + "<button>Nur notwendige Cookies</button></div>");
+
+        assertEquals(SearchPageGuards.ConsentAction.ONLY_NECESSARY,
+                SearchPageGuards.findConsentControl(page, false).orElseThrow().action());
+    }
+
+    @Test
+    void duckDuckGoChallengeIsRecognisedByItsTextAlone() {
+        Document page = Jsoup.parse("<p>Unfortunately, bots use DuckDuckGo too.</p>");
+
+        assertEquals("text:bots use duckduckgo too", SearchPageGuards.findChallenge(page,
+                "https://html.duckduckgo.com/html/?q=x", page.text()).orElseThrow().evidence());
+    }
+
+    @Test
+    void hiddenChallengeMarkupIsNotAChallenge() {
+        Document page = Jsoup.parse("<div hidden><div class='captcha-box'></div></div><p>Results</p>");
+
+        assertTrue(SearchPageGuards.findChallenge(page, "https://www.bing.com/search?q=x", page.text()).isEmpty());
+    }
 }

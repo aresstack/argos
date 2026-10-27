@@ -85,12 +85,25 @@ public final class ChatRoutedTools implements AutoCloseable {
             return ArgosTools.failure(error);
         }
         log(name + " chat=" + chat.shortKey() + " context=" + context.id());
-        Entry entry = acquire(profile);
+        Entry entry;
+        try {
+            entry = acquire(profile);
+        } catch (RuntimeException error) {
+            // Never an opaque JSON-RPC internal error: the model and the log both get the reason.
+            log("failed " + name + " chat=" + chat.shortKey() + ": could not set up the browser: " + describe(error));
+            return ArgosTools.failure(new IllegalStateException(
+                    "Argos could not set up this conversation's browser: " + describe(error), error));
+        }
         try {
             entry.contexts.accept(context.id(), context.cookies());
             SyncToolSpecification tool = entry.tools.get(name);
             if (tool == null) return ArgosTools.failure(new IllegalStateException("Unknown tool " + name));
-            return tool.callHandler().apply(exchange, request);
+            CallToolResult result = tool.callHandler().apply(exchange, request);
+            if (Boolean.TRUE.equals(result.isError())) log("error " + name + " chat=" + chat.shortKey());
+            return result;
+        } catch (RuntimeException error) {
+            log("failed " + name + " chat=" + chat.shortKey() + ": " + describe(error));
+            return ArgosTools.failure(new IllegalStateException(describe(error), error));
         } finally {
             release(entry);
         }
@@ -193,6 +206,10 @@ public final class ChatRoutedTools implements AutoCloseable {
     /** Diagnostics: only the shortened hash of the conversation id, never the id, a path or page data. */
     private static void log(String line) {
         System.err.println("[argos-profiles] " + line);
+    }
+
+    private static String describe(Throwable error) {
+        return error.getClass().getSimpleName() + (error.getMessage() == null ? "" : ": " + error.getMessage());
     }
 
     private static void closeQuietly(AutoCloseable resource) {

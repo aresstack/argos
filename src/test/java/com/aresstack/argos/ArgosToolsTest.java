@@ -126,7 +126,7 @@ class ArgosToolsTest {
             Set<String> compact = browsing.compact().stream().map(spec -> spec.tool().name()).collect(Collectors.toSet());
             assertEquals(Set.of("browser_tabs", "browser_tab_new", "browser_tab_select", "browser_tab_close",
                     "browser_back", "browser_forward", "browser_reload", "browser_controls",
-                    "browser_click_target", "browser_fill_target", "browser_extract", "browser_mouse_move",
+                    "browser_click_target", "browser_fill_target", "browser_press_key", "browser_extract", "browser_mouse_move",
                     "browser_mouse_click", "browser_hover", "browser_scroll", "browser_drag"), expert);
             assertEquals(Set.of("web_controls", "web_click", "web_fill"), compact);
             for (var spec : browsing.compact()) {

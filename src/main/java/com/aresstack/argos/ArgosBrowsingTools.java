@@ -137,6 +137,16 @@ public final class ArgosBrowsingTools {
                         args.get("to_x") == null ? null : decimal(args, "to_x"),
                         args.get("to_y") == null ? null : decimal(args, "to_y"),
                         optionalString(args, "tab"))));
+        tools.add(tool("browser_press_key",
+                "Press a key or shortcut in the current or specified tab with real key events, e.g. Enter, Escape, Tab, ArrowDown, PageDown, "
+                        + "Control+a, Shift+Tab. Optionally click into a target first; otherwise the focused element "
+                        + "gets the keys. To type text, use browser_fill_target. " + TARGET_HELP,
+                Map.of("keys", field("string", "Key or combination, e.g. Escape or Control+Enter"),
+                        "target", field("string", "Optional element to focus first, e.g. label=\"Suche\""),
+                        "times", field("integer", "How often to press it (1-20, default 1)"),
+                        "tab", field("string", "Optional tab id from browser_tabs, e.g. t2")),
+                List.of("keys"), args -> interactionAsJson(browser.pressKey(optionalString(args, "target"),
+                        string(args, "keys"), number(args, "times", 1), optionalString(args, "tab")))));
         tools.add(tool("browser_extract",
                 "Extract structure from the current or specified tab's HTML page. kind: overview (default), headings, links, tables, "
                         + "lists, metadata (description, Open Graph, citation_* tags), jsonld.",

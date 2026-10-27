@@ -436,6 +436,150 @@ final class RealInput {
         playKeys(device, typing.type(text), true);
     }
 
+    /** Modifier keys as Playwright names them; ControlOrMeta is Cmd on macOS, Ctrl elsewhere. */
+    static final List<String> MODIFIERS = List.of("Shift", "Control", "Alt", "Meta", "ControlOrMeta");
+    /** Named keys a page may receive; other names are refused before any key goes down. */
+    static final Set<String> NAMED_KEYS = Set.copyOf(List.of("Enter", "Tab", "Escape", "Backspace", "Delete",
+            "Insert", "Home", "End", "PageUp", "PageDown", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space",
+            "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12", "ContextMenu"));
+    /** Shortcuts that would close or replace the browser window or tab Argos is working in. */
+    private static final Set<String> BROWSER_SHORTCUTS = Set.of("Control+w", "Control+q", "Control+n", "Control+t",
+            "Control+F4", "Alt+F4", "Meta+w", "Meta+q", "Meta+n", "Meta+t", "ControlOrMeta+w", "ControlOrMeta+q",
+            "ControlOrMeta+n", "ControlOrMeta+t", "Control+Shift+w", "Control+Shift+q", "Meta+Shift+w");
+
+    /** A parsed key combination such as {@code Control+Shift+ArrowLeft}. */
+    record KeyChord(List<String> modifiers, String key, boolean layout) {
+        @Override public String toString() {
+            return modifiers.isEmpty() ? key : String.join("+", modifiers) + "+" + key;
+        }
+    }
+
+    /**
+     * Parses {@code Enter}, {@code Control+a}, {@code Shift+Tab} or a single character. Everything is checked before
+     * the first key goes down: unknown names, a modifier on its own, reserved code points and, in strict mode,
+     * characters this Playwright cannot send as a real key. There is no script fallback: a key is a key.
+     */
+    KeyChord chord(String keys) {
+        if (keys == null || keys.isBlank()) throw new IllegalArgumentException("Name a key, e.g. Enter or Control+a");
+        String trimmed = keys.strip();
+        // "+" itself and "Control++" mean the plus key.
+        boolean plusKey = trimmed.equals("+") || trimmed.endsWith("++");
+        String prefix = plusKey ? trimmed.substring(0, Math.max(0, trimmed.length() - 2)) : trimmed;
+        List<String> parts = prefix.isEmpty() ? new ArrayList<>() : new ArrayList<>(List.of(prefix.split("\\+", -1)));
+        if (plusKey) parts.add("+");
+        String key = parts.remove(parts.size() - 1);
+        List<String> modifiers = new ArrayList<>();
+        for (String part : parts) {
+            String modifier = MODIFIERS.stream().filter(m -> m.equalsIgnoreCase(alias(part.strip()))).findFirst()
+                    .orElseThrow(() -> new IllegalArgumentException("'" + part + "' in '" + keys + "' is not a "
+                            + "modifier. Use Shift, Control, Alt, Meta or ControlOrMeta before the key, e.g. Control+a."));
+            if (modifiers.contains(modifier)) throw new IllegalArgumentException(modifier + " appears twice in " + keys);
+            modifiers.add(modifier);
+        }
+        String named = NAMED_KEYS.stream().filter(n -> n.equalsIgnoreCase(alias(key))).findFirst().orElse(null);
+        if (named != null) {
+            KeyChord chord = new KeyChord(List.copyOf(modifiers), "Space".equals(named) ? " " : named, true);
+            refuseBrowserShortcut(chord);
+            return chord;
+        }
+        if (MODIFIERS.stream().anyMatch(m -> m.equalsIgnoreCase(alias(key)))) {
+            throw new IllegalArgumentException("'" + keys + "' ends with a modifier. Name the key to press with it, "
+                    + "e.g. Control+a or Shift+Tab.");
+        }
+        if (key.codePointCount(0, key.length()) != 1) {
+            throw new IllegalArgumentException("Unknown key '" + key + "'. Use one character (a, 1, ä) or a key name: "
+                    + String.join(", ", new java.util.TreeSet<>(NAMED_KEYS)) + ". To type text, use fill.");
+        }
+        int codePoint = key.codePointAt(0);
+        if (codePoint >= 0xE000 && codePoint <= 0xE05D || Character.isISOControl(codePoint)) {
+            throw new IllegalArgumentException(String.format("Cannot press U+%04X as a key. Nothing was pressed.",
+                    codePoint));
+        }
+        boolean layout = HumanTyping.inLayout(codePoint);
+        // Only KEY_NAMES sends such a character as a real keyDown/keyUp that modifiers can combine with;
+        // insertText (TEXT_AS_KEYS or the insert policy) is text, not a key.
+        if (!layout && unicodeKeys != UnicodeKeys.KEY_NAMES) {
+            throw new IllegalStateException("Cannot press '" + key + "' as a real key: this Playwright sends "
+                    + "characters outside the US layout only as inserted text. Nothing was pressed.");
+        }
+        KeyChord chord = new KeyChord(List.copyOf(modifiers), key, layout);
+        refuseBrowserShortcut(chord);
+        return chord;
+    }
+
+    private static String alias(String name) {
+        return switch (name.toLowerCase(java.util.Locale.ROOT)) {
+            case "ctrl", "strg" -> "Control";
+            case "cmd", "command", "win", "super" -> "Meta";
+            case "option" -> "Alt";
+            case "esc" -> "Escape";
+            case "return" -> "Enter";
+            case "del", "entf" -> "Delete";
+            case "up" -> "ArrowUp";
+            case "down" -> "ArrowDown";
+            case "left" -> "ArrowLeft";
+            case "right" -> "ArrowRight";
+            case "pgup" -> "PageUp";
+            case "pgdn", "pgdown" -> "PageDown";
+            default -> name;
+        };
+    }
+
+    private static void refuseBrowserShortcut(KeyChord chord) {
+        if (chord.modifiers().isEmpty()) return;
+        String shortcut = String.join("+", chord.modifiers()) + "+"
+                + (chord.key().length() == 1 ? chord.key().toLowerCase(java.util.Locale.ROOT) : chord.key());
+        if (BROWSER_SHORTCUTS.contains(shortcut)) {
+            throw new IllegalArgumentException(chord + " would close or replace the browser window or tab. Use the "
+                    + "tab tools instead. Nothing was pressed.");
+        }
+    }
+
+    /**
+     * Presses a key or shortcut {@code times} times, as real keyDown/keyUp events. With a {@code target} the element
+     * is focused by a real click first; without one the keys go to whatever has the focus. The combination is fully
+     * validated before the click.
+     */
+    KeyChord press(Page page, Locator target, String keys, int times) {
+        KeyChord chord = chord(keys);
+        if (times < 1 || times > 20) throw new IllegalArgumentException("times must be between 1 and 20");
+        if (target != null) {
+            click(page, target);
+            InputDevice.of(page).sleep(motion.reactionPause());
+        }
+        press(InputDevice.of(page), chord, times);
+        return chord;
+    }
+
+    void press(InputDevice device, KeyChord chord, int times) {
+        Set<String> held = new LinkedHashSet<>();
+        long start = device.now();
+        try {
+            for (HumanTyping.KeyEvent event : typing.chord(chord.modifiers(), chord.key(), chord.layout(), times)) {
+                device.sleep(start + event.at() - device.now());
+                if (event.kind() == HumanTyping.Kind.DOWN) {
+                    device.keyDown(event.key());
+                    held.add(event.key());
+                } else {
+                    device.keyUp(event.key());
+                    held.remove(event.key());
+                }
+            }
+        } catch (RuntimeException failed) {
+            // Never leave a modifier held down: the next typed text would become shortcuts.
+            List<String> reverse = new ArrayList<>(held);
+            java.util.Collections.reverse(reverse);
+            for (String key : reverse) {
+                try {
+                    device.keyUp(key);
+                } catch (RuntimeException ignored) {
+                    // keep releasing the others
+                }
+            }
+            throw failed;
+        }
+    }
+
     /**
      * Validates the whole text before the field is focused, cleared or typed into: characters this Playwright cannot
      * send as real keys are refused unless the policy explicitly allows the page-visible fallback.

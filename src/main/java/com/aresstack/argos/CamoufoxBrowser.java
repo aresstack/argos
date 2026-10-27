@@ -1750,6 +1750,32 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
         return result;
     }
 
+    /**
+     * Presses a key or shortcut with real key events, optionally after focusing {@code target} by a real click. Enter
+     * and other keys can submit or navigate, so the page is settled like after a click.
+     */
+    public Interaction pressKey(String target, String keys, int times) {
+        return pressKey(target, keys, times, null);
+    }
+
+    public Interaction pressKey(String target, String keys, int times, String tabId) {
+        return onBrowser(() -> {
+            Page p = pageFor(tabId);
+            Set<String> before = tabs.all().keySet();
+            input.chord(keys); // refuse a bad combination before the target is even resolved
+            Resolved resolved = target == null || target.isBlank() ? null : resolve(p, target);
+            RealInput.KeyChord chord = input.press(p, resolved == null ? null : resolved.locator(), keys, times);
+            leaveSavedDocument(p);
+            settle(p);
+            boolean preserveCurrentTab = tabId != null && !tabId.isBlank();
+            String opened = adoptOpenedTab(before, !preserveCurrentTab);
+            Page now = preserveCurrentTab ? p : activePage();
+            String pressed = chord + (times > 1 ? " x" + times : "")
+                    + (resolved == null ? "" : " in " + resolved.description());
+            return new Interaction(pressed, now.url(), safeTitle(now), opened);
+        });
+    }
+
     private record Resolved(Locator locator, String description) { }
 
     /**

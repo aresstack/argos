@@ -89,6 +89,32 @@ final class HumanTyping {
         return line.events;
     }
 
+    /**
+     * One key press while {@code modifiers} are held, {@code times} in a row: the modifiers go down in order a little
+     * before the key and come up in reverse order after the last press, like a hand on a shortcut.
+     */
+    List<KeyEvent> chord(List<String> modifiers, String key, boolean layout, int times) {
+        Timeline line = new Timeline();
+        for (String modifier : modifiers) {
+            line.add(Kind.DOWN, modifier, line.time);
+            line.time += off() ? 10 : scaled(40 + random.nextInt(80));
+        }
+        for (int i = 0; i < times; i++) {
+            line.time = Math.max(line.time, line.lastUp + 5);
+            long hold = hold();
+            line.add(Kind.DOWN, key, line.time, layout);
+            line.add(Kind.UP, key, line.time + hold, layout);
+            line.lastUp = line.time + hold;
+            line.time = line.lastUp + (off() ? 25 : scaled(logNormal(110, 0.3, 50, 300)));
+        }
+        long at = line.lastUp;
+        for (int i = modifiers.size() - 1; i >= 0; i--) {
+            at += off() ? 10 : scaled(20 + random.nextInt(70));
+            line.add(Kind.UP, modifiers.get(i), at);
+        }
+        return line.events;
+    }
+
     /** One Backspace per character, quickly, to take back text typed so far. */
     List<KeyEvent> erase(int characters) {
         Timeline line = new Timeline();

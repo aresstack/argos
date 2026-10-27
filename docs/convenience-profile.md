@@ -1,10 +1,10 @@
 # Convenience-Profil
 
-`ARGOS_TOOL_PROFILE=convenience` ist das Standardprofil, auch wenn die Variable fehlt oder leer ist. Es ist ein eigener, klar getrennter Pfad (`com.aresstack.argos.convenience`, `search.ParallelWebSearch`, `ConvenienceTools`). `legacy`, `compact` und `expert` bleiben unverändert, ebenso die sequenzielle Suche (`WebSearchService.search`) dieser Profile.
+`ARGOS_TOOL_PROFILE=convenience` wählt dieses Profil. Standard (Variable fehlt oder leer) ist `developer`, das alle Convenience-Werkzeuge enthält (siehe unten). Es ist ein eigener, klar getrennter Pfad (`com.aresstack.argos.convenience`, `search.ParallelWebSearch`, `ConvenienceTools`). `legacy`, `compact` und `expert` bleiben unverändert, ebenso die sequenzielle Suche (`WebSearchService.search`) dieser Profile.
 
 ## Werkzeuge
 
-Es gibt genau diese neun Werkzeuge, dazu `search_history` und `search_history_export`, wenn die Search History aktiv ist. Expert-Browser- und Netzwerkwerkzeuge sind nicht dabei, und `ResearchTools` fehlen auch mit `ARGOS_RESEARCH=true`.
+Es gibt diese neun Werkzeuge und `web_screenshot`, dazu `search_history` und `search_history_export`, wenn die Search History aktiv ist. Expert-Browser- und Netzwerkwerkzeuge sind nicht dabei, und `ResearchTools` fehlen auch mit `ARGOS_RESEARCH=true`.
 
 | Werkzeug | Parameter |
 | --- | --- |

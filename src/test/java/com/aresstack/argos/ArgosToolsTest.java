@@ -213,8 +213,8 @@ class ArgosToolsTest {
     }
 
     @Test void parsesToolProfile() {
-        assertEquals(ToolProfile.CONVENIENCE, ToolProfile.parse(null));
-        assertEquals(ToolProfile.CONVENIENCE, ToolProfile.parse(" "));
+        assertEquals(ToolProfile.DEVELOPER, ToolProfile.parse(null));
+        assertEquals(ToolProfile.DEVELOPER, ToolProfile.parse(" "));
         assertEquals(ToolProfile.EXPERT, ToolProfile.parse("Expert"));
         assertThrows(IllegalArgumentException.class, () -> ToolProfile.parse("everything"));
         assertTrue(new ArgosTools(null).forProfile(ToolProfile.COMPACT).stream()

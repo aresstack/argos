@@ -57,6 +57,13 @@ tasks.named('test') {
     // -PtestCamoufox and -PtestCamoufox=true both opt in (a bare property arrives as an empty string).
     def camoufoxTests = providers.gradleProperty('testCamoufox').map { it.trim().isEmpty() || it.trim().toBoolean() }.orElse(false).get()
     systemProperty 'argos.testCamoufox', String.valueOf(camoufoxTests)
+    // -PtestProvisionedCamoufox: CamoufoxProvisionedSmokeTest downloads and starts Argos' own Camoufox distribution.
+    systemProperty 'argos.testProvisionedCamoufox', providers.gradleProperty('testProvisionedCamoufox')
+            .map { it.trim().isEmpty() || it.trim().toBoolean() }.orElse(false).get().toString()
+    // Playwright4J release gate setting, forwarded so browser tests run with and without Firefox's own behaviour.
+    if (providers.gradleProperty('playwright4j.bidi.nativeBehavior').isPresent()) {
+        systemProperty 'playwright4j.bidi.nativeBehavior', providers.gradleProperty('playwright4j.bidi.nativeBehavior').get()
+    }
     // Drag diagnostics (DragDiagnosticsBrowserTest): prints event traces of several drag variants, needs -PtestCamoufox.
     systemProperty 'argos.dragDiagnostics', providers.gradleProperty('dragDiagnostics').orElse('false').get()
     // Raw-Playwright input tests (FieldSelection, KeyboardShortcut, HumanInput) need an executable path; with

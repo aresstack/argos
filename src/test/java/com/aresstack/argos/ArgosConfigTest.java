@@ -10,6 +10,8 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ArgosConfigTest {
     @TempDir
@@ -69,6 +71,46 @@ class ArgosConfigTest {
         assertEquals(environmentExecutable.toAbsolutePath(), config.executable());
         assertEquals(environmentLaunchOptions.toAbsolutePath(), config.launchOptions());
         assertEquals(8086, config.port());
+    }
+
+    @Test
+    void startsWithoutBrowserPathsAndRejectsMissingExplicitFiles() throws IOException {
+        Path argosConfig = createArgosConfig("server.port=8085" + System.lineSeparator()
+                + "security.mode=none" + System.lineSeparator());
+        ArgosConfig config = ArgosConfig.fromEnvironment(Map.of(), userHome, argosConfig);
+        config.requireBrowserConfiguration(); // no paths: Argos installs and configures its own Camoufox
+
+        ArgosConfig missingLaunch = ArgosConfig.fromEnvironment(Map.of("ARGOS_CAMOUFOX_LAUNCH_OPTIONS",
+                userHome.resolve("absent/launch.json").toString()), userHome, argosConfig);
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                missingLaunch::requireBrowserConfiguration);
+        assertTrue(error.getMessage().contains("does not exist"));
+
+        ArgosConfig missingExecutable = ArgosConfig.fromEnvironment(Map.of("ARGOS_CAMOUFOX_EXECUTABLE",
+                userHome.resolve("absent/camoufox").toString()), userHome, argosConfig);
+        assertThrows(IllegalStateException.class, missingExecutable::requireBrowserConfiguration);
+    }
+
+    @Test
+    void browserInstallationDefaultsToArgosHomeAndEnvironmentWins() {
+        java.util.Properties properties = new java.util.Properties();
+        properties.setProperty("browser.install-dir", userHome.resolve("configured").toString());
+        properties.setProperty("camoufox.distributionUrl", "https://mirror.example/configured/");
+
+        ArgosConfig.BrowserInstallation defaults = ArgosConfig.BrowserInstallation.fromEnvironment(
+                Map.of(), userHome, new java.util.Properties());
+        assertEquals(userHome.resolve(".argos").resolve("browser").toAbsolutePath(), defaults.root());
+        assertNull(defaults.mirror());
+
+        ArgosConfig.BrowserInstallation configured = ArgosConfig.BrowserInstallation.fromEnvironment(
+                Map.of(), userHome, properties);
+        assertEquals(userHome.resolve("configured").toAbsolutePath(), configured.root());
+
+        ArgosConfig.BrowserInstallation environment = ArgosConfig.BrowserInstallation.fromEnvironment(
+                Map.of("ARGOS_BROWSER_DIR", userHome.resolve("env").toString(),
+                        "ARGOS_CAMOUFOX_DISTRIBUTION_URL", "https://mirror.example/env/"), userHome, properties);
+        assertEquals(userHome.resolve("env").toAbsolutePath(), environment.root());
+        assertEquals("https://mirror.example/env/", environment.mirror().toString());
     }
 
     private Path createArgosConfig(String content) throws IOException {

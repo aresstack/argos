@@ -58,7 +58,8 @@ public final class ArgosApplication {
             // Search History is history/ next to profile/ and contexts/ (all user contexts share it).
             ChatRoutedTools routed = new ChatRoutedTools(new ChatProfiles(isolation.chatRoot()),
                     profile -> workspace(config.withProfile(profile), historySettings.enabled()
-                            ? profile.getParent().resolve("history") : null, historySettings), isolation.maxBrowsers());
+                            ? profile.getParent().resolve("history") : null, historySettings), isolation.maxBrowsers(),
+                    java.time.Duration.ofMinutes(isolation.idleMinutes()));
             // The template only supplies the tool definitions; its browser is never started and its history
             // directory is never written (its handlers are never called).
             ChatRoutedTools.Workspace template = workspace(config, historySettings.enabled()

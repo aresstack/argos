@@ -24,7 +24,7 @@ Wie im AskAI-Research-Plugin (`ResearchAgentSessionFactory`: `getWorkspaceDirect
     contexts/context-2.cookies.json  Cookies des User-Contexts (über das Protokoll gelesen/geschrieben)
 ```
 
-- Je Unterhaltung läuft ein Camoufox. Mehr als `ARGOS_MAX_BROWSERS` (Standard 4) werden im Leerlauf nach LRU geschlossen; das Profil bleibt.
+- Je Unterhaltung läuft ein Camoufox. Höchstens `ARGOS_MAX_BROWSERS` (Standard 2) Browser laufen gleichzeitig: Bevor ein weiterer startet, wird der am längsten ungenutzte vollständig beendet. Nach `ARGOS_BROWSER_IDLE_MINUTES` ohne Aufruf wird ein Browser ebenfalls beendet. Das Profil bleibt erhalten.
 - `browser_context_new` legt im Browser der Unterhaltung einen WebDriver-BiDi-User-Context an (Playwright `browser.newContext()`, in Firefox ein Container) mit eigenen Cookies, Storage und Tabs. `browser_context_select` wechselt, `browser_contexts` listet. Kontext-IDs vergibt der Server. Unbekannte IDs und IDs anderer Unterhaltungen werden abgelehnt.
 - Persistenz: Firefox speichert Container im Profil (`containers.json`, Cookies mit `userContextId`). Playwright entfernt den Container aber beim Schließen des Kontexts (`browser.removeUserContext`) und kann nach einem Neustart keinen vorhandenen Container übernehmen. Deshalb sichert Argos die Cookies jedes zusätzlichen Kontexts nach jedem Aufruf über das Protokoll (`context.cookies()`) und lädt sie beim Neuanlegen wieder (`addCookies`). localStorage übersteht einen Neustart nicht.
 
@@ -34,7 +34,8 @@ Wie im AskAI-Research-Plugin (`ResearchAgentSessionFactory`: `getWorkspaceDirect
 |---|---|---|
 | `ARGOS_PROFILE_ISOLATION` | `browser.profile-isolation` | `chat`; `single` = altes Einzelprofil `ARGOS_PROFILE_DIR` für Clients ohne `openai/session` (z. B. Claude) |
 | `ARGOS_CHAT_PROFILES_DIR` | `browser.chat-profiles` | `~/.argos/profiles/chats` |
-| `ARGOS_MAX_BROWSERS` | `browser.max-browsers` | `4` |
+| `ARGOS_MAX_BROWSERS` | `browser.max-browsers` | `2` (je Browser ein Camoufox-Prozess plus ein Playwright4J-GraalJS-Treiber in der Argos-JVM) |
+| `ARGOS_BROWSER_IDLE_MINUTES` | `browser.idle-minutes` | `10`; 0 = nie wegen Leerlauf beenden |
 
 ## Diagnose
 

@@ -33,6 +33,8 @@ public final class ChatRoutedTools implements AutoCloseable {
     private final ChatProfiles profiles;
     private final Function<Path, Workspace> factory;
     private final int maxBrowsers;
+    private final long idleNanos;
+    private volatile boolean closed;
     /** Access order = least recently used first. */
     private final LinkedHashMap<Path, Entry> open = new LinkedHashMap<>(16, 0.75f, true);
 
@@ -41,6 +43,7 @@ public final class ChatRoutedTools implements AutoCloseable {
         final AutoCloseable resources;
         final BiConsumer<String, Path> contexts;
         int calls;
+        long lastUsed = System.nanoTime();
 
         Entry(Workspace workspace) {
             workspace.tools().forEach(tool -> tools.put(tool.tool().name(), tool));
@@ -50,9 +53,22 @@ public final class ChatRoutedTools implements AutoCloseable {
     }
 
     public ChatRoutedTools(ChatProfiles profiles, Function<Path, Workspace> factory, int maxBrowsers) {
+        this(profiles, factory, maxBrowsers, java.time.Duration.ZERO);
+    }
+
+    /**
+     * @param idle a conversation's browser (Camoufox process plus its in-process Playwright driver) is stopped
+     *             after this long without a call, to give the memory back; zero keeps it until evicted
+     */
+    public ChatRoutedTools(ChatProfiles profiles, Function<Path, Workspace> factory, int maxBrowsers,
+                           java.time.Duration idle) {
         this.profiles = profiles;
         this.factory = factory;
         this.maxBrowsers = Math.max(1, maxBrowsers);
+        this.idleNanos = idle.toNanos();
+        if (idleNanos > 0) {
+            Thread.ofPlatform().daemon(true).name("argos-profile-idle").start(this::sweepIdle);
+        }
     }
 
     /**
@@ -109,44 +125,69 @@ public final class ChatRoutedTools implements AutoCloseable {
         }
     }
 
-    private synchronized Entry acquire(Path profile) {
-        Entry entry = open.get(profile);
-        if (entry == null) {
-            entry = new Entry(factory.apply(profile));
-            open.put(profile, entry);
+    /**
+     * The conversation's browser. A NEW browser starts only after an idle one above the limit has fully
+     * stopped, so at most {@code maxBrowsers} Camoufox processes and Playwright drivers ever share the memory.
+     */
+    private Entry acquire(Path profile) {
+        List<AutoCloseable> victims;
+        synchronized (this) {
+            Entry entry = open.get(profile);
+            if (entry != null) return use(entry);
+            victims = take(open.size() + 1 - maxBrowsers, 0);
         }
+        victims.forEach(ChatRoutedTools::closeQuietly); // synchronously: memory first, then the new browser
+        synchronized (this) {
+            Entry entry = open.get(profile);
+            if (entry == null) {
+                entry = new Entry(factory.apply(profile));
+                open.put(profile, entry);
+                log("browsers open: " + open.size() + "/" + maxBrowsers);
+            }
+            return use(entry);
+        }
+    }
+
+    private Entry use(Entry entry) {
         entry.calls++;
-        evictIdle();
+        entry.lastUsed = System.nanoTime();
         return entry;
     }
 
-    private void release(Entry entry) {
-        synchronized (this) {
-            entry.calls--;
-        }
-        evictIdle();
+    private synchronized void release(Entry entry) {
+        entry.calls--;
+        entry.lastUsed = System.nanoTime();
     }
 
-    /** Closes the least recently used idle browsers above the limit; a browser in use is never stopped. */
-    private synchronized List<AutoCloseable> takeEvicted() {
-        List<AutoCloseable> evicted = new ArrayList<>();
-        var iterator = open.entrySet().iterator();
-        int excess = open.size() - maxBrowsers;
-        while (excess > 0 && iterator.hasNext()) {
-            Entry candidate = iterator.next().getValue();
+    /**
+     * Removes up to {@code count} idle browsers, least recently used first (or, with {@code idleFor > 0}, every
+     * idle browser unused for that long). A browser in use is never stopped.
+     */
+    private synchronized List<AutoCloseable> take(int count, long idleFor) {
+        List<AutoCloseable> taken = new ArrayList<>();
+        var iterator = open.values().iterator();
+        long now = System.nanoTime();
+        while (iterator.hasNext() && (idleFor > 0 || taken.size() < count)) {
+            Entry candidate = iterator.next();
             if (candidate.calls > 0) continue;
+            if (idleFor > 0 && now - candidate.lastUsed < idleFor) continue;
             iterator.remove();
-            evicted.add(candidate.resources);
-            excess--;
+            taken.add(candidate.resources);
         }
-        return evicted;
+        return taken;
     }
 
-    private void evictIdle() {
-        List<AutoCloseable> evicted = takeEvicted();
-        if (evicted.isEmpty()) return;
-        // Closing waits for Camoufox to exit; the calling tool must not wait for that.
-        Thread.ofVirtual().name("argos-profile-close").start(() -> evicted.forEach(ChatRoutedTools::closeQuietly));
+    private void sweepIdle() {
+        while (!closed) {
+            try {
+                Thread.sleep(Math.min(60_000, Math.max(1_000, idleNanos / 1_000_000 / 2)));
+            } catch (InterruptedException stop) {
+                return;
+            }
+            List<AutoCloseable> idle = take(0, idleNanos);
+            if (!idle.isEmpty()) log("stopping " + idle.size() + " idle browser(s)");
+            idle.forEach(ChatRoutedTools::closeQuietly);
+        }
     }
 
     private List<SyncToolSpecification> contextTools() {
@@ -222,6 +263,7 @@ public final class ChatRoutedTools implements AutoCloseable {
 
     @Override
     public void close() {
+        closed = true;
         List<AutoCloseable> all;
         synchronized (this) {
             all = new ArrayList<>();

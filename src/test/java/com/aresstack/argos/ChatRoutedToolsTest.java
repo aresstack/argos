@@ -163,6 +163,17 @@ class ChatRoutedToolsTest {
     }
 
     @Test
+    void browsersUnusedForTheIdleTimeAreStopped() throws Exception {
+        ChatRoutedTools routed = new ChatRoutedTools(new ChatProfiles(root), this::fake, 4,
+                java.time.Duration.ofMillis(100));
+        Map<String, SyncToolSpecification> tools = tools(routed);
+        call(tools, "whoami", "conv-A", Map.of());
+        for (int i = 0; i < 60 && closed.get() == 0; i++) Thread.sleep(100);
+        assertEquals(1, closed.get());
+        routed.close();
+    }
+
+    @Test
     void chatKeyIsAStableHash() {
         assertEquals(ChatProfiles.chatOf(Map.of("openai/session", "x")),
                 ChatProfiles.chatOf(Map.of("openai/session", " x ")));

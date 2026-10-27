@@ -165,6 +165,25 @@ final class RealInput {
         device.up(button);
     }
 
+    // ---- Human pointer paths for drag and drop: HumanMotion paths, nothing is pressed. ----------------------
+
+    /** Rests the pointer on a visible point of the element, scrolled into view by wheel input, on a human path. */
+    HumanMotion.Point humanHover(Page page, Locator target) {
+        ElementHandle element = target.elementHandle(new Locator.ElementHandleOptions().setTimeout(ACTION_TIMEOUT_MS));
+        try {
+            return pointAt(page, InputDevice.of(page), element);
+        } finally {
+            element.dispose();
+        }
+    }
+
+    /** Moves the pointer on a human path to a viewport point given in CSS pixels. */
+    HumanMotion.Point humanMove(Page page, double x, double y) {
+        HumanMotion.Point point = viewportPoint(x, y, viewport(page));
+        moveTo(page, InputDevice.of(page), point, 20);
+        return point;
+    }
+
     // ---- Plain pointer tools: one native mouse command per step, no HumanMotion paths or pauses. ----------
 
     /** Moves the pointer straight to a viewport point given in CSS pixels; nothing is pressed. */

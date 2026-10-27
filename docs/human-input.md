@@ -36,6 +36,16 @@ Die Planer sind getrennt von der Ausführung, damit sie mit festem Seed determin
 - **Tippfehler** (`ARGOS_HUMAN_TYPO_RATE`, Standard 0): Nachbartaste der QWERTY-Reihe, 220–620 ms bis zum Bemerken, Backspace, richtiges Zeichen.
 - **Lange Texte** werden proportional auf 25 s gestrafft; die Reihenfolge der Ereignisse bleibt gleich.
 
+## Einzelne Tasten und Tastenkombinationen
+
+`browser_press_key` (nur Profil `expert`) drückt eine Taste oder einen Shortcut als echte `keyDown`/`keyUp`-Folge über `input.performActions`, z. B. `Enter`, `Escape`, `Tab`, `ArrowDown`, `PageDown`, `F5`, `Control+a`, `Shift+Tab`, `Control+Shift+ArrowLeft`, wahlweise `times`-mal (1–20) und wahlweise nach einem echten Klick in ein Ziel (`target`, gleiche Auflösung wie bei `browser_fill_target`); ohne Ziel bekommt das fokussierte Element die Tasten. Text wird weiterhin nur mit `browser_fill_target` getippt, `fill` sendet nie ab: Enter gibt es nur als ausdrückliche Taste oder als abschließendes `\n`.
+
+- **Ablauf:** Modifier gehen in der angegebenen Reihenfolge mit 40–120 ms Abstand runter, die Taste wird (bei `times` mehrfach, mit menschlichen Pausen) gedrückt, die Modifier kommen in umgekehrter Reihenfolge hoch. Scheitert eine Taste, werden alle gehaltenen Modifier losgelassen, damit späterer Text nicht zu Shortcuts wird.
+- **Vorab-Prüfung:** Die ganze Kombination wird geprüft, bevor das Ziel aufgelöst, angeklickt oder eine Taste gedrückt wird: Modifier nur `Shift`, `Control`, `Alt`, `Meta`, `ControlOrMeta` (Aliasse `Ctrl`/`Strg`, `Cmd`, `Option`, `Esc`, `Return`, `Del`/`Entf`, `Up`/`Down`/`Left`/`Right`), danach genau eine benannte Taste oder ein Zeichen (`+` als Taste: `Control++`). Unbekannte Namen, ein Modifier allein, doppelte Modifier, Steuerzeichen und die WebDriver-Codepunkte U+E000–U+E05D werden abgelehnt.
+- **Unicode streng:** Ein Zeichen außerhalb des US-Layouts (z. B. `ä`) wird nur gedrückt, wenn die Startprüfung `KEY_NAMES` ergab. `insertText` ist Text, keine Taste, und wird hier nie benutzt, auch nicht mit `ARGOS_INPUT_UNICODE=insert`.
+- **Browser-Shortcuts gesperrt:** Kombinationen, die Fenster oder Tab schließen oder ersetzen würden (`Control+w/q/n/t`, `Meta+w/q/n/t`, `ControlOrMeta+…`, `Alt+F4`, `Control+F4`), werden abgelehnt; dafür gibt es die Tab-Werkzeuge.
+- Nach dem Drücken wird die Seite wie nach einem Klick abgewartet; ein neu geöffneter Tab wird übernommen.
+
 ## Umlaute und andere Zeichen außerhalb des US-Layouts
 
 Playwright Core 1.62 lehnt `keyboard.down("ä")` ab (`Unknown key`) und tippt solche Zeichen in `keyboard.type` über `window.__pw_bidiInsertText`, das ein **nicht vertrauenswürdiges** `InputEvent` auslöst ([playwright4j#36](https://github.com/aresstack/playwright4j/issues/36)). BiDi selbst würde jeden Unicode-Wert als echte Taste annehmen; die eigentliche Lösung ist der Fix in Playwright4J (`keyDown`/`keyUp` mit dem Unicode-Wert über `input.performActions`).

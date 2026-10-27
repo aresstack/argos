@@ -59,6 +59,60 @@ class RealInputTest {
         assertTrue(device.calls.isEmpty());
     }
 
+    private static List<String> keys(RecordingDevice device) {
+        return device.calls.stream().filter(call -> call.startsWith("key")).toList();
+    }
+
+    @Test void shortcutHoldsModifiersInOrderAndReleasesThemInReverse() {
+        RealInput input = input(HumanInputSettings.UnicodePolicy.STRICT);
+        RecordingDevice device = new RecordingDevice(false);
+        input.press(device, input.chord("Control+Shift+ArrowLeft"), 2);
+        assertEquals(List.of("keyDown Control", "keyDown Shift", "keyDown ArrowLeft", "keyUp ArrowLeft",
+                "keyDown ArrowLeft", "keyUp ArrowLeft", "keyUp Shift", "keyUp Control"), keys(device));
+        assertTrue(device.clock > 0, "human pauses between the events");
+    }
+
+    @Test void singleNamedKeysAndAliasesAreRecognised() {
+        RealInput input = input(HumanInputSettings.UnicodePolicy.STRICT);
+        assertEquals("Escape", input.chord("esc").toString());
+        assertEquals("Control+a", input.chord("Strg+a").toString());
+        assertEquals("Meta+Enter", input.chord("cmd+Return").toString());
+        assertEquals("Shift+Tab", input.chord(" shift+tab ").toString());
+        assertEquals(" ", input.chord("Space").key());
+        assertEquals("Control++", input.chord("Control++").toString());
+        assertEquals("+", input.chord("+").key());
+        RecordingDevice device = new RecordingDevice(false);
+        input.press(device, input.chord("Enter"), 1);
+        assertEquals(List.of("keyDown Enter", "keyUp Enter"), keys(device));
+    }
+
+    @Test void badCombinationsAreRefusedBeforeAnyKey() {
+        RealInput input = input(HumanInputSettings.UnicodePolicy.STRICT);
+        for (String bad : List.of("", "Control", "Control+", "Hyper+a", "Enterr", "ab", "Shift+Shift+a", "\uE007",
+                "Control+w", "ctrl+W", "Alt+F4", "ControlOrMeta+t")) {
+            assertThrows(IllegalArgumentException.class, () -> input.chord(bad), bad);
+        }
+    }
+
+    @Test void unicodeKeysArePressedOnlyWhenPlaywrightSendsThemAsRealKeys() {
+        RealInput input = input(HumanInputSettings.UnicodePolicy.INSERT);
+        assertThrows(IllegalStateException.class, () -> input.chord("ä"), "insert is text, not a key");
+        input.unicodeKeys(RealInput.UnicodeKeys.TEXT_AS_KEYS);
+        assertThrows(IllegalStateException.class, () -> input.chord("Control+ä"));
+        input.unicodeKeys(RealInput.UnicodeKeys.KEY_NAMES);
+        RecordingDevice device = new RecordingDevice(true);
+        input.press(device, input.chord("Alt+ä"), 1);
+        assertEquals(List.of("keyDown Alt", "keyDown ä", "keyUp ä", "keyUp Alt"), keys(device));
+    }
+
+    @Test void heldModifiersAreReleasedWhenAKeyFails() {
+        RealInput input = input(HumanInputSettings.UnicodePolicy.STRICT);
+        input.unicodeKeys(RealInput.UnicodeKeys.KEY_NAMES);
+        RecordingDevice device = new RecordingDevice(false); // refuses ä although the probe said yes
+        assertThrows(PlaywrightException.class, () -> input.press(device, input.chord("Control+Shift+ä"), 1));
+        assertEquals(List.of("keyDown Control", "keyDown Shift", "keyUp Shift", "keyUp Control"), keys(device));
+    }
+
     @Test void unexpectedRefusalAfterAPositiveProbeErasesTheTypedText() {
         RealInput input = input(HumanInputSettings.UnicodePolicy.STRICT);
         input.unicodeKeys(RealInput.UnicodeKeys.KEY_NAMES);

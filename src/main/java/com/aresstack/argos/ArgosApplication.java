@@ -67,11 +67,8 @@ public final class ArgosApplication {
             template.resources().close();
             browsers = routed;
         } else {
-            if (historySettings.enabled()) {
-                System.out.println("Search History is disabled: ARGOS_PROFILE_ISOLATION=single has no reliable chat "
-                        + "key, and Argos keeps no global history. Use ARGOS_PROFILE_ISOLATION=chat for it.");
-            }
-            ChatRoutedTools.Workspace single = workspace(config);
+            if (historySettings.enabled()) System.out.println(SINGLE_PROFILE_HISTORY);
+            ChatRoutedTools.Workspace single = workspace(config, null, historySettings);
             tools = single.tools();
             browsers = single.resources();
         }
@@ -97,7 +94,17 @@ public final class ArgosApplication {
         return workspace(config, null, null);
     }
 
-    /** @param historyDirectory this chat's Search History, or null without one */
+    static final String SINGLE_PROFILE_HISTORY = "Search History is disabled: ARGOS_PROFILE_ISOLATION=single has no "
+            + "reliable chat key, and Argos keeps no global history. Start Argos with ARGOS_PROFILE_ISOLATION=chat "
+            + "(the default) to use search_history and search_history_export.";
+    static final String HISTORY_SWITCHED_OFF = "Search History is switched off on this Argos server "
+            + "(ARGOS_SEARCH_HISTORY=false).";
+
+    /**
+     * @param historyDirectory this chat's Search History, or null without one; then search_history and
+     *                         search_history_export are still published (stable tool list) and explain why they are off
+     * @param historySettings  null for the plain workspace without any Search History tools
+     */
     static ChatRoutedTools.Workspace workspace(ArgosConfig config, java.nio.file.Path historyDirectory,
                                                SearchHistorySettings historySettings) {
         CamoufoxBrowser browser = new CamoufoxBrowser(config);
@@ -122,6 +129,12 @@ public final class ArgosApplication {
                 new WebSession(browser, urlPolicy, search),
                 ResearchSettings.fromEnvironment(), new DocumentAndBatchTools(documents), history)
                 .forProfile(config.toolProfile());
+        if (history == null && historySettings != null && config.toolProfile() != ToolProfile.LEGACY) {
+            List<SyncToolSpecification> all = new java.util.ArrayList<>(tools);
+            all.addAll(com.aresstack.argos.history.SearchHistoryTools.disabled(historySettings.enabled()
+                    ? SINGLE_PROFILE_HISTORY : HISTORY_SWITCHED_OFF).specifications());
+            tools = List.copyOf(all);
+        }
         java.util.function.BiConsumer<String, java.nio.file.Path> contexts = history == null ? browser::useContext
                 : (id, cookies) -> {
                     browser.useContext(id, cookies);

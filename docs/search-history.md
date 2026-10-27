@@ -13,8 +13,13 @@ bleibt dauerhaft erhalten, ist mit Lucene im Volltext durchsuchbar und lässt si
 | `ARGOS_SEARCH_HISTORY_HTML_TIMEOUT_MS` | `15000` | Höchstdauer des Collectors je Seite (1000–60000) |
 
 Die Search History setzt `ARGOS_PROFILE_ISOLATION=chat` voraus (Standard). Mit `single` gibt es keinen verlässlichen
-Chat-Schlüssel. Argos meldet dann beim Start `Search History is disabled: ...`, veröffentlicht `search_history` und
-`search_history_export` nicht und legt **keinen** globalen Index an.
+Chat-Schlüssel. Argos meldet dann beim Start `Search History is disabled: ...`, zeichnet nichts auf und legt **keinen**
+globalen Index an.
+
+`search_history` und `search_history_export` werden in den Profilen `compact` und `expert` **immer** veröffentlicht,
+damit die Werkzeugliste für ChatGPT stabil bleibt. Ist die Historie aus (`single` oder `ARGOS_SEARCH_HISTORY=false`),
+antworten beide mit einem Fehler, der den Grund und die Abhilfe nennt (`ARGOS_PROFILE_ISOLATION=chat`). Im Profil
+`legacy` fehlen sie. Nach einem Update muss ChatGPT die Verbindung aktualisieren, damit neue Werkzeuge erscheinen.
 
 ## Architektur (`com.aresstack.argos.history`)
 

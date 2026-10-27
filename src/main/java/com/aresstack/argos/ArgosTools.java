@@ -95,7 +95,7 @@ public final class ArgosTools {
             // Its own tool set only: no expert browser/network tools and no ResearchTools (even with ARGOS_RESEARCH).
             if (convenience == null) throw new IllegalStateException("The convenience profile needs its research session.");
             List<SyncToolSpecification> tools = new ArrayList<>(convenience.specifications());
-            if (history != null) tools.addAll(new SearchHistoryTools(history.history()).specifications());
+            if (history != null) tools.addAll(new SearchHistoryTools(history.history(), history::archiveHtml).specifications());
             return List.copyOf(tools);
         }
         List<SyncToolSpecification> tools = new ArrayList<>(profileTools(profile));

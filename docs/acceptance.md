@@ -21,6 +21,18 @@ Bibliotheksseitige Referenztests (in Playwright4J, nicht in Argos): `FirefoxNatu
 `FirefoxNativeInputTest`, `FirefoxKeyboardGraphemeTest`, `TestWheel`. Sie zeigen, dass die Bibliothek
 die Eingaben kann, aber nicht, dass Argos sie korrekt als Werkzeuge anbietet.
 
+## Zu prüfende PRs und Reihenfolge
+
+| PR | Inhalt | Basis | Stand der Browsertests |
+|---|---|---|---|
+| #24 | `tab`-Argument für Seitenwerkzeuge (Issue #19) | `main` | Unit-Tests grün; `pageTargetedMcpToolsKeepTabsIsolated` einmal grün; voller Camoufox-Lauf nicht grün gezählt (Hänger in `browsesWithTabsHistoryControlsAndExtraction` bei `KeyboardImpl.up`, danach Native-Memory-Abbruch) |
+| #25 | `browser_pages_navigate/snapshot/inspect` (Issue #20, Paket 5) | #24, erst nach #24 auf `main` umstellen | `ParallelPageToolsBrowserTest` lokal nicht abgeschlossen (Start hing in `launchPersistentContext`) |
+| #30 | Batch wartet je Dokument, Fixture streamt (Paket 5) | #25 | Linux Camoufox 156: 589 Tests, 0 Fehler, 2 übersprungen |
+| #27 | `browser_drag` (Paket 6) | #25 | offen |
+
+Abhängigkeit: #24 → #25 → #30 bleibt erhalten; Integration in genau dieser Reihenfolge. Jede PR
+einzeln gegen die Referenz vergleichen, dann den Gesamtstand.
+
 ## Testmatrix
 
 | Umgebung | Browser | Wer | Pflicht |
@@ -77,7 +89,11 @@ Vor der Abnahme ergänzt der Referenzlauf jeder Umgebung diese Tabelle.
 
 ## Abnahmekriterien pro Paket
 
-Allgemein für jedes Paket: keine Regression laut Vergleich auf Linux und Windows; keine Preload-/Init-
+Allgemein für jedes Paket: keine doppelte Funktion (vor Abnahme prüfen, dass kein bestehendes Werkzeug
+dasselbe leistet, z. B. `browser_pages_*` gegen `batch`/`web_*`); keine internen KI-Aufrufe in Argos,
+das aufrufende Modell entscheidet, Argos liefert deterministische Ergebnisse; offene Browser-
+Abnahmetests und Risiken stehen in der PR und in der Tabelle oben, nichts wird als grün gezählt, was
+nicht vollständig lief; keine Regression laut Vergleich auf Linux und Windows; keine Preload-/Init-
 Skripte, kein `exposeBinding`, keine DOM-Marker oder Seiten-Globals, keine Locator-Aktionen; Eingaben
 nur über echte BiDi-Maus/Tastatur; Werkzeuge sind in den Profilen (legacy/compact/expert) so sichtbar
 wie vorgesehen und `ToolProfileTest` bestätigt das; Doku in `docs/` beschreibt neue Werkzeuge.
@@ -90,6 +106,7 @@ wie vorgesehen und `ToolProfileTest` bestätigt das; Doku in `docs/` beschreibt 
 | 4 | Human-Input-Strategie aus AskAI | wiederverwendbare Logik, deterministische Tests (fester Seed), keine unbeabsichtigte Änderung der elementbasierten Eingaben (`HumanMotionTest`, `RealInputTest`, `HumanInputBrowserTest` unverändert grün). Status: Empfehlung kein Übertrag (HumanMotion ist bereits weiter), höchstens kleine Pausen-Ergänzungen nach Paket 1; Entscheidung offen |
 | 5 | Mehrere Seiten und Tabs | Parallelität nachgewiesen (Laufzeit gegen sequenziell gemessen); unabhängige Ergebnisse und Fehler je Seite; ursprünglicher Tab wiederhergestellt, temporäre Tabs geschlossen; `ParallelPageToolsBrowserTest` stabil grün auf Linux und Windows (zwei Läufe hintereinander) |
 | 6 | Drag-and-Drop (`browser_drag`, Draft-PR #27) | echte `pointerdown`/`mousedown`, Bewegung und `pointerup`/`drop`-Ereignisse auf einer kontrollierten Testseite (`DragToolsBrowserTest`), alle `isTrusted`; Ziel erhält das Element; keine synthetischen DragEvents per Skript |
+| A | Suchergebnisextraktion gegen AskAI (Thread "Suchergebnisextraktion gegen AskAI absichern") | Vergleich mit AskAI `SearchPageMechanicalAnalyzer`/`LegacySearchResultExtractor` auf festen Suchseiten-Fixtures; Argos unterscheidet "Ergebnisse", "keine Ergebnisse" und "Extraktion fehlgeschlagen"; rein deterministisch, keine KI-Reparatur; kein DOM-Durchlauf per Seiten-Skript, der die Stealth-Regeln verletzt |
 | 7 | Gesamtabnahme | alle Zeilen oben erfüllt; Vergleich Linux und Windows ohne Regression; Ergebnisse (Zähler, SHA, Browser) in der Integrations-PR |
 
 ## Ablauf der Gesamtabnahme

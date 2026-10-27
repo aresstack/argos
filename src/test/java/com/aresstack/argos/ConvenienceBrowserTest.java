@@ -36,7 +36,7 @@ import static org.junit.jupiter.api.Assertions.*;
 class ConvenienceBrowserTest {
     @TempDir Path temporary;
 
-    private record Hit(String host, String path, long start, long end) {
+    private record Hit(String host, String path, long start, long end, int clientPort) {
         boolean overlaps(Hit other) {
             return start < other.end && other.start < end;
         }
@@ -156,9 +156,12 @@ class ConvenienceBrowserTest {
             long start = System.nanoTime();
             String path = exchange.getRequestURI().getPath();
             String host = exchange.getRequestHeaders().getFirst("Host").replaceAll(":\\d+$", "");
+            int clientPort = exchange.getRemoteAddress().getPort();
             if (path.equals("/favicon.ico")) {
+                exchange.getResponseHeaders().add("Connection", "close");
                 exchange.sendResponseHeaders(404, -1);
                 exchange.close();
+                hits.add(new Hit(host, path, start, System.nanoTime(), clientPort));
                 return;
             }
             boolean slow = delay != null && path.startsWith("/slow");
@@ -169,6 +172,9 @@ class ConvenienceBrowserTest {
             try {
                 if (slow && delay == Delay.BEFORE_HEADERS) Thread.sleep(2_500);
                 exchange.getResponseHeaders().add("Content-Type", "text/html; charset=utf-8");
+                // No keep-alive: every navigation gets its own connection, so a reused idle connection of the
+                // test server can never delay the next request.
+                exchange.getResponseHeaders().add("Connection", "close");
                 exchange.sendResponseHeaders(200, 0); // chunked: the first bytes go out before the rest exists
                 try (var out = exchange.getResponseBody()) {
                     out.write(head);
@@ -179,7 +185,7 @@ class ConvenienceBrowserTest {
             } catch (InterruptedException ignored) {
                 Thread.currentThread().interrupt();
             }
-            hits.add(new Hit(host, path, start, System.nanoTime()));
+            hits.add(new Hit(host, path, start, System.nanoTime(), clientPort));
         });
         site.setExecutor(java.util.concurrent.Executors.newCachedThreadPool());
         site.start();
@@ -190,7 +196,7 @@ class ConvenienceBrowserTest {
     private static String intervals(List<Hit> hits, long origin) {
         synchronized (hits) {
             return hits.stream().map(hit -> hit.host() + hit.path() + " " + (hit.start() - origin) / 1_000_000 + ".."
-                    + (hit.end() - origin) / 1_000_000).toList().toString();
+                    + (hit.end() - origin) / 1_000_000 + " port " + hit.clientPort()).toList().toString();
         }
     }
 

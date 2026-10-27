@@ -1142,6 +1142,7 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
             job.startedAt = System.currentTimeMillis();
             job.previousDocument = document(page).mainDocument;
             job.previousDownload = document(page).lastDownload;
+            mark(job, "navigate");
             // At most a short wait for the response commit (COMMIT_SLICE_MILLIS), so a server that stalls before
             // answering does not hold back the next start; on that timeout the navigation keeps running in Firefox
             // and is polled below.

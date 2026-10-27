@@ -89,17 +89,20 @@ class ConvenienceBrowserTest {
                     new TabLoadRequest(null, c, RegistrableDomain.of(c))), coordinator, 4, 30_000);
             long millis = (System.nanoTime() - started) / 1_000_000;
 
-            for (TabLoad load : loads) assertEquals(TabLoadOutcome.OK, load.outcome(), load.toString());
+            String timeline = " | browser timeline " + browser.lastLoadTimeline();
+            for (TabLoad load : loads) assertEquals(TabLoadOutcome.OK, load.outcome(), load + timeline);
             assertEquals(3, loads.stream().map(TabLoad::tab).distinct().count(), "a new tab each");
             assertEquals("localhost/slow-a", loads.get(0).capture().title());
             assertEquals("127.0.0.1/slow-b", loads.get(1).capture().title());
             assertTrue(loads.get(1).capture().text().contains("Ende"), "the whole body was read");
             Hit hitA = find(hits, "localhost", "/slow-a"), hitB = find(hits, "127.0.0.1", "/slow-b"),
                     hitC = find(hits, "localhost", "/slow-c");
-            assertTrue(hitA.overlaps(hitB), delay + ": different domains load at the same time: " + hits);
-            assertFalse(hitA.overlaps(hitC), delay + ": the same domain waits: " + hits);
+            assertTrue(hitA.overlaps(hitB), delay + ": different domains load at the same time: " + hits + timeline);
+            assertFalse(hitA.overlaps(hitC), delay + ": the same domain waits: " + hits + timeline);
             // Sequential would be 3 x 2.5 s; parallel a and b, then c.
-            assertTrue(millis < 6_500, delay + ": took " + millis + " ms, server intervals " + intervals(hits, started));
+            assertTrue(millis < 6_500, delay + ": took " + millis + " ms, server intervals " + intervals(hits, started)
+                    + timeline);
+            System.out.println(delay + " " + millis + " ms, server " + intervals(hits, started) + timeline);
             assertTrue(coordinator.activeDomains().isEmpty(), "every slot is released");
         } finally {
             site.stop(0);

@@ -1018,6 +1018,8 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
         long startedAt;
         long domContentLoadedAt;
         TabLoad result;
+        /** Milestones in ms since the call started, for diagnostics ({@link #lastLoadTimeline}). */
+        final StringBuilder timeline = new StringBuilder();
 
         LoadJob(int index, TabLoadRequest request, long queuedAt) {
             this.index = index;
@@ -1049,12 +1051,31 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
     private List<TabLoad> loadTabsOnDriver(List<TabLoadRequest> requests, NavigationGate gate, int parallel,
                                            long timeout) throws Exception {
         List<LoadJob> jobs = new ArrayList<>();
+        loadClock = System.nanoTime();
         try {
             return runLoadJobs(requests, gate, parallel, timeout, jobs);
         } finally {
             // A driver failure must not keep a domain slot of the shared gate.
             jobs.forEach(job -> release(job, 0, 0, false));
+            List<String> timeline = new ArrayList<>();
+            jobs.forEach(job -> timeline.add(job.index + " " + job.request.domain() + ":" + job.timeline));
+            lastLoadTimeline = List.copyOf(timeline);
         }
+    }
+
+    private long loadClock;
+    private volatile List<String> lastLoadTimeline = List.of();
+
+    /**
+     * Milestones of each page of the last {@link #loadTabs} call (ms since the call started: slot acquired, start
+     * returned, response seen, committed, DOMContentLoaded, load, captured); diagnostics without URLs or content.
+     */
+    public List<String> lastLoadTimeline() {
+        return lastLoadTimeline;
+    }
+
+    private void mark(LoadJob job, String milestone) {
+        job.timeline.append(' ').append(milestone).append('@').append((System.nanoTime() - loadClock) / 1_000_000);
     }
 
     private List<TabLoad> runLoadJobs(List<TabLoadRequest> requests, NavigationGate gate, int parallel,
@@ -1091,6 +1112,7 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
                 NavigationGate.Lease lease = gate.tryAcquire(job.request.domain());
                 if (lease == null) continue;
                 job.lease = lease;
+                mark(job, "slot");
                 startLoad(job, timeout);
                 progressed = true;
                 if (job.result == null) running++;
@@ -1126,6 +1148,7 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
             NavigationAttempt attempt = startNavigation(page, job.request.url(), WaitUntilState.COMMIT,
                     COMMIT_SLICE_MILLIS);
             job.committed = true;
+            mark(job, "commit(start)");
             if (attempt.immediateResult() != null) {
                 // A download: a saved feed/JSON/text document is readable, anything else is reported.
                 SavedDocument saved = document(page).saved;
@@ -1140,7 +1163,10 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
             }
             job.status = attempt.response() == null ? 0 : attempt.response().status();
         } catch (RuntimeException failed) {
-            if (job.page != null && failed instanceof TimeoutError) return; // still loading; polled below
+            if (job.page != null && failed instanceof TimeoutError) {
+                mark(job, "slice-over");
+                return; // still loading; polled below
+            }
             boolean timedOut = failed instanceof TimeoutError;
             job.result = failedLoad(job, timedOut ? TabLoadOutcome.TIMEOUT : TabLoadOutcome.FAILED,
                     errorMessage(failed), 0);
@@ -1166,17 +1192,25 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
                 // bytes, so a response whose body has not started yet still leaves the old document (about:blank in
                 // a new tab) with its load states in place.
                 MainDocument main = document(job.page).mainDocument;
-                job.committed = main != null && main != job.previousDocument
-                        && (main.status() < 300 || main.status() >= 400)
+                boolean answered = main != null && main != job.previousDocument
+                        && (main.status() < 300 || main.status() >= 400);
+                if (answered && job.timeline.indexOf(" response@") < 0) mark(job, "response");
+                job.committed = answered
                         && WebAddress.withoutFragment(main.url()).equals(WebAddress.withoutFragment(job.page.url()));
+                if (job.committed) mark(job, "commit");
             }
             if (job.committed && job.domContentLoadedAt == 0) {
-                if (reached(job.page, LoadState.DOMCONTENTLOADED)) job.domContentLoadedAt = System.currentTimeMillis();
+                if (reached(job.page, LoadState.DOMCONTENTLOADED)) {
+                    job.domContentLoadedAt = System.currentTimeMillis();
+                    mark(job, "dcl");
+                }
             }
             if (job.domContentLoadedAt > 0 && (reached(job.page, LoadState.LOAD)
                     || System.currentTimeMillis() - job.domContentLoadedAt > 5_000)) {
+                mark(job, System.currentTimeMillis() - job.domContentLoadedAt > 5_000 ? "load-cap" : "load");
                 MainDocument main = document(job.page).mainDocument;
                 finishLoad(job, capture(job.page, job.status), main == null ? null : main.contentType());
+                mark(job, "released");
                 return true;
             }
         } catch (RuntimeException failed) {

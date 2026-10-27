@@ -1161,10 +1161,14 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
                 return true;
             }
             if (!job.committed) {
-                // The load state below belongs to the old document until the new one answered (non-redirect).
+                // The load state below belongs to the old document until the new one is committed: its response
+                // arrived (non-redirect) AND the frame shows its address. Firefox commits only with the first body
+                // bytes, so a response whose body has not started yet still leaves the old document (about:blank in
+                // a new tab) with its load states in place.
                 MainDocument main = document(job.page).mainDocument;
                 job.committed = main != null && main != job.previousDocument
-                        && (main.status() < 300 || main.status() >= 400);
+                        && (main.status() < 300 || main.status() >= 400)
+                        && WebAddress.withoutFragment(main.url()).equals(WebAddress.withoutFragment(job.page.url()));
             }
             if (job.committed && job.domContentLoadedAt == 0) {
                 if (reached(job.page, LoadState.DOMCONTENTLOADED)) job.domContentLoadedAt = System.currentTimeMillis();
@@ -1176,10 +1180,16 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
                 return true;
             }
         } catch (RuntimeException failed) {
-            job.result = failedLoad(job, TabLoadOutcome.FAILED, errorMessage(failed), 0);
-            release(job, 0, 0, false);
-            abandon(job);
-            return true;
+            if (!stillNavigating(failed)) {
+                job.result = failedLoad(job, TabLoadOutcome.FAILED, errorMessage(failed), 0);
+                release(job, 0, 0, false);
+                abandon(job);
+                return true;
+            }
+            // The document was replaced while it was read (a redirect or a script navigation): read it again.
+            job.domContentLoadedAt = 0;
+            job.committed = false;
+            job.previousDocument = null;
         }
         if (now - job.startedAt > timeout) {
             job.result = failedLoad(job, TabLoadOutcome.TIMEOUT, "the page did not finish loading in time", 0);
@@ -1188,6 +1198,12 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
             return true;
         }
         return false;
+    }
+
+    /** Playwright refuses page.content() while the frame navigates; the load is not over then. */
+    private static boolean stillNavigating(RuntimeException failed) {
+        String message = failed.getMessage();
+        return message != null && message.contains("page is navigating");
     }
 
     private static boolean reached(Page page, LoadState state) {

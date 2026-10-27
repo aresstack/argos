@@ -593,6 +593,9 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
     /**
      * Navigate distinct tabs with bounded overlap. Each page starts at response commit; its document can load
      * while the driver starts the next navigation. Results stay in request order and failures stay page-local.
+     * Firefox commits a navigation when the first body bytes arrive, so a server that sends headers and then
+     * stalls before any body byte delays the start of the following pages up to the commit timeout.
+     * Each page then waits for the readiness policy's load state, also bounded by the same per-page timeout.
      */
     public List<Map<String, Object>> navigatePages(List<PageNavigationRequest> requests, int parallelism,
                                                    int commitTimeoutMillis) {
@@ -625,7 +628,7 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
                 pending.addLast(new PendingPageNavigation(index, tabId, request.url(), page, attempt.response(),
                         startedNanos));
                 if (pending.size() >= parallelLimit) {
-                    finishPendingPageNavigation(pending.removeFirst(), results);
+                    finishPendingPageNavigation(pending.removeFirst(), results, commitTimeoutMillis);
                 }
             } catch (RuntimeException failure) {
                 results.set(index, failedPageNavigation(tabId, request.url(), startedNanos, failure));
@@ -633,16 +636,25 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
         }
 
         while (!pending.isEmpty()) {
-            finishPendingPageNavigation(pending.removeFirst(), results);
+            finishPendingPageNavigation(pending.removeFirst(), results, commitTimeoutMillis);
         }
         return List.copyOf(results);
     }
 
     private void finishPendingPageNavigation(PendingPageNavigation pending,
-                                             List<Map<String, Object>> results) {
+                                             List<Map<String, Object>> results, double timeoutMillis) {
         try {
+            // The batch started this page at commit only. Balanced readiness tolerates open requests,
+            // so a main document that is still streaming would count as quiet: wait for its load state
+            // like a single navigation does (a protocol event, nothing is read from the page).
+            ReadinessPolicy policy = config.readiness();
+            WaitUntilState loadState = waitUntil(policy);
+            if (loadState != WaitUntilState.COMMIT) {
+                pending.page().waitForLoadState(loadState == WaitUntilState.LOAD ? LoadState.LOAD
+                        : LoadState.DOMCONTENTLOADED, new Page.WaitForLoadStateOptions().setTimeout(timeoutMillis));
+            }
             Map<String, Object> result = new LinkedHashMap<>(
-                    finishNavigation(pending.page(), pending.response(), config.readiness()));
+                    finishNavigation(pending.page(), pending.response(), policy));
             result.put("tab", pending.tab());
             result.put("requestedUrl", pending.requestedUrl());
             result.put("outcome", "SUCCESS");

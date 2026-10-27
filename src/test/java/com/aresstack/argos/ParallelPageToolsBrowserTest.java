@@ -41,9 +41,10 @@ class ParallelPageToolsBrowserTest {
         local.requireBrowserConfiguration();
 
         ConcurrentMap<String, Long> bodyResponseStarted = new ConcurrentHashMap<>();
+        ConcurrentMap<String, Long> bodyCompleted = new ConcurrentHashMap<>();
         HttpServer site = HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0);
         ExecutorService serverExecutor = Executors.newCachedThreadPool();
-        site.createContext("/", exchange -> servePage(exchange, bodyResponseStarted));
+        site.createContext("/", exchange -> servePage(exchange, bodyResponseStarted, bodyCompleted));
         site.setExecutor(serverExecutor);
         site.start();
 
@@ -65,6 +66,7 @@ class ParallelPageToolsBrowserTest {
                             Map.of("tab", "t2", "url", base + "/slow-body?id=fast&delay=200")),
                     "parallel", 2,
                     "timeoutMs", 5_000))));
+            long navigationReturned = System.nanoTime();
 
             assertEquals(2, navigation.size());
             assertEquals("t1", navigation.get(0).get("tab").asText());
@@ -81,15 +83,18 @@ class ParallelPageToolsBrowserTest {
             assertNotNull(fastStarted, "The fast page response must have started");
             assertTrue(Math.abs(slowStarted - fastStarted) < TimeUnit.SECONDS.toNanos(1),
                     "Page bodies should load concurrently after their response commits");
+            Long slowCompleted = bodyCompleted.get("slow");
+            assertTrue(slowCompleted != null && slowCompleted <= navigationReturned,
+                    "A page may be reported only after its document has loaded: " + navigation);
 
             JsonNode snapshots = mapper.readTree(toolText(callTool(tools, "browser_pages_snapshot",
                     Map.of("tabs", List.of("t1", "t2"), "maxCharacters", 4_000))));
-            assertTrue(snapshots.get(0).get("snapshot").get("text").asText().contains("Slow page"));
+            assertTrue(snapshots.get(0).get("snapshot").get("text").asText().contains("Slow page"), snapshots.toString());
             assertTrue(snapshots.get(1).get("snapshot").get("text").asText().contains("Fast page"));
 
             JsonNode inspections = mapper.readTree(toolText(callTool(tools, "browser_pages_inspect",
                     Map.of("tabs", List.of("t1", "t2"), "selector", "h1"))));
-            assertTrue(inspections.get(0).get("inspection").toString().contains("Slow page"));
+            assertTrue(inspections.get(0).get("inspection").toString().contains("Slow page"), inspections.toString());
             assertTrue(inspections.get(1).get("inspection").toString().contains("Fast page"));
 
             JsonNode partialInspection = mapper.readTree(toolText(callTool(tools, "browser_pages_inspect",
@@ -107,13 +112,43 @@ class ParallelPageToolsBrowserTest {
             assertEquals("t3", timedOutBatch.get(0).get("tab").asText());
             assertEquals("SUCCESS", timedOutBatch.get(1).get("outcome").asText(), timedOutBatch.toString());
             assertEquals("Survivor page", timedOutBatch.get(1).get("title").asText());
+            assertEquals("t3", browser.status().get("tab"), "A failed page must not change the current tab");
+
+            JsonNode mixedBatch = mapper.readTree(toolText(callTool(tools, "browser_pages_navigate", Map.of(
+                    "pages", List.of(
+                            Map.of("tab", "t1", "url", "file:///etc/hosts"),
+                            Map.of("tab", "t9", "url", base + "/slow-body?id=fast&delay=0"),
+                            Map.of("tab", "t2", "url", base + "/slow-body?id=survivor&delay=0")),
+                    "parallel", 2))));
+            assertEquals(3, mixedBatch.size(), mixedBatch.toString());
+            assertEquals("t1", mixedBatch.get(0).get("tab").asText());
+            assertEquals("FAILED", mixedBatch.get(0).get("outcome").asText(), mixedBatch.toString());
+            assertEquals("t9", mixedBatch.get(1).get("tab").asText());
+            assertEquals("FAILED", mixedBatch.get(1).get("outcome").asText(), mixedBatch.toString());
+            assertEquals("SUCCESS", mixedBatch.get(2).get("outcome").asText(), mixedBatch.toString());
+            assertEquals("t3", browser.status().get("tab"), "A batch with failed pages must not change the current tab");
+
+            JsonNode isolated = mapper.readTree(toolText(callTool(tools, "browser_pages_snapshot",
+                    Map.of("tabs", List.of("t1", "t2"), "maxCharacters", 4_000))));
+            assertTrue(isolated.get(0).get("snapshot").get("text").asText().contains("Slow page"),
+                    "A rejected URL must leave the tab's previous page in place: " + isolated);
+            assertTrue(isolated.get(1).get("snapshot").get("text").asText().contains("Survivor page"), isolated.toString());
+
+            CallToolResult duplicate = callTool(tools, "browser_pages_navigate", Map.of(
+                    "pages", List.of(
+                            Map.of("tab", "t1", "url", base + "/slow-body?id=fast&delay=0"),
+                            Map.of("tab", "T1", "url", base + "/slow-body?id=slow&delay=0"))));
+            assertTrue(duplicate.isError(), "A tab named twice must reject the whole batch");
+            assertTrue(duplicate.content().toString().contains("INVALID_REQUEST"), duplicate.content().toString());
+            assertEquals("t3", browser.status().get("tab"));
         } finally {
             site.stop(0);
             serverExecutor.shutdownNow();
         }
     }
 
-    private static void servePage(HttpExchange exchange, ConcurrentMap<String, Long> responseStarted) {
+    private static void servePage(HttpExchange exchange, ConcurrentMap<String, Long> responseStarted,
+                                  ConcurrentMap<String, Long> bodyCompleted) {
         String path = exchange.getRequestURI().getPath();
         Map<String, String> query = queryParameters(exchange.getRequestURI().getRawQuery());
         String id = query.getOrDefault("id", "");
@@ -132,10 +167,16 @@ class ParallelPageToolsBrowserTest {
             exchange.getResponseHeaders().add("Content-Type", "text/html; charset=utf-8");
             exchange.sendResponseHeaders(200, body.length);
             if (!id.isBlank() && !slowHeaders) responseStarted.put(id, System.nanoTime());
-            if (!slowHeaders && delayMillis > 0) Thread.sleep(delayMillis);
             try (OutputStream output = exchange.getResponseBody()) {
-                output.write(body);
+                // Firefox commits a navigation only when the first body bytes arrive, not on the headers.
+                // Flush the start of the document first, so the delay models a slowly streaming page.
+                int split = slowHeaders ? 0 : body.length / 2;
+                output.write(body, 0, split);
+                output.flush();
+                if (!slowHeaders && delayMillis > 0) Thread.sleep(delayMillis);
+                output.write(body, split, body.length - split);
             }
+            if (!id.isBlank()) bodyCompleted.put(id, System.nanoTime());
         } catch (InterruptedException interrupted) {
             Thread.currentThread().interrupt();
         } catch (IOException ignored) {

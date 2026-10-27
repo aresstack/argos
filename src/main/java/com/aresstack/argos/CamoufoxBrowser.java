@@ -996,7 +996,13 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
 
     // ---- Convenience profile: tab-addressed loads under the shared NavigationGate -----------------------------
 
-    private static final double COMMIT_SLICE_MILLIS = 2_000;
+    /**
+     * How long one start waits for the response commit. Kept short: the start runs on the single driver thread, so
+     * a longer wait would hold back every other start while a server delays its answer (Firefox commits a
+     * navigation only with the first body bytes). After this slice the navigation keeps running in Firefox and the
+     * commit is detected by polling (the tab's main document response).
+     */
+    private static final double COMMIT_SLICE_MILLIS = 150;
 
     private static final class LoadJob {
         final int index;
@@ -1007,6 +1013,7 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
         String tab;
         int status;
         MainDocument previousDocument;
+        MainDocument previousDownload;
         boolean committed;
         long startedAt;
         long domContentLoadedAt;
@@ -1112,8 +1119,10 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
             job.page = page;
             job.startedAt = System.currentTimeMillis();
             job.previousDocument = document(page).mainDocument;
-            // At most a short wait for the response commit, so a server that stalls before answering does not hold
-            // back the next start; on that timeout the navigation keeps running in Firefox and is polled below.
+            job.previousDownload = document(page).lastDownload;
+            // At most a short wait for the response commit (COMMIT_SLICE_MILLIS), so a server that stalls before
+            // answering does not hold back the next start; on that timeout the navigation keeps running in Firefox
+            // and is polled below.
             NavigationAttempt attempt = startNavigation(page, job.request.url(), WaitUntilState.COMMIT,
                     COMMIT_SLICE_MILLIS);
             job.committed = true;
@@ -1144,6 +1153,13 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
     private boolean pollLoad(LoadJob job, long timeout) {
         long now = System.currentTimeMillis();
         try {
+            if (!job.committed && document(job.page).lastDownload != job.previousDownload) {
+                // The navigation turned into a download after the commit slice: no page to read.
+                job.result = failedLoad(job, TabLoadOutcome.DOWNLOAD, "the address is a download", 0);
+                release(job, 0, 0, false);
+                abandon(job);
+                return true;
+            }
             if (!job.committed) {
                 // The load state below belongs to the old document until the new one answered (non-redirect).
                 MainDocument main = document(job.page).mainDocument;

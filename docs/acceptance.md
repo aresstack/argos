@@ -48,10 +48,10 @@ Pro Umgebung zwei Läufe mit identischen Optionen: Referenz auf `main` und Integ
 # Referenz (Stand vor den Paketen)
 git checkout <main-sha> && scripts/acceptance/run-suite.sh baseline-main
 # Integrationsstand
-git checkout <integration-sha> && scripts/acceptance/run-suite.sh integration-<sha>
+git checkout <develop-sha> && scripts/acceptance/run-suite.sh develop-<sha>
 # Vergleich
 python3 scripts/acceptance/summarize.py --compare \
-  build/acceptance/baseline-main/summary.json build/acceptance/integration-<sha>/summary.json
+  build/acceptance/baseline-main/summary.json build/acceptance/develop-<sha>/summary.json
 ```
 
 `run-suite.sh` erwartet `ARGOS_CAMOUFOX_EXECUTABLE` (Datei heißt `camoufox`, nicht `camoufox-bin`) und
@@ -111,9 +111,13 @@ wie vorgesehen und `ToolProfileTest` bestätigt das; Doku in `docs/` beschreibt 
 
 ## Ablauf der Gesamtabnahme
 
-1. Pakete 1 bis 6 in einen Integrationsbranch von `main` zusammenführen, Konflikte dokumentieren.
+Zielbranch ist `develop`; die Referenz ist `main`. Der Thread "Alles auf develop zusammenführen" legt
+`develop` an und merged dort die Draft-PRs; die Abnahme startet, sobald er den `develop`-Head meldet.
+`develop` → `main` erst nach Angelos Freigabe.
+
+1. Integrations-Thread meldet den `develop`-Head (Pakete 1 bis 6, Reihenfolge #24 → #25 → #30).
 2. CI grün.
 3. Linux: Referenz `main` und Integrationsstand, Vergleich.
 4. Windows (Angelo): dieselben zwei Läufe, `build/acceptance/` als Bericht.
 5. Optional `evalModels`, wenn Werkzeugbeschreibungen geändert wurden.
-6. Ergebnis in der Integrations-PR. Kein Merge ohne Angelos ausdrückliche Freigabe.
+6. Ergebnis in der PR `develop` → `main`. Kein Merge ohne Angelos ausdrückliche Freigabe.

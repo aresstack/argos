@@ -86,7 +86,8 @@ class SearchHistoryCollectorBrowserTest {
             assertTrue(archived.select("script").isEmpty(), "scripts removed");
             assertTrue(archived.select("link[rel~=preload]").isEmpty(), "preload links removed");
             assertTrue(archived.select("link[rel~=stylesheet]").isEmpty(), "stylesheet inlined");
-            String style = archived.select("style[data-from]").text();
+            String style = archived.select("style[data-from]").stream().map(org.jsoup.nodes.Element::data)
+                    .collect(java.util.stream.Collectors.joining("\n")); // <style> content is data, text() is ""
             assertTrue(style.contains("rgb(1, 2, 3)"), style);
             assertTrue(style.contains("url('data:image/png;base64,"), "CSS background image embedded: " + style);
             assertTrue(archived.select("img[alt=pixel]").attr("src").startsWith("data:image/png;base64,"));

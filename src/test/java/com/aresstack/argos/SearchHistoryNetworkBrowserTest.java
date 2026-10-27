@@ -101,7 +101,24 @@ class SearchHistoryNetworkBrowserTest {
                     return browser.evaluate(function, tabId);
                 }
             }, 10_000);
-            browser.contentSink(capture.networkContent());
+            // Diagnostics: every offered response with its metadata and the outcome, written to
+            // build/search-history-network.txt and included in assertion messages.
+            List<String> trace = java.util.Collections.synchronizedList(new ArrayList<>());
+            com.aresstack.argos.network.ResponseContentSink real = capture.networkContent();
+            browser.contentSink(new com.aresstack.argos.network.ResponseContentSink() {
+                @Override public long wants(ObservedResponse r) {
+                    long wanted = real.wants(r);
+                    trace.add("offered " + r.url() + " status=" + r.status() + " type=" + r.resourceType()
+                            + " mime=" + r.mimeType() + " length=" + r.contentLength() + " encoded=" + r.encoded()
+                            + " -> " + (wanted > 0 ? "wanted" : "skipped"));
+                    return wanted;
+                }
+                @Override public void deliver(ObservedResponse r, byte[] body, String unavailable) {
+                    trace.add("read " + r.url() + " -> " + (body == null ? "unavailable: " + unavailable
+                            : body.length + " bytes"));
+                    real.deliver(r, body, unavailable);
+                }
+            });
 
             browser.navigate(base + "/");
             browser.waitFor(null, "loaded", 10_000);
@@ -112,6 +129,7 @@ class SearchHistoryNetworkBrowserTest {
             Map<String, Integer> afterBrowsing = counts(requests);
 
             // Test C: dynamic data is searchable although it is not part of the visible snapshot.
+            assertFalse(history.search("quasarwidget", 5).isEmpty(), String.join("\n", new ArrayList<>(trace)));
             assertEquals("resource", history.search("quasarwidget", 5).get(0).type());
             assertEquals("resource", history.search("nebulagadget", 5).get(0).type());
             assertFalse(browser.capturePage(null).text().contains("quasarwidget"));
@@ -124,9 +142,14 @@ class SearchHistoryNetworkBrowserTest {
                     urls.add(resource.url());
                 }
             });
-            assertTrue(urls.contains(base + "/api/data.json"), urls.toString());
-            assertTrue(urls.contains(base + "/api/feed.xml"), urls.toString());
-            assertTrue(urls.contains(base + "/"), urls.toString());
+            Path report = Path.of("build", "search-history-network.txt");
+            Files.createDirectories(report.getParent());
+            Files.write(report, new ArrayList<>(trace));
+            String why = "stored=" + urls + "\ntrace (also in " + report.toAbsolutePath() + "):\n"
+                    + String.join("\n", new ArrayList<>(trace));
+            assertTrue(urls.contains(base + "/api/data.json"), why);
+            assertTrue(urls.contains(base + "/api/feed.xml"), why);
+            assertTrue(urls.contains(base + "/"), "the page's HTML document: " + why);
             assertTrue(categories.stream().allMatch("content"::equals), categories.toString());
             assertTrue(history.search("cssmarker", 5).isEmpty() && history.search("jsmarker", 5).isEmpty());
 

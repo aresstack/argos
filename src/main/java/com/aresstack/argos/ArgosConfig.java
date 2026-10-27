@@ -155,9 +155,9 @@ public record ArgosConfig(
         }
 
         String executable = setting(environment, "ARGOS_CAMOUFOX_EXECUTABLE", application, "camoufox.executable",
-                desktop.getProperty("executable"));
+                null);
         String options = setting(environment, "ARGOS_CAMOUFOX_LAUNCH_OPTIONS", application, "camoufox.launchOptions",
-                desktop.getProperty("launchOptions"));
+                null);
         String profile = setting(environment, "ARGOS_PROFILE_DIR", application, "browser.profile",
                 userHome.resolve(".argos").resolve("profiles").resolve("default").toString());
         return new ArgosConfig(host, port,

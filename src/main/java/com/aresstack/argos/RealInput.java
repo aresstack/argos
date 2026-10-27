@@ -225,8 +225,8 @@ final class RealInput {
         HumanMotion.Point center = center(target);
         if (!inside(center, view)) {
             if (!pointers.containsKey(page)) pointerMove(page, device, viewportPoint(view.width() / 2, view.height() / 2, view));
-            device.wheel(inside(center.x(), view.width()) ? 0 : center.x() - view.width() / 2,
-                    inside(center.y(), view.height()) ? 0 : center.y() - view.height() / 2);
+            device.wheel(wheelDelta(inside(center.x(), view.width()) ? 0 : center.x() - view.width() / 2),
+                    wheelDelta(inside(center.y(), view.height()) ? 0 : center.y() - view.height() / 2));
             page.waitForTimeout(150);
             center = center(target);
             if (!inside(center, view)) throw new IllegalStateException("Element cannot be scrolled into view");
@@ -241,7 +241,12 @@ final class RealInput {
             HumanMotion.Box view = viewport(page);
             pointerMove(page, device, viewportPoint(view.width() / 2, view.height() / 2, view));
         }
-        device.wheel(deltaX, deltaY);
+        device.wheel(wheelDelta(deltaX), wheelDelta(deltaY));
+    }
+
+    /** WebDriver BiDi wheel actions take whole CSS pixels only; a fractional delta is rejected as invalid. */
+    static long wheelDelta(double delta) {
+        return Double.isFinite(delta) ? Math.round(delta) : 0;
     }
 
     private HumanMotion.Point pointerMove(Page page, InputDevice device, HumanMotion.Point point) {
@@ -374,18 +379,24 @@ final class RealInput {
     }
 
     /**
-     * The window's inner size: from the Camoufox fingerprint, or else read once with a transient, read-only
-     * evaluation (stealth tier 3) that leaves nothing behind in the page.
+     * The window's inner size as the page sees it now, read with a transient, read-only evaluation (stealth tier 3)
+     * that leaves nothing behind; the same measurement {@code browser_screenshot} reports. The Camoufox fingerprint
+     * size is only a fallback: the real window can differ from it (resized window, display scaling), and a stale
+     * size rejected valid screenshot coordinates and stopped wheel scrolling short of the real lower edge.
      */
     private HumanMotion.Box viewport(Page page) {
-        if (viewport == null) {
-            Object size = page.evaluate("() => [innerWidth, innerHeight]");
-            if (size instanceof List<?> values && values.size() == 2
-                    && values.get(0) instanceof Number width && values.get(1) instanceof Number height) {
-                viewport(width.doubleValue(), height.doubleValue());
-            }
-            if (viewport == null) throw new IllegalStateException("Viewport size is unknown");
+        Object size;
+        try {
+            size = page.evaluate("() => [innerWidth, innerHeight]");
+        } catch (PlaywrightException unreadable) {
+            size = null;
         }
+        if (size instanceof List<?> values && values.size() == 2
+                && values.get(0) instanceof Number width && values.get(1) instanceof Number height
+                && width.doubleValue() > 0 && height.doubleValue() > 0) {
+            return new HumanMotion.Box(0, 0, width.doubleValue(), height.doubleValue());
+        }
+        if (viewport == null) throw new IllegalStateException("Viewport size is unknown");
         return viewport;
     }
 
@@ -394,14 +405,14 @@ final class RealInput {
      * hand coming from the address bar would, and travels on from there; it never appears out of nowhere.
      */
     private void enter(Page page, InputDevice device, HumanMotion.Point target) {
-        HumanMotion.Point start = motion.entryPoint(target, viewport);
+        HumanMotion.Point start = motion.entryPoint(target, viewport(page));
         device.move(start.x(), start.y());
         pointers.put(page, start);
     }
 
     private void moveTo(Page page, InputDevice device, HumanMotion.Point point, double targetSize) {
         if (!pointers.containsKey(page)) enter(page, device, point);
-        List<HumanMotion.Step> steps = motion.path(pointers.get(page), point, targetSize, viewport);
+        List<HumanMotion.Step> steps = motion.path(pointers.get(page), point, targetSize, viewport(page));
         long start = device.now();
         for (int i = 0; i < steps.size(); i++) {
             HumanMotion.Step step = steps.get(i);

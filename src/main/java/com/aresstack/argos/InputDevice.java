@@ -54,7 +54,7 @@ interface InputDevice {
             }
 
             @Override public void wheel(double deltaX, double deltaY) {
-                page.mouse().wheel(deltaX, deltaY);
+                page.mouse().wheel(RealInput.wheelDelta(deltaX), RealInput.wheelDelta(deltaY));
             }
 
             @Override public void keyDown(String key) {

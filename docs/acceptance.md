@@ -11,7 +11,7 @@ beginnt erst, wenn alle sechs Pakete in einem Integrationsstand zusammengeführt
 - `2e889ce9` enthält `fe129492` (#73, `keyboard.down/up/press` für ein Graphem über BiDi), den Pin aus
   Argos PR #18. Außerdem #74 (BiDi-Ereignisreihenfolgen), #75 (späte iframe-Namen) und #72
   (Windows-Prozessbaum, Launch-Timeout 180 s). Der Revert von #59 (2aea2e4) ist enthalten.
-- Damit ist keine Pin-Änderung nötig. PR #18 ist inhaltlich überholt, weil `main` schon weiter pinnt.
+- Damit ist keine Pin-Änderung nötig. PR #18 wird mit dem 0.3.0-Pin gemergt und bringt nur den verschärften `HumanInputBrowserTest` und Doku mit.
 - Vorschlag (nicht umgesetzt): Wird auf Windows "0.3.0 aus Maven Local" benutzt, vorher prüfen, dass
   das lokale Artefakt aus `2e889ce9` gebaut wurde. Eine Gradle-Version `0.3.0` sagt nichts über den
   Commit. Im Zweifel `-Pplaywright4jSource=<checkout auf 2e889ce9>` benutzen; das setzt automatisch
@@ -61,13 +61,13 @@ Unter Windows in Git Bash ausführen. Ergebnisse liegen unter `build/acceptance/
 3. Eine Regression, die beim zweiten Lauf nicht wiederkommt, ist instabil, nicht grün. Sie wird mit
    beiden Läufen in der Tabelle unten eingetragen. Tests werden nie deaktiviert, um grün zu werden.
 4. Ein vorbestehender Fehler blockiert die Abnahme nicht, wenn er in der Liste unten steht. Ein
-   Paket, das ihn beheben soll (z. B. Paket 4), muss ihn als "behoben" zeigen.
+   Paket, das ihn beheben soll (z. B. Paket 5), muss ihn als "behoben" zeigen.
 
 ## Bekannte vorbestehende Fehler und Einschränkungen
 
 | Test / Thema | Umgebung | Stand | Zuständig |
 |---|---|---|---|
-| `ParallelPageToolsBrowserTest` | wird bei Angelo gemeldet | in Bearbeitung | Thread "Parallele Seiten und Tabs absichern" |
+| `ParallelPageToolsBrowserTest` | wird bei Angelo gemeldet | in Bearbeitung, Paket 5 muss ihn als "behoben" zeigen | Thread "Parallele Seiten und Tabs absichern" |
 | Referenzlauf `main` 878d8e5 ohne Browser (`gradlew test`) | Linux-Container | 563 grün, 0 Fehler, 23 übersprungen (Browsertests) | — |
 | Screenshots und `page.content()` sind nicht spurenfrei (pw4j #37, #40) | alle | offen in Playwright4J | Playwright4J |
 | `fill()`/`selectOption()` erzeugen untrusted Events (pw4j #41) | alle | offen, Argos meidet sie | Playwright4J |
@@ -87,8 +87,9 @@ wie vorgesehen und `ToolProfileTest` bestätigt das; Doku in `docs/` beschreibt 
 | 1 | Allgemeine Maussteuerung | Bewegen, Klicken (links/rechts/mittel, Doppelklick), Drücken/Loslassen, Mausrad gehen als echte BiDi-Ereignisse auf einer lokalen Testseite ein (`isTrusted`, Reihenfolge); Mausrad-Distanz exakt; Koordinaten außerhalb des Viewports werden abgelehnt |
 | 2 | Tastatursteuerung | Einzeltasten, Kombinationen, Text mit Umlauten als echte Tasten; mit `expectUnicodeKeys=true` keine Ablehnung; `HumanInputBrowserTest`, `UnicodeInputCamoufoxTest` grün |
 | 3 | Screenshots für den Agenten | Bild für Seite/Ausschnitt/Element; Größe begrenzt; dokumentiert, dass Screenshots das DOM berühren (pw4j #40), falls nicht vermieden |
-| 4 | Parallele Seiten und Tabs | `ParallelPageToolsBrowserTest` grün auf Linux und Windows; Ergebnisse je URL, ursprünglicher Tab wiederhergestellt, temporäre Tabs geschlossen |
-| 5, 6 | laut Roadmap | Kriterien aus dem jeweiligen Paket übernehmen, bevor die Integration beginnt |
+| 4 | laut Roadmap | Kriterien aus dem Paket übernehmen, bevor die Integration beginnt |
+| 5 | Mehrere Seiten und Tabs | Parallelität nachgewiesen (Laufzeit gegen sequenziell gemessen); unabhängige Ergebnisse und Fehler je Seite; ursprünglicher Tab wiederhergestellt, temporäre Tabs geschlossen; `ParallelPageToolsBrowserTest` stabil grün auf Linux und Windows (zwei Läufe hintereinander) |
+| 6 | Drag-and-Drop (`browser_drag`, Draft-PR #27) | echte `pointerdown`/`mousedown`, Bewegung und `pointerup`/`drop`-Ereignisse auf einer kontrollierten Testseite (`DragToolsBrowserTest`), alle `isTrusted`; Ziel erhält das Element; keine synthetischen DragEvents per Skript |
 | 7 | Gesamtabnahme | alle Zeilen oben erfüllt; Vergleich Linux und Windows ohne Regression; Ergebnisse (Zähler, SHA, Browser) in der Integrations-PR |
 
 ## Ablauf der Gesamtabnahme

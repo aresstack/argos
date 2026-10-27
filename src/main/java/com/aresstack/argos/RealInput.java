@@ -147,13 +147,104 @@ final class RealInput {
 
     private void click(Page page, ElementHandle element) {
         InputDevice device = InputDevice.of(page);
+        pointAt(page, device, element);
+        press(device, MouseButton.LEFT);
+    }
+
+    private HumanMotion.Point pointAt(Page page, InputDevice device, ElementHandle element) {
         HumanMotion.Box box = stableBox(page, element);
         HumanMotion.Point point = reachablePoint(page, device, element, box);
         moveTo(page, device, point, Math.min(box.width(), box.height()));
+        return point;
+    }
+
+    private void press(InputDevice device, MouseButton button) {
         device.sleep(motion.hoverBeforePress());
-        device.down();
+        device.down(button);
         device.sleep(motion.buttonHold());
-        device.up();
+        device.up(button);
+    }
+
+    // ---- Plain pointer tools: one native mouse command per step, no HumanMotion paths or pauses. ----------
+
+    /** Moves the pointer straight to a viewport point given in CSS pixels; nothing is pressed. */
+    HumanMotion.Point pointerMove(Page page, double x, double y) {
+        return pointerMove(page, InputDevice.of(page), viewportPoint(x, y, viewport(page)));
+    }
+
+    /** Moves straight to a viewport point given in CSS pixels and presses {@code button} there once. */
+    HumanMotion.Point pointerClick(Page page, double x, double y, MouseButton button) {
+        InputDevice device = InputDevice.of(page);
+        HumanMotion.Point point = pointerMove(page, device, viewportPoint(x, y, viewport(page)));
+        device.down(button);
+        device.up(button);
+        return point;
+    }
+
+    /**
+     * Moves the pointer straight onto the center of the element located by {@code target}, measured with
+     * {@code Locator.boundingBox}; nothing is pressed. An element outside the viewport is first brought in with one
+     * native wheel turn. {@code Locator.hover} is not used: it scrolls by script and dispatches
+     * {@code __playwright_mark_target__} events the page can observe (playwright4j #38).
+     */
+    HumanMotion.Point pointerHover(Page page, Locator target) {
+        InputDevice device = InputDevice.of(page);
+        HumanMotion.Box view = viewport(page);
+        HumanMotion.Point center = center(target);
+        if (!inside(center, view)) {
+            if (!pointers.containsKey(page)) pointerMove(page, device, viewportPoint(view.width() / 2, view.height() / 2, view));
+            device.wheel(inside(center.x(), view.width()) ? 0 : center.x() - view.width() / 2,
+                    inside(center.y(), view.height()) ? 0 : center.y() - view.height() / 2);
+            page.waitForTimeout(150);
+            center = center(target);
+            if (!inside(center, view)) throw new IllegalStateException("Element cannot be scrolled into view");
+        }
+        return pointerMove(page, device, viewportPoint(center.x(), center.y(), view));
+    }
+
+    /** One native wheel event of {@code deltaX}/{@code deltaY} CSS pixels where the pointer is (its center if unset). */
+    void pointerWheel(Page page, double deltaX, double deltaY) {
+        InputDevice device = InputDevice.of(page);
+        if (!pointers.containsKey(page)) {
+            HumanMotion.Box view = viewport(page);
+            pointerMove(page, device, viewportPoint(view.width() / 2, view.height() / 2, view));
+        }
+        device.wheel(deltaX, deltaY);
+    }
+
+    private HumanMotion.Point pointerMove(Page page, InputDevice device, HumanMotion.Point point) {
+        device.move(point.x(), point.y());
+        pointers.put(page, point); // later human paths start where this pointer is
+        return point;
+    }
+
+    private static HumanMotion.Point center(Locator target) {
+        BoundingBox box = target.boundingBox(new Locator.BoundingBoxOptions().setTimeout(ACTION_TIMEOUT_MS));
+        if (box == null || box.width <= 0 || box.height <= 0) {
+            throw new IllegalStateException("Element is not visible on the page");
+        }
+        return new HumanMotion.Point(box.x + box.width / 2, box.y + box.height / 2);
+    }
+
+    private static boolean inside(HumanMotion.Point point, HumanMotion.Box view) {
+        return inside(point.x(), view.width()) && inside(point.y(), view.height());
+    }
+
+    private static boolean inside(double value, double size) {
+        return value >= 0 && value < size;
+    }
+
+    /**
+     * Validates a viewport point in CSS pixels and makes it a whole pixel. Flooring keeps every accepted value
+     * inside: 0 <= x < width gives 0 <= floor(x) <= width - 1, where rounding could reach the edge itself.
+     */
+    static HumanMotion.Point viewportPoint(double x, double y, HumanMotion.Box view) {
+        if (!Double.isFinite(x) || !Double.isFinite(y) || !inside(x, view.width()) || !inside(y, view.height())) {
+            throw new IllegalArgumentException(String.format(java.util.Locale.ROOT, "Point (%s, %s) lies outside the"
+                    + " viewport; x must be at least 0 and below %s, y at least 0 and below %s CSS pixels.", x, y,
+                    view.width(), view.height()));
+        }
+        return new HumanMotion.Point(Math.floor(x), Math.floor(y));
     }
 
     /** The element's box once it stops moving (animations, late layout), measured a few frames apart. */

@@ -72,13 +72,17 @@ public final class NetworkRecorder {
     }
 
     public void attach(Page page) {
-        page.onRequest(this::requestStarted);
+        page.onRequest(request -> requestStarted(request, page));
         page.onResponse(this::responseReceived);
         page.onRequestFinished(this::requestFinished);
         page.onRequestFailed(this::requestFailed);
     }
 
     void requestStarted(Request request) {
+        requestStarted(request, null);
+    }
+
+    private void requestStarted(Request request, Page ownerPage) {
         if (entries.size() >= MAX_ENTRIES) evictOldest();
         NetworkEntry previous = request.redirectedFrom() == null ? null : byRequest.get(request.redirectedFrom());
         String postData = request.postData();
@@ -88,7 +92,7 @@ public final class NetworkRecorder {
                 request.resourceType(), headers,
                 postData == null ? null : truncate(masker.body(postData, header(headers, "content-type")),
                         MAX_POST_DATA_CHARACTERS),
-                previous == null ? null : previous.id, request);
+                previous == null ? null : previous.id, request, ownerPage);
         entries.addLast(entry);
         byId.put(entry.id, entry);
         byRequest.put(request, entry);
@@ -143,12 +147,17 @@ public final class NetworkRecorder {
      * Bodies come from the browser's network data collector, never from in-page scripts.
      */
     public List<Map<String, Object>> jsonResponses(String filter, int limit) {
+        return jsonResponses(filter, limit, null);
+    }
+
+    public List<Map<String, Object>> jsonResponses(String filter, int limit, Page ownerPage) {
         String needle = filter == null ? "" : filter.trim().toLowerCase(Locale.ROOT);
         int count = Math.min(MAX_JSON_RESPONSES, Math.max(1, limit));
         FetchBudget budget = new FetchBudget();
         List<Map<String, Object>> rows = new ArrayList<>();
         for (var iterator = entries.descendingIterator(); iterator.hasNext() && rows.size() < count; ) {
             NetworkEntry entry = iterator.next();
+            if (ownerPage != null && entry.ownerPage != ownerPage) continue;
             if (entry.state != NetworkEntry.State.FINISHED || !entry.mimeType.contains("json")) continue;
             if (!needle.isEmpty() && !entry.url.toLowerCase(Locale.ROOT).contains(needle)) continue;
             boolean deferred = false;
@@ -178,9 +187,14 @@ public final class NetworkRecorder {
 
     /** Compact one-line-per-request view; same base fields as the original browser_network. */
     public List<Map<String, Object>> summary(String filter) {
+        return summary(filter, null);
+    }
+
+    public List<Map<String, Object>> summary(String filter, Page ownerPage) {
         String needle = filter == null ? "" : filter.trim().toLowerCase(Locale.ROOT);
         List<Map<String, Object>> rows = new ArrayList<>();
         for (NetworkEntry entry : entries) {
+            if (ownerPage != null && entry.ownerPage != ownerPage) continue;
             Map<String, Object> row = new LinkedHashMap<>();
             row.put("id", entry.id);
             row.put("at", entry.startedAt.toString());
@@ -197,10 +211,17 @@ public final class NetworkRecorder {
     }
 
     public Map<String, Object> detail(String id, boolean includeBody) {
+        return detail(id, includeBody, null);
+    }
+
+    public Map<String, Object> detail(String id, boolean includeBody, Page ownerPage) {
         NetworkEntry entry = byId.get(id);
         if (entry == null) {
             throw new IllegalArgumentException("Unknown network id: " + id
                     + " (ids come from browser_network; only the latest " + MAX_ENTRIES + " are kept)");
+        }
+        if (ownerPage != null && entry.ownerPage != ownerPage) {
+            throw new IllegalArgumentException("Network id " + id + " does not belong to the requested tab.");
         }
         boolean settled = entry.state == NetworkEntry.State.FINISHED || entry.state == NetworkEntry.State.FAILED;
         if (settled && !entry.fullHeadersLoaded) loadFullHeaders(entry);
@@ -234,7 +255,13 @@ public final class NetworkRecorder {
 
     /** HAR 1.2 export of the newest {@code limit} entries; contains only masked data. */
     public Map<String, Object> har(int limit, String creatorVersion) {
-        List<NetworkEntry> selected = new ArrayList<>(entries);
+        return har(limit, creatorVersion, null);
+    }
+
+    public Map<String, Object> har(int limit, String creatorVersion, Page ownerPage) {
+        List<NetworkEntry> selected = entries.stream()
+                .filter(entry -> ownerPage == null || entry.ownerPage == ownerPage)
+                .collect(java.util.stream.Collectors.toCollection(ArrayList::new));
         int count = Math.min(MAX_ENTRIES, Math.max(1, limit));
         if (selected.size() > count) selected = selected.subList(selected.size() - count, selected.size());
         List<Map<String, Object>> harEntries = new ArrayList<>();

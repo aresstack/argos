@@ -44,7 +44,8 @@ class PointerToolsBrowserTest {
               window.events = [];
               window.last = null;
               const pad = document.getElementById('pad');
-              pad.addEventListener('mousemove', e => window.last = [e.clientX, e.clientY, e.isTrusted]);
+              window.moves = 0;
+              pad.addEventListener('mousemove', e => { moves++; window.last = [e.clientX, e.clientY, e.isTrusted]; });
               for (const type of ['mousedown', 'mouseup', 'click', 'contextmenu'])
                 pad.addEventListener(type, e => {
                   events.push(type + ':' + e.button + ':' + e.clientX + ',' + e.clientY + ':' + e.isTrusted);
@@ -83,6 +84,11 @@ class PointerToolsBrowserTest {
             assertEquals("[123,77,true]", ok(tools, "browser_evaluate", Map.of("expression", "() => window.last")));
             assertEquals("[]", ok(tools, "browser_evaluate", Map.of("expression", "() => window.events")),
                     "moving presses nothing");
+            assertEquals("1", ok(tools, "browser_evaluate", Map.of("expression", "() => window.moves")),
+                    "one native move, no path of intermediate points");
+            ok(tools, "browser_mouse_move", Map.of("x", 399.9, "y", 299.9));
+            assertEquals("[399,299,true]", ok(tools, "browser_evaluate", Map.of("expression", "() => window.last")),
+                    "fractions are floored, so the last pixel stays inside");
 
             ok(tools, "browser_mouse_click", Map.of("x", 200, "y", 150));
             assertEquals("[\"mousedown:0:200,150:true\",\"mouseup:0:200,150:true\",\"click:0:200,150:true\"]",

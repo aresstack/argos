@@ -1616,11 +1616,12 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
 
     // ---- Pointer --------------------------------------------------------------------------------------------
     // Coordinates are CSS pixels in the tab's viewport: (0, 0) is its top left corner, scrolling does not shift it.
+    // These tools send plain native mouse commands, without the HumanMotion paths and pauses of clickTarget.
 
     public Map<String, Object> mouseMove(double x, double y, String tabId) {
         return onBrowser(() -> {
             Page p = pageFor(tabId);
-            return pointerResult(p, "moved", input.moveTo(p, x, y), null);
+            return pointerResult(p, "moved", input.pointerMove(p, x, y), null);
         });
     }
 
@@ -1629,7 +1630,7 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
         return onBrowser(() -> {
             Page p = pageFor(tabId);
             Set<String> before = tabs.all().keySet();
-            HumanMotion.Point point = input.clickAt(p, x, y, pressed);
+            HumanMotion.Point point = input.pointerClick(p, x, y, pressed);
             leaveSavedDocument(p);
             settle(p);
             boolean preserveCurrentTab = tabId != null && !tabId.isBlank();
@@ -1646,7 +1647,7 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
         return onBrowser(() -> {
             Page p = pageFor(tabId);
             Resolved resolved = resolve(p, target);
-            return pointerResult(p, "hovered", input.hover(p, resolved.locator()), resolved.description());
+            return pointerResult(p, "hovered", input.pointerHover(p, resolved.locator()), resolved.description());
         });
     }
 
@@ -1670,12 +1671,12 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
             String description = null;
             if (target != null && !target.isBlank()) {
                 Resolved resolved = resolve(p, target);
-                input.hover(p, resolved.locator());
+                input.pointerHover(p, resolved.locator());
                 description = resolved.description();
             } else if (x != null) {
-                input.moveTo(p, x, y);
+                input.pointerMove(p, x, y);
             }
-            input.wheel(p, deltaX, deltaY);
+            input.pointerWheel(p, deltaX, deltaY);
             p.waitForTimeout(150); // smooth scrolling and scroll events settle
             Map<String, Object> result = pointerResult(p, "scrolled", null, description);
             result.put("deltaX", deltaX);

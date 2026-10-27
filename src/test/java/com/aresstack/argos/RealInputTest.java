@@ -188,14 +188,18 @@ class RealInputTest {
         assertTrue(keys.indexOf("keyUp B") < keys.indexOf("keyUp Shift"));
     }
 
-    @Test void wheelTurnsExactlyTheRequestedDistanceInNotches() {
-        RecordingDevice device = new RecordingDevice(false);
-        input(HumanInputSettings.UnicodePolicy.STRICT).playWheel(device, 0, 250);
-        assertEquals(List.of("wheel 100.0", "wheel 100.0", "wheel 50.0"), device.calls);
-
-        RecordingDevice sideways = new RecordingDevice(false);
-        input(HumanInputSettings.UnicodePolicy.STRICT).playWheel(sideways, -150, 40);
-        assertEquals(List.of("wheel -100.0,40.0", "wheel -50.0,0.0"), sideways.calls);
+    @Test void viewportPointsStayInsideAfterConversionToWholePixels() {
+        HumanMotion.Box view = new HumanMotion.Box(0, 0, 1280, 720);
+        assertEquals(new HumanMotion.Point(1279, 719), RealInput.viewportPoint(1279.6, 719.999, view));
+        assertEquals(new HumanMotion.Point(0, 0), RealInput.viewportPoint(0, 0.4, view));
+        assertEquals(new HumanMotion.Point(640, 360), RealInput.viewportPoint(640, 360, view));
+        for (double[] outside : new double[][] {{1280, 10}, {10, 720}, {-0.1, 10}, {10, -1}, {Double.NaN, 1},
+                {1, Double.POSITIVE_INFINITY}}) {
+            assertThrows(IllegalArgumentException.class, () -> RealInput.viewportPoint(outside[0], outside[1], view),
+                    java.util.Arrays.toString(outside));
+        }
+        HumanMotion.Box fractional = new HumanMotion.Box(0, 0, 1279.5, 719.5);
+        assertEquals(new HumanMotion.Point(1279, 719), RealInput.viewportPoint(1279.4, 719.4, fractional));
     }
 
     /** The text a field would contain after these key downs. */

@@ -46,6 +46,42 @@ public final class ArgosApplication {
             return;
         }
         ArgosConfig config = ArgosConfig.fromEnvironment();
+        ArgosConfig.ProfileIsolation isolation = ArgosConfig.ProfileIsolation.fromEnvironment();
+        List<SyncToolSpecification> tools;
+        AutoCloseable browsers;
+        if (isolation.perChat()) {
+            // One isolated, persistent profile (and Camoufox process) per ChatGPT conversation context.
+            ChatRoutedTools routed = new ChatRoutedTools(new ChatProfiles(isolation.chatRoot()),
+                    profile -> workspace(config.withProfile(profile)), isolation.maxBrowsers());
+            // The template only supplies the tool definitions; its browser is never started.
+            ChatRoutedTools.Workspace template = workspace(config);
+            tools = routed.specifications(template.tools(), config.toolProfile() == ToolProfile.EXPERT);
+            template.resources().close();
+            browsers = routed;
+        } else {
+            ChatRoutedTools.Workspace single = workspace(config);
+            tools = single.tools();
+            browsers = single.resources();
+        }
+        RunningServer running = serve(config, tools);
+        Runtime.getRuntime().addShutdownHook(Thread.ofPlatform().name("argos-shutdown").unstarted(() -> {
+            running.close();
+            try {
+                browsers.close();
+            } catch (Exception error) {
+                System.err.println("Failed to stop Argos browsers: " + error.getMessage());
+            }
+        }));
+
+        System.out.println("Argos ready: http://" + config.host() + ":" + running.port()
+                + "/ (MCP root, health: /health, tool profile: "
+                + config.toolProfile().name().toLowerCase(java.util.Locale.ROOT)
+                + ", browser profiles: " + (isolation.perChat() ? "per ChatGPT conversation" : "single") + ")");
+        running.server().join();
+    }
+
+    /** The complete Argos tool stack on one browser profile: browser, web session, documents. */
+    static ChatRoutedTools.Workspace workspace(ArgosConfig config) {
         CamoufoxBrowser browser = new CamoufoxBrowser(config);
         // One security logic: every early URL check delegates to the proxy's NetworkPolicy.
         UrlPolicy urlPolicy = UrlPolicy.from(config.network());
@@ -54,17 +90,10 @@ public final class ArgosApplication {
                 new WebSession(browser, urlPolicy, new BrowserWebSearch(browser)),
                 ResearchSettings.fromEnvironment(), new DocumentAndBatchTools(documents))
                 .forProfile(config.toolProfile());
-        RunningServer running = serve(config, tools);
-        Runtime.getRuntime().addShutdownHook(Thread.ofPlatform().name("argos-shutdown").unstarted(() -> {
-            running.close();
+        return new ChatRoutedTools.Workspace(tools, () -> {
             browser.close();
             documents.close();
-        }));
-
-        System.out.println("Argos ready: http://" + config.host() + ":" + running.port()
-                + "/ (MCP root, health: /health, tool profile: "
-                + config.toolProfile().name().toLowerCase(java.util.Locale.ROOT) + ")");
-        running.server().join();
+        });
     }
 
     /** The started HTTP endpoint: Streamable HTTP MCP at the root, /health and protected-resource metadata. */

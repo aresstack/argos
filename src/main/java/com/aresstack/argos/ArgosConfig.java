@@ -55,6 +55,41 @@ public record ArgosConfig(
                 settings, networkBodies);
     }
 
+    /** The same configuration for another browser profile directory (one per conversation context). */
+    public ArgosConfig withProfile(Path directory) {
+        return new ArgosConfig(host, port, executable, launchOptions, directory, headless, publicOrigin,
+                securityMode, centralOauthIssuer, requiredScope, toolProfile, readiness, network, networkBodies);
+    }
+
+    /**
+     * How browser profiles are assigned: {@code chat} (default) gives each ChatGPT conversation its own
+     * profiles under {@code chatRoot}, keyed by {@code _meta["openai/session"]}; {@code single} keeps the one
+     * profile {@link #profile()} for clients that send no conversation id. {@code maxBrowsers} caps how many
+     * Camoufox processes run at once.
+     */
+    public record ProfileIsolation(boolean perChat, Path chatRoot, int maxBrowsers) {
+        public static ProfileIsolation fromEnvironment() throws IOException {
+            Properties application = readProperties(Path.of(System.getProperty("argos.config",
+                    Path.of(System.getProperty("user.home"), ".argos", "argos.properties").toString())));
+            String mode = setting("ARGOS_PROFILE_ISOLATION", application, "browser.profile-isolation", "chat")
+                    .toLowerCase(Locale.ROOT);
+            if (!mode.equals("chat") && !mode.equals("single")) {
+                throw new IllegalArgumentException("ARGOS_PROFILE_ISOLATION must be 'chat' or 'single': " + mode);
+            }
+            String root = setting("ARGOS_CHAT_PROFILES_DIR", application, "browser.chat-profiles",
+                    Path.of(System.getProperty("user.home"), ".argos", "profiles", "chats").toString());
+            String max = setting("ARGOS_MAX_BROWSERS", application, "browser.max-browsers", "4");
+            int maxBrowsers;
+            try {
+                maxBrowsers = Integer.parseInt(max);
+            } catch (NumberFormatException invalid) {
+                throw new IllegalArgumentException("ARGOS_MAX_BROWSERS must be an integer: " + max, invalid);
+            }
+            if (maxBrowsers < 1) throw new IllegalArgumentException("ARGOS_MAX_BROWSERS must be at least 1.");
+            return new ProfileIsolation(mode.equals("chat"), Path.of(root).toAbsolutePath(), maxBrowsers);
+        }
+    }
+
     public static ArgosConfig fromEnvironment() throws IOException {
         Properties application = readProperties(Path.of(System.getProperty("argos.config",
                 Path.of(System.getProperty("user.home"), ".argos", "argos.properties").toString())));

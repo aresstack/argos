@@ -54,7 +54,8 @@ interface InputDevice {
             }
 
             @Override public void wheel(double deltaX, double deltaY) {
-                page.mouse().wheel(deltaX, deltaY);
+                // BiDi wants whole pixels for wheel deltas; centring a box can yield fractions such as 412.5.
+                page.mouse().wheel(Math.round(deltaX), Math.round(deltaY));
             }
 
             @Override public void keyDown(String key) {

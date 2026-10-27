@@ -38,9 +38,12 @@ class DragDiagnosticsBrowserTest {
               body { margin: 0; }
               #card { position: absolute; left: 40px; top: 60px; width: 120px; height: 50px; background: #fc6; }
               #done { position: absolute; left: 420px; top: 260px; width: 220px; height: 160px; background: #9cf; }
+              #knob { position: absolute; left: 40px; top: 500px; width: 60px; height: 40px; background: #333;
+                      touch-action: none; }
             </style></head><body>
             <div id="card" draggable="true">Karte 1</div>
             <div id="done">Erledigt</div>
+            <div id="knob">Griff</div>
             <script>
               window.trace = [];
               const t0 = performance.now();
@@ -61,6 +64,13 @@ class DragDiagnosticsBrowserTest {
               done.addEventListener('dragleave', e => log(e, 'overs=' + overs));
               done.addEventListener('drop', e => { e.preventDefault();
                   log(e, 'data=' + e.dataTransfer.getData('text/plain') + ' overs=' + overs); });
+              // Pointer-Events case without HTML5 drag (as SortableJS with forceFallback, sliders, maps).
+              const knob = document.getElementById('knob');
+              let pointerMoves = 0;
+              knob.addEventListener('pointerdown', e => { log(e, 'button=' + e.button); knob.setPointerCapture(e.pointerId); });
+              knob.addEventListener('pointermove', e => { if (knob.hasPointerCapture(e.pointerId)) pointerMoves++; });
+              knob.addEventListener('pointerup', e => log(e, 'button=' + e.button + ' captured moves=' + pointerMoves));
+              knob.addEventListener('lostpointercapture', e => log(e));
               window.summary = () => 'dragover total=' + overs + ', mousemove total=' + moves;
             </script></body></html>""";
 
@@ -89,6 +99,9 @@ class DragDiagnosticsBrowserTest {
 
             run(report, browser, tools, url, "A browser_drag (RealDrag, human path)", () -> ok(tools, "browser_drag",
                     Map.of("source", "text=\"Karte 1\"", "target", "text=\"Erledigt\"")));
+
+            run(report, browser, tools, url, "E browser_drag on a pointer-events handle (no HTML5 drag)", () ->
+                    ok(tools, "browser_drag", Map.of("from_x", 70, "from_y", 520, "to_x", 300, "to_y", 525)));
 
             run(report, browser, tools, url, "B raw page.mouse: down, 20 straight steps, 5 moves on target, up", () ->
                     browser.onActivePage(page -> {
@@ -147,7 +160,8 @@ class DragDiagnosticsBrowserTest {
             long start = System.nanoTime();
             try {
                 drag.run();
-            } catch (RuntimeException failed) {
+                report.add("drag returned normally");
+            } catch (Throwable failed) {
                 report.add("drag threw: " + failed);
             }
             report.add("drag took " + (System.nanoTime() - start) / 1_000_000 + " ms");

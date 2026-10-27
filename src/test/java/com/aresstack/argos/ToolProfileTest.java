@@ -6,8 +6,8 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class ToolProfileTest {
     @Test void defaultsToLegacyForBackwardsCompatibility() {
-        assertEquals(ToolProfile.LEGACY, ToolProfile.parse(null));
-        assertEquals(ToolProfile.LEGACY, ToolProfile.parse(" "));
+        assertEquals(ToolProfile.EXPERT, ToolProfile.parse(null));
+        assertEquals(ToolProfile.EXPERT, ToolProfile.parse(" "));
     }
 
     @Test void parsesCaseInsensitively() {

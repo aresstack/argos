@@ -2,6 +2,8 @@ package com.aresstack.argos;
 
 import com.aresstack.argos.history.SearchHistory;
 import com.aresstack.argos.history.SearchHistoryCapture;
+import com.aresstack.argos.history.SearchHistoryDownloadServlet;
+import com.aresstack.argos.history.SearchHistoryDownloads;
 import com.aresstack.argos.history.SearchHistorySettings;
 import com.aresstack.argos.research.ResearchSettings;
 import com.aresstack.argos.search.BrowserWebSearch;
@@ -182,10 +184,18 @@ public final class ArgosApplication {
         authorization.setAsyncSupported(true);
         context.addFilter(authorization, "/", EnumSet.of(DispatcherType.REQUEST, DispatcherType.ASYNC));
         context.addServlet(new ServletHolder(new HealthServlet()), "/health");
+        // Search History exports: outside the bearer filter (a browser download carries no token); the random,
+        // expiring export id is the link's credential, see SearchHistoryDownloads.
+        SearchHistoryDownloads downloads = SearchHistoryDownloads.shared();
+        context.addServlet(new ServletHolder(new SearchHistoryDownloadServlet(downloads)),
+                SearchHistoryDownloads.PATH + "*");
         context.addServlet(new ServletHolder(new ProtectedResourceServlet(config)),
                 "/.well-known/oauth-protected-resource");
         server.setHandler(context);
         server.start();
+        int port = ((org.eclipse.jetty.server.ServerConnector) server.getConnectors()[0]).getLocalPort();
+        downloads.origin(config.publicOrigin() != null ? config.publicOrigin()
+                : "http://" + (config.host().contains(":") ? "[" + config.host() + "]" : config.host()) + ":" + port);
         return new RunningServer(server, mcp,
                 ((org.eclipse.jetty.server.ServerConnector) server.getConnectors()[0]).getLocalPort());
     }

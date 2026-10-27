@@ -39,6 +39,9 @@ dependencies {
     // Link extraction and search-page analysis from the serialized DOM on the Java side
     // (no page-visible scripts).
     implementation 'org.jsoup:jsoup:1.18.3'
+    // Search History: classic full-text search per chat (as AskAI research-knowledge-lucene); no vectors.
+    implementation 'org.apache.lucene:lucene-core:8.11.3'
+    implementation 'org.apache.lucene:lucene-analyzers-common:8.11.3'
     testImplementation 'org.junit.jupiter:junit-jupiter:5.13.1'
     testImplementation 'org.mockito:mockito-core:5.15.2'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher:1.13.1'

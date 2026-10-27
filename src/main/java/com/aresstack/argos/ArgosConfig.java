@@ -67,7 +67,7 @@ public record ArgosConfig(
      * profile {@link #profile()} for clients that send no conversation id. {@code maxBrowsers} caps how many
      * Camoufox processes run at once.
      */
-    public record ProfileIsolation(boolean perChat, Path chatRoot, int maxBrowsers) {
+    public record ProfileIsolation(boolean perChat, Path chatRoot, int maxBrowsers, int idleMinutes) {
         public static ProfileIsolation fromEnvironment() throws IOException {
             Properties application = readProperties(Path.of(System.getProperty("argos.config",
                     Path.of(System.getProperty("user.home"), ".argos", "argos.properties").toString())));
@@ -78,7 +78,7 @@ public record ArgosConfig(
             }
             String root = setting("ARGOS_CHAT_PROFILES_DIR", application, "browser.chat-profiles",
                     Path.of(System.getProperty("user.home"), ".argos", "profiles", "chats").toString());
-            String max = setting("ARGOS_MAX_BROWSERS", application, "browser.max-browsers", "4");
+            String max = setting("ARGOS_MAX_BROWSERS", application, "browser.max-browsers", "2");
             int maxBrowsers;
             try {
                 maxBrowsers = Integer.parseInt(max);
@@ -86,7 +86,16 @@ public record ArgosConfig(
                 throw new IllegalArgumentException("ARGOS_MAX_BROWSERS must be an integer: " + max, invalid);
             }
             if (maxBrowsers < 1) throw new IllegalArgumentException("ARGOS_MAX_BROWSERS must be at least 1.");
-            return new ProfileIsolation(mode.equals("chat"), Path.of(root).toAbsolutePath(), maxBrowsers);
+            String idle = setting("ARGOS_BROWSER_IDLE_MINUTES", application, "browser.idle-minutes", "10");
+            int idleMinutes;
+            try {
+                idleMinutes = Integer.parseInt(idle);
+            } catch (NumberFormatException invalid) {
+                throw new IllegalArgumentException("ARGOS_BROWSER_IDLE_MINUTES must be an integer: " + idle, invalid);
+            }
+            if (idleMinutes < 0) throw new IllegalArgumentException("ARGOS_BROWSER_IDLE_MINUTES must not be negative.");
+            return new ProfileIsolation(mode.equals("chat"), Path.of(root).toAbsolutePath(), maxBrowsers,
+                    idleMinutes);
         }
     }
 

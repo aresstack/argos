@@ -75,6 +75,12 @@ class ConvenienceBrowserTest {
             String b = "http://127.0.0.1:" + port + "/slow-b";
             String c = "http://localhost:" + port + "/slow-c";
             DomainCoordinator coordinator = new DomainCoordinator(4, System::currentTimeMillis);
+            // The browser starts lazily with its first call; Camoufox's launch must not count as load time.
+            String warm = "http://localhost:" + port + "/warm";
+            TabLoad warmUp = browser.loadTabs(List.of(new TabLoadRequest(null, warm, RegistrableDomain.of(warm))),
+                    coordinator, 1, 60_000).get(0);
+            assertEquals(TabLoadOutcome.OK, warmUp.outcome(), warmUp.toString());
+            browser.closeTabQuietly(warmUp.tab());
 
             long started = System.nanoTime();
             List<TabLoad> loads = browser.loadTabs(List.of(
@@ -93,7 +99,7 @@ class ConvenienceBrowserTest {
             assertTrue(hitA.overlaps(hitB), delay + ": different domains load at the same time: " + hits);
             assertFalse(hitA.overlaps(hitC), delay + ": the same domain waits: " + hits);
             // Sequential would be 3 x 2.5 s; parallel a and b, then c.
-            assertTrue(millis < 6_500, delay + ": took " + millis + " ms");
+            assertTrue(millis < 6_500, delay + ": took " + millis + " ms, server intervals " + intervals(hits, started));
             assertTrue(coordinator.activeDomains().isEmpty(), "every slot is released");
         } finally {
             site.stop(0);
@@ -175,6 +181,14 @@ class ConvenienceBrowserTest {
         site.setExecutor(java.util.concurrent.Executors.newCachedThreadPool());
         site.start();
         return site;
+    }
+
+    /** Each request as host+path start..end in ms relative to {@code origin}, for the failure message. */
+    private static String intervals(List<Hit> hits, long origin) {
+        synchronized (hits) {
+            return hits.stream().map(hit -> hit.host() + hit.path() + " " + (hit.start() - origin) / 1_000_000 + ".."
+                    + (hit.end() - origin) / 1_000_000).toList().toString();
+        }
     }
 
     private static Hit find(List<Hit> hits, String host, String path) {

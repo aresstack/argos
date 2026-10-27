@@ -105,7 +105,7 @@ public final class ArgosBrowsingTools {
                 List.of("target"), args -> browser.hover(string(args, "target"), optionalString(args, "tab"))));
         tools.add(tool("browser_scroll",
                 "Turn the mouse wheel in the current or specified tab. Positive delta_y scrolls down, negative up; "
-                        + "positive delta_x scrolls right, negative left (CSS pixels, about 100 per notch). The element "
+                        + "positive delta_x scrolls right, negative left (CSS pixels). The element "
                         + "under the pointer scrolls: give a target or x/y to scroll a list or panel instead of the page. "
                         + POINT_HELP,
                 Map.of("delta_x", field("number", "Horizontal wheel distance in CSS pixels (default 0)"),

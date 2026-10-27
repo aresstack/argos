@@ -118,6 +118,25 @@ public final class ArgosBrowsingTools {
                         args.get("x") == null ? null : decimal(args, "x"),
                         args.get("y") == null ? null : decimal(args, "y"),
                         optionalString(args, "target"), optionalString(args, "tab"))));
+        tools.add(tool("browser_drag",
+                "Drag and drop with real mouse input in the current or specified tab: press on the source, move, "
+                        + "release on the target, e.g. to sort a list, move a card or drop a file entry onto a folder. "
+                        + "Give the source as source or from_x/from_y and the target as target or to_x/to_y. "
+                        + TARGET_HELP + " " + POINT_HELP,
+                Map.of("source", field("string", "Element to pick up, e.g. text=\"Karte 1\""),
+                        "target", field("string", "Element to drop on, e.g. role=region name=\"Erledigt\""),
+                        "from_x", field("number", "Start x in CSS pixels instead of source; requires from_y"),
+                        "from_y", field("number", "Start y in CSS pixels instead of source; requires from_x"),
+                        "to_x", field("number", "End x in CSS pixels instead of target; requires to_y"),
+                        "to_y", field("number", "End y in CSS pixels instead of target; requires to_x"),
+                        "tab", field("string", "Optional tab id from browser_tabs, e.g. t2")),
+                List.of(), args -> browser.drag(optionalString(args, "source"),
+                        args.get("from_x") == null ? null : decimal(args, "from_x"),
+                        args.get("from_y") == null ? null : decimal(args, "from_y"),
+                        optionalString(args, "target"),
+                        args.get("to_x") == null ? null : decimal(args, "to_x"),
+                        args.get("to_y") == null ? null : decimal(args, "to_y"),
+                        optionalString(args, "tab"))));
         tools.add(tool("browser_extract",
                 "Extract structure from the current or specified tab's HTML page. kind: overview (default), headings, links, tables, "
                         + "lists, metadata (description, Open Graph, citation_* tags), jsonld.",

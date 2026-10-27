@@ -94,6 +94,7 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
     private final BrowserTabs tabs = new BrowserTabs();
     private final Map<Page, PageControls> controlSnapshots = new IdentityHashMap<>();
     private final RealInput input;
+    private final RealDrag drag;
     private final UrlPolicy urlPolicy;
     private final SnapshotReader snapshots = new SnapshotReader();
     /** Per-tab protocol observations: in-flight requests and the top-level document of each tab. */
@@ -131,6 +132,7 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
     private CamoufoxBrowser(ArgosConfig config, HumanInputSettings humanInput, HostResolver resolver) {
         this.config = config;
         this.input = new RealInput(humanInput);
+        this.drag = new RealDrag(input, humanInput.random());
         this.resolver = resolver;
         this.urlPolicy = UrlPolicy.from(config.network(), resolver);
         this.network = new NetworkRecorder(masker, config.networkBodies());
@@ -1685,6 +1687,39 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
                 result.put("pageScrollX", values.get(0));
                 result.put("pageScrollY", values.get(1));
             }
+            return result;
+        });
+    }
+
+    /**
+     * Drags with the real mouse from {@code source} (element or x/y) to {@code target} (element or x/y): press, move,
+     * release, all as trusted input, so the page sees the browser's own drag and drop events.
+     */
+    public Map<String, Object> drag(String source, Double fromX, Double fromY, String target, Double toX, Double toY,
+                                    String tabId) {
+        boolean fromElement = source != null && !source.isBlank();
+        boolean toElement = target != null && !target.isBlank();
+        if (fromElement == (fromX != null || fromY != null) || (!fromElement && (fromX == null || fromY == null))) {
+            throw new IllegalArgumentException("Give either source or both from_x and from_y");
+        }
+        if (toElement == (toX != null || toY != null) || (!toElement && (toX == null || toY == null))) {
+            throw new IllegalArgumentException("Give either target or both to_x and to_y");
+        }
+        return onBrowser(() -> {
+            Page p = pageFor(tabId);
+            Resolved from = fromElement ? resolve(p, source) : null;
+            Resolved to = toElement ? resolve(p, target) : null;
+            HumanMotion.Point[] points = drag.drag(p,
+                    from != null ? RealDrag.End.of(from.locator()) : RealDrag.End.at(fromX, fromY),
+                    to != null ? RealDrag.End.of(to.locator()) : RealDrag.End.at(toX, toY));
+            settle(p);
+            Map<String, Object> result = pointerResult(p, "dragged", null, null);
+            if (from != null) result.put("source", from.description());
+            if (to != null) result.put("target", to.description());
+            result.put("fromX", (long) points[0].x());
+            result.put("fromY", (long) points[0].y());
+            result.put("toX", (long) points[1].x());
+            result.put("toY", (long) points[1].y());
             return result;
         });
     }

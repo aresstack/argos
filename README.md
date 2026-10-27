@@ -161,6 +161,7 @@ Diese Werkzeuge stehen in `ArgosBrowsingTools` als getrennte Listen `expert()` u
 | `browser_mouse_move`, `browser_mouse_click` | expert | Zeiger bewegen bzw. klicken (`button`: `left`, `middle`, `right`) an `x`/`y` in CSS-Pixeln des Viewports: (0, 0) ist dessen linke obere Ecke, wie im Screenshot, unabhängig vom Scrollstand; Punkte außerhalb werden abgelehnt |
 | `browser_hover` | expert | Zeiger auf ein Element (gleiche Ziele wie `browser_click_target`) legen, ohne zu klicken, z. B. für Hover-Menüs |
 | `browser_scroll` | expert | Mausrad um `delta_x`/`delta_y` CSS-Pixel (positiv: rechts/unten) drehen; optional erst über `target` oder `x`/`y`, damit der Scrollbereich darunter scrollt |
+| `browser_drag` | expert | Ziehen und Ablegen mit echter Maus (drücken, bewegen, loslassen über WebDriver BiDi): Quelle `source` oder `from_x`/`from_y`, Ziel `target` oder `to_x`/`to_y`; der Browser erzeugt selbst `dragstart`/`dragover`/`drop`, kein `locator.dragTo`, keine Skript-Events |
 | `browser_extract` | expert | `overview`, `headings`, `links`, `tables`, `lists`, `metadata` (inkl. `citation_*`, Open Graph), `jsonld` |
 | `web_controls`, `web_click`, `web_fill` | compact | Dieselbe Bedienung für kleine Modelle: nummerierte Textliste, ein bis zwei Parameter |
 

@@ -525,6 +525,14 @@ public final class ConvenienceSession {
         return answer;
     }
 
+    /**
+     * The browser tab id behind a tab of these tools (open, in the current context), for the screenshot and
+     * developer tools; unknown, closed or foreign tabs are rejected like in every other tab tool.
+     */
+    public synchronized String requireTab(String tabId) {
+        return tab(tabId).id;
+    }
+
     // ---- helpers -------------------------------------------------------------------------------------------------
 
     private TabState tab(String tabId) {

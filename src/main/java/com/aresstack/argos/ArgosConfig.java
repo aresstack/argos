@@ -20,7 +20,7 @@ public record ArgosConfig(
         boolean networkBodies) {
 
     public ArgosConfig {
-        toolProfile = toolProfile == null ? ToolProfile.CONVENIENCE : toolProfile;
+        toolProfile = toolProfile == null ? ToolProfile.DEVELOPER : toolProfile;
         if (readiness == null) readiness = ReadinessPolicy.balanced();
         network = network == null ? NetworkSettings.strict() : network;
     }

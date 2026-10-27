@@ -49,7 +49,7 @@ final class RealDrag {
         try {
             device.sleep(between(90, 180));
             // Leave the press point a little first: the drag session starts here, still above the source.
-            input.pointerMove(page, from.x() + (random.nextBoolean() ? DRAG_THRESHOLD : -DRAG_THRESHOLD),
+            input.humanMove(page, from.x() + (random.nextBoolean() ? DRAG_THRESHOLD : -DRAG_THRESHOLD),
                     from.y() + DRAG_THRESHOLD / 2);
             device.sleep(between(40, 90));
             HumanMotion.Point to = reach(page, target);
@@ -69,7 +69,7 @@ final class RealDrag {
     }
 
     private HumanMotion.Point reach(Page page, End end) {
-        return end.element() != null ? input.pointerHover(page, end.element()) : input.pointerMove(page, end.x(), end.y());
+        return end.element() != null ? input.humanHover(page, end.element()) : input.humanMove(page, end.x(), end.y());
     }
 
     private long between(int min, int max) {

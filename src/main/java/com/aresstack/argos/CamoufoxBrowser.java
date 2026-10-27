@@ -1952,6 +1952,107 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
                 .setFullPage(false).setTimeout(15_000)));
     }
 
+    /** Full-page and element images stop after this many CSS pixels; longer pages are cut off and say so. */
+    static final int MAX_CAPTURE_HEIGHT = 8_000;
+    /** At most this many controls are measured and marked. */
+    static final int MAX_MARKS = 60;
+    /** Read-only, transient: viewport size, device pixel ratio, scroll offset and document size. */
+    private static final String GEOMETRY = "() => [innerWidth, innerHeight, devicePixelRatio, scrollX, scrollY, "
+            + "Math.max(document.documentElement.scrollWidth, document.body ? document.body.scrollWidth : 0), "
+            + "Math.max(document.documentElement.scrollHeight, document.body ? document.body.scrollHeight : 0)]";
+
+    /**
+     * A screenshot the model can steer by. The page is neither scrolled nor changed: element and full-page
+     * images are cut from a document capture, and marks are drawn into the image only. With {@code mark} the
+     * controls are numbered as in the control list, so the numbers work with the click and fill tools.
+     *
+     * @param target the element for {@link PageScreenshot.Mode#ELEMENT}: a number, aria ref or locator
+     */
+    public PageScreenshot capture(PageScreenshot.Mode mode, String target, boolean mark) {
+        return capture(mode, target, mark, null);
+    }
+
+    public PageScreenshot capture(PageScreenshot.Mode mode, String target, boolean mark, String tabId) {
+        return onBrowser(() -> {
+            Page p = pageFor(tabId);
+            double[] g = geometry(p);
+            double viewportWidth = g[0], viewportHeight = g[1], ratio = g[2] > 0 ? g[2] : 1, scrollX = g[3], scrollY = g[4];
+            Page.ScreenshotOptions options = new Page.ScreenshotOptions().setTimeout(15_000);
+            PageScreenshot.Box origin;
+            String note = null;
+            switch (mode) {
+                case VIEWPORT -> origin = new PageScreenshot.Box(0, 0, viewportWidth, viewportHeight);
+                case FULL -> {
+                    double pageWidth = Math.max(g[5], viewportWidth), pageHeight = Math.max(g[6], viewportHeight);
+                    options.setFullPage(true);
+                    if (pageHeight > MAX_CAPTURE_HEIGHT) {
+                        options.setClip(0, 0, pageWidth, MAX_CAPTURE_HEIGHT);
+                        note = "page cut off after " + MAX_CAPTURE_HEIGHT + " of " + Math.round(pageHeight) + " CSS pixels";
+                    }
+                    origin = new PageScreenshot.Box(-scrollX, -scrollY, pageWidth, pageHeight);
+                }
+                case ELEMENT -> {
+                    if (target == null || target.isBlank()) {
+                        throw new IllegalArgumentException("An element screenshot needs a target, e.g. 3 or role=button name=\"Suchen\".");
+                    }
+                    Resolved resolved = resolve(p, target);
+                    PageScreenshot.Box box = box(resolved.locator());
+                    if (box == null) throw new IllegalArgumentException(resolved.description() + " is not visible on the page.");
+                    double height = Math.min(box.height(), MAX_CAPTURE_HEIGHT);
+                    // Document coordinates, so an element below the fold is captured without scrolling.
+                    options.setFullPage(true).setClip(box.x() + scrollX, box.y() + scrollY, box.width(), height);
+                    origin = box;
+                    note = resolved.description();
+                }
+                default -> throw new IllegalArgumentException("Unknown screenshot mode " + mode);
+            }
+            List<PageScreenshot.Mark> marks = mark ? marks(p) : List.of();
+            byte[] raw = p.screenshot(options);
+            leaveSavedDocument(p);
+            return PageScreenshot.of(raw, new PageScreenshot.Geometry(mode, viewportWidth, viewportHeight, ratio,
+                    scrollX, scrollY, origin, note), marks);
+        });
+    }
+
+    private static double[] geometry(Page p) {
+        Object values = p.evaluate(GEOMETRY);
+        double[] numbers = new double[7];
+        if (values instanceof List<?> list && list.size() == numbers.length) {
+            for (int i = 0; i < numbers.length; i++) {
+                if (list.get(i) instanceof Number number) numbers[i] = number.doubleValue();
+            }
+        }
+        if (numbers[0] <= 0 || numbers[1] <= 0) throw new IllegalStateException("Viewport size is unknown");
+        return numbers;
+    }
+
+    /** Numbered controls of a fresh snapshot (the one the click tools then use) with their viewport boxes. */
+    private List<PageScreenshot.Mark> marks(Page p) {
+        List<PageScreenshot.Mark> marks = new ArrayList<>();
+        for (PageControls.Control control : takeControlSnapshot(p).all()) {
+            if (marks.size() >= MAX_MARKS) break;
+            PageScreenshot.Box box = box(refLocator(p, control.ref()));
+            if (box == null) continue;
+            String name = control.name().isBlank() ? "" : " \"" + control.name() + "\"";
+            marks.add(new PageScreenshot.Mark(control.number(), control.role() + name, box));
+        }
+        return marks;
+    }
+
+    /** Viewport box of a single element via an element handle; unlike locator actions it marks nothing. */
+    private static PageScreenshot.Box box(Locator locator) {
+        if (locator.count() != 1) return null;
+        com.microsoft.playwright.ElementHandle handle = locator.elementHandle(
+                new Locator.ElementHandleOptions().setTimeout(5_000));
+        try {
+            com.microsoft.playwright.options.BoundingBox box = handle.boundingBox();
+            return box == null || box.width <= 0 || box.height <= 0 ? null
+                    : new PageScreenshot.Box(box.x, box.y, box.width, box.height);
+        } finally {
+            handle.dispose();
+        }
+    }
+
     public List<Map<String, Object>> networkEvents() {
         return networkEvents(null, null);
     }

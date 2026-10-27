@@ -143,7 +143,7 @@ Der Login allein ist **keine** Discovery-Abnahme. Nach erfolgreicher OAuth-Verbi
 | `browser_click` | Elemente anklicken |
 | `browser_fill` | Eingabefelder ausfüllen |
 | `browser_evaluate` | JavaScript in der Webseite ausführen |
-| `browser_screenshot` | Screenshot als MCP-Image zurückgeben |
+| `browser_screenshot` | Screenshot als MCP-Image plus Textlegende: `mode` = `viewport` (Standard), `full` oder `element` (mit `target`), `mark=true` zeichnet die nummerierten Bedienelemente nur ins Bild (nicht ins DOM). Ein Bildpixel entspricht einem CSS-Pixel des Viewports (Device-Pixel-Ratio herausgerechnet, große Bilder auf max. 2000 px skaliert); die Legende nennt Umrechnung und Mittelpunkte in Viewport-Koordinaten für die Maus-Werkzeuge |
 | `browser_network` | Letzte HTTP-Requests, Responses und Fehler untersuchen (eine Zeile je Request mit ID, optional `filter`) |
 
 ### Tabs, Historie, Bedienelemente und Extraktion

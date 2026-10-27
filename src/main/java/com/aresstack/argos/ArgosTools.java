@@ -9,6 +9,7 @@ import io.modelcontextprotocol.server.McpServerFeatures.SyncToolSpecification;
 import io.modelcontextprotocol.spec.McpSchema.CallToolResult;
 import io.modelcontextprotocol.spec.McpSchema.ImageContent;
 import io.modelcontextprotocol.spec.McpSchema.JsonSchema;
+import io.modelcontextprotocol.spec.McpSchema.TextContent;
 import io.modelcontextprotocol.spec.McpSchema.Tool;
 
 import com.aresstack.argos.web.UrlPolicy;
@@ -187,14 +188,27 @@ public final class ArgosTools {
                 List.of(), args -> browser.networkEvents(optionalString(args, "filter"), optionalString(args, "tab"))));
         tools.add(SyncToolSpecification.builder()
                 .tool(Tool.builder().name("browser_screenshot")
-                        .description("Take a PNG screenshot of the current Camoufox page or a specified tab.")
-                        .inputSchema(schema(Map.of("tab", field("string", "Optional tab id from browser_tabs, e.g. t2")), List.of())).build())
+                        .description("Take a PNG screenshot of the current Camoufox page or a specified tab. mode: viewport (default, "
+                                + "what is on screen), full (whole page) or element (one control, needs target). "
+                                + "mark=true draws the numbered controls into the image. A text part explains how "
+                                + "image pixels map to viewport CSS pixels for mouse input. "
+                                + "Example: {\"mode\": \"viewport\", \"mark\": true}")
+                        .inputSchema(schema(Map.of(
+                                "mode", field("string", "viewport | full | element"),
+                                "target", field("string", "For mode element: control number, aria ref or locator, "
+                                        + "e.g. 3 or role=button name=\"Suchen\""),
+                                "mark", field("boolean", "Draw numbered boxes around the page's controls"),
+                                "tab", field("string", "Optional tab id from browser_tabs, e.g. t2")),
+                                List.of())).build())
                 .callHandler((exchange, request) -> {
                     try {
-                        String encoded = Base64.getEncoder().encodeToString(browser.screenshot(
-                                optionalString(request.arguments() == null ? Map.of() : request.arguments(), "tab")));
+                        Map<String, Object> args = request.arguments() == null ? Map.of() : request.arguments();
+                        PageScreenshot shot = browser.capture(screenshotMode(optionalString(args, "mode")),
+                                optionalString(args, "target"), flag(args, "mark"), optionalString(args, "tab"));
+                        String encoded = Base64.getEncoder().encodeToString(shot.png());
                         return CallToolResult.builder()
-                                .content(List.of(new ImageContent(null, encoded, "image/png")))
+                                .content(List.of(new ImageContent(null, encoded, "image/png"),
+                                        new TextContent(shot.legend())))
                                 .build();
                     } catch (Exception error) {
                         return failure(error);
@@ -257,6 +271,16 @@ public final class ArgosTools {
                         return failure(error);
                     }
                 }).build();
+    }
+
+    static PageScreenshot.Mode screenshotMode(String mode) {
+        if (mode == null) return PageScreenshot.Mode.VIEWPORT;
+        return switch (mode.strip().toLowerCase(java.util.Locale.ROOT)) {
+            case "viewport", "screen", "visible" -> PageScreenshot.Mode.VIEWPORT;
+            case "full", "fullpage", "full_page", "page" -> PageScreenshot.Mode.FULL;
+            case "element", "control" -> PageScreenshot.Mode.ELEMENT;
+            default -> throw new IllegalArgumentException("Unknown mode \"" + mode + "\"; use viewport, full or element.");
+        };
     }
 
     static JsonSchema schema(Map<String, Object> properties, List<String> required) {

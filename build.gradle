@@ -12,9 +12,6 @@ java {
 }
 
 repositories {
-    // A project-local build of the pinned Playwright4J commit takes precedence over
-    // unrelated (possibly stale) snapshots published by other IntelliJ projects.
-    maven { url = uri('.argos-build/maven') }
     mavenLocal()
     mavenCentral()
 }
@@ -26,7 +23,7 @@ configurations.configureEach {
 }
 
 dependencies {
-    implementation 'com.aresstack:playwright4j:0.2.2-SNAPSHOT'
+    implementation 'com.aresstack:playwright4j:0.3.0'
     implementation('com.microsoft.playwright:playwright:1.62.0') {
         exclude group: 'com.microsoft.playwright', module: 'driver'
         exclude group: 'com.microsoft.playwright', module: 'driver-bundle'

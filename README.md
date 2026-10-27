@@ -46,7 +46,7 @@ build/distributions/argos-package.zip  ← enthält nur argos.jar
 
 ## Lokaler Start
 
-In der vorhandenen Windows-Entwicklungsumgebung erkennt Argos standardmäßig die **Camoufox-Binärdatei und die offizielle Fingerprint-JSON** aus `~/.browser-event-hub/desktop/camoufox.properties`, falls keine Argos-Konfiguration vorliegt. **Browserprofile werden ausdrücklich nicht übernommen.** Argos verwendet ausschließlich `~/.argos/profiles/default`.
+Argos liest Browserpfade ausschließlich aus Umgebungsvariablen oder seiner eigenen Konfiguration `~/.argos/argos.properties` (alternativ über `-Dargos.config`). **Konfigurationsdateien anderer Anwendungen werden nicht gelesen.** Fehlen beide Browserpfade, meldet Argos beim ersten Browseraufruf eine verständliche Konfigurationsfehlermeldung. Argos verwendet ausschließlich eigene Browserprofile unter `~/.argos/profiles/default`.
 
 Eigenständige Konfiguration über `~/.argos/argos.properties`:
 
@@ -57,13 +57,13 @@ security.mode=central-oauth
 public.origin=https://argos.aresstack.de
 oauth.central-issuer=https://argos.aresstack.de
 security.required-scope=argos
-camoufox.executable=G:/camoufox-bidi-smoke-20261025/browser/camoufox.exe
-camoufox.launchOptions=G:/camoufox-bidi-smoke-20261025/cmp/launch.json
+camoufox.executable=C:/Tools/camoufox/browser/camoufox.exe
+camoufox.launchOptions=C:/Tools/camoufox/cmp/launch.json
 browser.profile=C:/Users/USERNAME/.argos/profiles/default
 browser.headless=false
 ```
 
-Die angegebenen Dateipfade sind Beispiele aus der isolierten Testinstallation und sind nicht Teil des Git-Repositories.
+Die Dateipfade sind Beispiele und müssen auf die eigenständige Camoufox-Installation zeigen. Argos übernimmt diese Einstellungen nicht aus Konfigurationsdateien anderer Anwendungen.
 
 **Im AresStack Webserver haben die Umgebungsvariablen Vorrang vor den Properties.** Pflichtfeld ist `SERVER_PORT`; Argos besitzt **keinen fest einprogrammierten Standardport**. Wie bei Pyloros werden `SERVER_PORT`, `SERVER_HOST` (optional, nur Loopback), `SECURITY_MODE`, `REQUIRED_SCOPE`, `PUBLIC_ORIGIN` und `CENTRAL_OAUTH_ISSUER` ausgewertet. Für den Camoufox-Browser bleiben zusätzlich `ARGOS_CAMOUFOX_EXECUTABLE`, `ARGOS_CAMOUFOX_LAUNCH_OPTIONS`, `ARGOS_PROFILE_DIR` und `ARGOS_HEADLESS` verfügbar.
 

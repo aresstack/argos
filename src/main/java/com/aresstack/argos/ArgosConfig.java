@@ -10,6 +10,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Properties;
 
 /** Environment-first configuration compatible with AresStack / Pyloros. */
@@ -100,18 +101,24 @@ public record ArgosConfig(
     }
 
     public static ArgosConfig fromEnvironment() throws IOException {
-        Properties application = readProperties(Path.of(System.getProperty("argos.config",
-                Path.of(System.getProperty("user.home"), ".argos", "argos.properties").toString())));
-        // Reuse binary/fingerprint paths only. Never borrow GPT Desktop's browser profile.
-        Properties desktop = readProperties(Path.of(System.getProperty("user.home"),
-                ".browser-event-hub", "desktop", "camoufox.properties"));
+        Path userHome = Path.of(System.getProperty("user.home"));
+        String configuredPath = System.getProperty("argos.config");
+        Path configPath = configuredPath == null
+                ? userHome.resolve(".argos").resolve("argos.properties")
+                : Path.of(configuredPath);
+        return fromEnvironment(System.getenv(), userHome, configPath);
+    }
 
-        if (setting("ARGOS_ALLOW_PRIVATE_NETWORKS", application, "browser.allow-private-networks", null) != null) {
+    static ArgosConfig fromEnvironment(Map<String, String> environment, Path userHome, Path configPath)
+            throws IOException {
+        Properties application = readProperties(configPath);
+
+        if (setting(environment, "ARGOS_ALLOW_PRIVATE_NETWORKS", application, "browser.allow-private-networks", null) != null) {
             // One security logic for all tools: the proxy's NetworkPolicy. No second, looser switch.
             throw new IllegalArgumentException("ARGOS_ALLOW_PRIVATE_NETWORKS was replaced by the network boundary: "
                     + "admit intranet targets with ARGOS_INTRANET_ALLOW, or debug with ARGOS_NETWORK_POLICY=off.");
         }
-        String portText = setting("SERVER_PORT", application, "server.port", null);
+        String portText = setting(environment, "SERVER_PORT", application, "server.port", null);
         if (portText == null) {
             throw new IllegalArgumentException(
                     "SERVER_PORT is required (set it in the AresStack service Environment tab).");
@@ -126,16 +133,16 @@ public record ArgosConfig(
             throw new IllegalArgumentException("SERVER_PORT must be between 1 and 65535: " + port);
         }
 
-        String host = setting("SERVER_HOST", application, "server.host", "127.0.0.1");
+        String host = setting(environment, "SERVER_HOST", application, "server.host", "127.0.0.1");
         if (!"127.0.0.1".equals(host) && !"::1".equals(host)) {
             throw new IllegalArgumentException(
                     "SERVER_HOST must be a loopback address (127.0.0.1 or ::1).");
         }
-        String publicOrigin = normalizeOrigin(setting("PUBLIC_ORIGIN", application, "public.origin", null));
-        String issuer = normalizeOrigin(setting("CENTRAL_OAUTH_ISSUER", application, "oauth.central-issuer", null));
-        String securityMode = setting("SECURITY_MODE", application, "security.mode", "central-oauth")
+        String publicOrigin = normalizeOrigin(setting(environment, "PUBLIC_ORIGIN", application, "public.origin", null));
+        String issuer = normalizeOrigin(setting(environment, "CENTRAL_OAUTH_ISSUER", application, "oauth.central-issuer", null));
+        String securityMode = setting(environment, "SECURITY_MODE", application, "security.mode", "central-oauth")
                 .toLowerCase(Locale.ROOT);
-        String requiredScope = setting("REQUIRED_SCOPE", application, "security.required-scope", "argos");
+        String requiredScope = setting(environment, "REQUIRED_SCOPE", application, "security.required-scope", "argos");
         if (requiredScope == null || requiredScope.isBlank() || requiredScope.matches(".*\\s+.*")) {
             throw new IllegalArgumentException("REQUIRED_SCOPE must be a single nonblank OAuth scope.");
         }
@@ -147,28 +154,28 @@ public record ArgosConfig(
             requireHttpsOrigin("CENTRAL_OAUTH_ISSUER", issuer);
         }
 
-        String executable = setting("ARGOS_CAMOUFOX_EXECUTABLE", application, "camoufox.executable",
+        String executable = setting(environment, "ARGOS_CAMOUFOX_EXECUTABLE", application, "camoufox.executable",
                 desktop.getProperty("executable"));
-        String options = setting("ARGOS_CAMOUFOX_LAUNCH_OPTIONS", application, "camoufox.launchOptions",
+        String options = setting(environment, "ARGOS_CAMOUFOX_LAUNCH_OPTIONS", application, "camoufox.launchOptions",
                 desktop.getProperty("launchOptions"));
-        String profile = setting("ARGOS_PROFILE_DIR", application, "browser.profile",
-                Path.of(System.getProperty("user.home"), ".argos", "profiles", "default").toString());
+        String profile = setting(environment, "ARGOS_PROFILE_DIR", application, "browser.profile",
+                userHome.resolve(".argos").resolve("profiles").resolve("default").toString());
         return new ArgosConfig(host, port,
                 executable == null ? null : Path.of(executable).toAbsolutePath(),
                 options == null ? null : Path.of(options).toAbsolutePath(),
                 Path.of(profile).toAbsolutePath(),
-                Boolean.parseBoolean(setting("ARGOS_HEADLESS", application, "browser.headless", "false")),
+                Boolean.parseBoolean(setting(environment, "ARGOS_HEADLESS", application, "browser.headless", "false")),
                 publicOrigin, securityMode, issuer, requiredScope,
-                ToolProfile.parse(setting("ARGOS_TOOL_PROFILE", application, "tools.profile", null)),
-                ReadinessPolicy.from(name -> setting(name, application, propertyKey(name), null)),
+                ToolProfile.parse(setting(environment, "ARGOS_TOOL_PROFILE", application, "tools.profile", null)),
+                ReadinessPolicy.from(name -> setting(environment, name, application, propertyKey(name), null)),
                 // Every browser connection passes Argos' local proxy and its policy (analysis 5.4).
                 NetworkSettings.parse(
-                        setting("ARGOS_NETWORK_POLICY", application, "network.policy", null),
-                        setting("ARGOS_INTRANET_ALLOW", application, "network.intranet-allow", null),
-                        setting("ARGOS_UPSTREAM_PROXY", application, "network.upstream-proxy", null),
-                        setting("ARGOS_UPSTREAM_DNS", application, "network.upstream-dns", null)),
+                        setting(environment, "ARGOS_NETWORK_POLICY", application, "network.policy", null),
+                        setting(environment, "ARGOS_INTRANET_ALLOW", application, "network.intranet-allow", null),
+                        setting(environment, "ARGOS_UPSTREAM_PROXY", application, "network.upstream-proxy", null),
+                        setting(environment, "ARGOS_UPSTREAM_DNS", application, "network.upstream-dns", null)),
                 // Opt-in: eagerly keeps (masked) document/XHR/fetch bodies for browser_network_detail.
-                Boolean.parseBoolean(setting("ARGOS_NETWORK_BODIES", application, "network.bodies", "false")));
+                Boolean.parseBoolean(setting(environment, "ARGOS_NETWORK_BODIES", application, "network.bodies", "false")));
     }
 
     private static Properties readProperties(Path path) throws IOException {
@@ -181,8 +188,13 @@ public record ArgosConfig(
         return properties;
     }
 
-    private static String setting(String environment, Properties properties, String key, String fallback) {
-        String env = System.getenv(environment);
+    private static String setting(String environmentVariable, Properties properties, String key, String fallback) {
+        return setting(System.getenv(), environmentVariable, properties, key, fallback);
+    }
+
+    private static String setting(Map<String, String> environment, String environmentVariable,
+                                  Properties properties, String key, String fallback) {
+        String env = environment.get(environmentVariable);
         if (env != null && !env.isBlank()) return env.trim();
         String property = properties.getProperty(key);
         return property != null && !property.isBlank() ? property.trim() : fallback;
@@ -220,14 +232,16 @@ public record ArgosConfig(
 
     public void requireBrowserConfiguration() {
         if (executable == null || !Files.isRegularFile(executable)) {
-            throw new IllegalStateException("Set ARGOS_CAMOUFOX_EXECUTABLE to a patched Camoufox executable.");
+            throw new IllegalStateException(
+                    "Configure ARGOS_CAMOUFOX_EXECUTABLE or camoufox.executable in Argos' own argos.properties.");
         }
         String browserName = executable.getFileName().toString().toLowerCase(Locale.ROOT);
         if (!browserName.equals("camoufox") && !browserName.equals("camoufox.exe")) {
             throw new IllegalArgumentException("Argos supports only Camoufox, not: " + browserName);
         }
         if (launchOptions == null || !Files.isRegularFile(launchOptions)) {
-            throw new IllegalStateException("Set ARGOS_CAMOUFOX_LAUNCH_OPTIONS to official Camoufox launch.json.");
+            throw new IllegalStateException(
+                    "Configure ARGOS_CAMOUFOX_LAUNCH_OPTIONS or camoufox.launchOptions in Argos' own argos.properties.");
         }
     }
 }

@@ -46,8 +46,10 @@ import java.net.Socket;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Deque;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -497,6 +499,13 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
     /** A source document the browser downloaded; current for its tab until the tab loads another document. */
     private record SavedDocument(String url, int status, String contentType, String text) { }
 
+    public record PageNavigationRequest(String tab, String url) { }
+
+    private record NavigationAttempt(Response response, Map<String, Object> immediateResult) { }
+
+    private record PendingPageNavigation(int index, String tab, String requestedUrl, Page page,
+                                         Response response, long startedNanos) { }
+
     private static boolean isMainDocument(Page owner, Request request) {
         try {
             return request.isNavigationRequest() && request.frame() == owner.mainFrame();
@@ -581,45 +590,186 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
         return onBrowser(() -> navigateHere(pageFor(tabId), target));
     }
 
-    /** {@link #navigate} on the driver thread. */
-    private Map<String, Object> navigateHere(Page p, String target) throws Exception {
-        {
-            ReadinessPolicy policy = config.readiness();
-            TabDocument tab = document(p);
-            MainDocument previousDocument = tab.mainDocument;
-            MainDocument previousDownload = tab.lastDownload;
-            Response response;
+    /**
+     * Navigate distinct tabs with bounded overlap. Each page starts at response commit; its document can load
+     * while the driver starts the next navigation. Results stay in request order and failures stay page-local.
+     */
+    public List<Map<String, Object>> navigatePages(List<PageNavigationRequest> requests, int parallelism,
+                                                   int commitTimeoutMillis) {
+        List<PageNavigationRequest> requestedPages = validatePageNavigationRequests(requests);
+        int parallelLimit = Math.max(1, Math.min(4, parallelism));
+        double commitTimeout = Math.max(500, Math.min(20_000, commitTimeoutMillis));
+        return onBrowser(() -> navigatePagesOnDriver(requestedPages, parallelLimit, commitTimeout), 300);
+    }
+
+    private List<Map<String, Object>> navigatePagesOnDriver(List<PageNavigationRequest> requests, int parallelLimit,
+                                                             double commitTimeoutMillis) throws Exception {
+        activePage();
+        List<Map<String, Object>> results = new ArrayList<>(Collections.nCopies(requests.size(), null));
+        Deque<PendingPageNavigation> pending = new ArrayDeque<>();
+
+        for (int index = 0; index < requests.size(); index++) {
+            PageNavigationRequest request = requests.get(index);
+            long startedNanos = System.nanoTime();
+            String tabId = BrowserTabs.normalize(request.tab());
             try {
-                response = p.navigate(target, new Page.NavigateOptions()
-                        .setWaitUntil(waitUntil(policy)).setTimeout(45_000));
-            } catch (PlaywrightException error) {
-                // Only a response of this navigation may turn the failure into a download.
-                MainDocument download = tab.lastDownload != previousDownload ? tab.lastDownload
-                        : tab.mainDocument != previousDocument ? tab.mainDocument : null;
-                if (!isDownload(error, download)) throw error;
-                tab.mainDocument = previousDocument; // the previous page stays rendered
-                Optional<SavedDocument> saved = savedSourceDocument(p, tab, download);
-                if (saved.isPresent()) {
-                    tab.saved = saved.get();
-                    return savedResult(saved.get());
+                requireWebUrl(request.url());
+                Page page = tabs.get(tabId);
+                NavigationAttempt attempt = startNavigation(page, request.url(), WaitUntilState.COMMIT,
+                        commitTimeoutMillis);
+                if (attempt.immediateResult() != null) {
+                    results.set(index, completedPageNavigation(tabId, request.url(), attempt.immediateResult(),
+                            startedNanos));
+                    continue;
                 }
-                return downloadResult(target, download);
+                pending.addLast(new PendingPageNavigation(index, tabId, request.url(), page, attempt.response(),
+                        startedNanos));
+                if (pending.size() >= parallelLimit) {
+                    finishPendingPageNavigation(pending.removeFirst(), results);
+                }
+            } catch (RuntimeException failure) {
+                results.set(index, failedPageNavigation(tabId, request.url(), startedNanos, failure));
             }
+        }
+
+        while (!pending.isEmpty()) {
+            finishPendingPageNavigation(pending.removeFirst(), results);
+        }
+        return List.copyOf(results);
+    }
+
+    private void finishPendingPageNavigation(PendingPageNavigation pending,
+                                             List<Map<String, Object>> results) {
+        try {
+            Map<String, Object> result = new LinkedHashMap<>(
+                    finishNavigation(pending.page(), pending.response(), config.readiness()));
+            result.put("tab", pending.tab());
+            result.put("requestedUrl", pending.requestedUrl());
+            result.put("outcome", "SUCCESS");
+            result.put("elapsedMs", elapsedMillis(pending.startedNanos()));
+            results.set(pending.index(), result);
+        } catch (Exception failure) {
+            results.set(pending.index(), failedPageNavigation(pending.tab(), pending.requestedUrl(),
+                    pending.startedNanos(), failure));
+        }
+    }
+
+    private static Map<String, Object> completedPageNavigation(String tabId, String requestedUrl,
+                                                                Map<String, Object> navigationResult,
+                                                                long startedNanos) {
+        Map<String, Object> result = new LinkedHashMap<>(navigationResult);
+        result.put("tab", tabId);
+        result.put("requestedUrl", requestedUrl);
+        result.put("outcome", navigationResult.containsKey("hint") ? "DOWNLOAD" : "SUCCESS");
+        result.put("elapsedMs", elapsedMillis(startedNanos));
+        return result;
+    }
+
+    private static Map<String, Object> failedPageNavigation(String tabId, String requestedUrl,
+                                                             long startedNanos, Exception failure) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("tab", tabId);
+        result.put("requestedUrl", requestedUrl == null ? "" : requestedUrl);
+        result.put("outcome", "FAILED");
+        result.put("error", errorMessage(failure));
+        result.put("elapsedMs", elapsedMillis(startedNanos));
+        return result;
+    }
+
+    private static long elapsedMillis(long startedNanos) {
+        return (System.nanoTime() - startedNanos) / 1_000_000;
+    }
+
+    private static List<PageNavigationRequest> validatePageNavigationRequests(List<PageNavigationRequest> requests) {
+        if (requests == null || requests.isEmpty() || requests.size() > 10) {
+            throw new IllegalArgumentException("Give between 1 and 10 page navigation requests");
+        }
+        Set<String> uniqueTabs = new HashSet<>();
+        List<PageNavigationRequest> validated = new ArrayList<>(requests.size());
+        for (PageNavigationRequest request : requests) {
+            if (request == null || request.tab() == null || request.tab().isBlank()) {
+                throw new IllegalArgumentException("Each page navigation needs a tab id");
+            }
+            String normalizedTab = BrowserTabs.normalize(request.tab());
+            if (!uniqueTabs.add(normalizedTab)) {
+                throw new IllegalArgumentException("A tab may appear only once in one batch: " + normalizedTab);
+            }
+            validated.add(new PageNavigationRequest(normalizedTab, request.url()));
+        }
+        return List.copyOf(validated);
+    }
+
+    private static List<String> validateTabIds(List<String> tabIds) {
+        if (tabIds == null || tabIds.isEmpty() || tabIds.size() > 10) {
+            throw new IllegalArgumentException("Give between 1 and 10 tab ids");
+        }
+        Set<String> uniqueTabs = new HashSet<>();
+        List<String> validated = new ArrayList<>(tabIds.size());
+        for (String tabId : tabIds) {
+            String normalizedTab = BrowserTabs.normalize(tabId);
+            if (normalizedTab.isBlank()) throw new IllegalArgumentException("Each tab id must not be blank");
+            if (!uniqueTabs.add(normalizedTab)) {
+                throw new IllegalArgumentException("A tab may appear only once in one batch: " + normalizedTab);
+            }
+            validated.add(normalizedTab);
+        }
+        return List.copyOf(validated);
+    }
+
+    private static String errorMessage(Exception failure) {
+        return failure.getMessage() == null || failure.getMessage().isBlank()
+                ? failure.getClass().getSimpleName() : failure.getMessage();
+    }
+
+    /** Navigate and wait for readiness on the browser driver thread. */
+    private Map<String, Object> navigateHere(Page page, String target) throws Exception {
+        ReadinessPolicy policy = config.readiness();
+        NavigationAttempt attempt = startNavigation(page, target, waitUntil(policy), 45_000);
+        if (attempt.immediateResult() != null) return attempt.immediateResult();
+        return finishNavigation(page, attempt.response(), policy);
+    }
+
+    /** Start a navigation at the requested protocol milestone without waiting for the page to settle. */
+    private NavigationAttempt startNavigation(Page page, String target, WaitUntilState waitUntil,
+                                              double timeoutMillis) {
+        TabDocument tab = document(page);
+        MainDocument previousDocument = tab.mainDocument;
+        MainDocument previousDownload = tab.lastDownload;
+        try {
+            Response response = page.navigate(target, new Page.NavigateOptions()
+                    .setWaitUntil(waitUntil).setTimeout(timeoutMillis));
             // Keep the listener's instance: it may already carry the requestfinished flag.
-            if (response != null && isMainDocument(p, response.request())
+            if (response != null && isMainDocument(page, response.request())
                     && (tab.mainDocument == null || !tab.mainDocument.isFor(response.request()))) {
                 tab.mainDocument = new MainDocument(response);
             }
-            ReadinessReport readiness = settle(p, policy, null);
-            Map<String, Object> result = new LinkedHashMap<>();
-            result.put("url", p.url());
-            result.put("title", p.title());
-            result.put("status", response == null ? 0 : response.status());
-            result.put("documentType", documentType(p));
-            result.put("contentType", contentType(p));
-            result.put("readiness", readiness);
-            return result;
+            return new NavigationAttempt(response, null);
+        } catch (PlaywrightException error) {
+            // Only a response of this navigation may turn the failure into a download.
+            MainDocument download = tab.lastDownload != previousDownload ? tab.lastDownload
+                    : tab.mainDocument != previousDocument ? tab.mainDocument : null;
+            if (!isDownload(error, download)) throw error;
+            tab.mainDocument = previousDocument; // Keep the previous page rendered.
+            Optional<SavedDocument> saved = savedSourceDocument(page, tab, download);
+            if (saved.isPresent()) {
+                tab.saved = saved.get();
+                return new NavigationAttempt(null, savedResult(saved.get()));
+            }
+            return new NavigationAttempt(null, downloadResult(target, download));
         }
+    }
+
+    /** Finish a committed navigation after other pages had time to load concurrently. */
+    private Map<String, Object> finishNavigation(Page page, Response response, ReadinessPolicy policy) throws Exception {
+        ReadinessReport readiness = settle(page, policy, null);
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("url", page.url());
+        result.put("title", page.title());
+        result.put("status", response == null ? 0 : response.status());
+        result.put("documentType", documentType(page));
+        result.put("contentType", contentType(page));
+        result.put("readiness", readiness);
+        return result;
     }
 
     @Override
@@ -806,11 +956,34 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
     }
 
     public PageSnapshot snapshot(int maxCharacters, String tabId) {
+        return onBrowser(() -> snapshotPage(pageFor(tabId), maxCharacters));
+    }
+
+    private PageSnapshot snapshotPage(Page page, int maxCharacters) {
+        SavedDocument saved = document(page).saved;
+        if (saved != null) return snapshots.read(new SavedPageSource(saved), maxCharacters);
+        return snapshots.read(new PlaywrightPageSource(page, document(page).mainDocument), maxCharacters);
+    }
+
+    /** Read several existing tabs in one driver task, preserving one result per tab. */
+    public List<Map<String, Object>> snapshotPages(List<String> tabIds, int maxCharacters) {
+        List<String> requestedTabs = validateTabIds(tabIds);
+        int characterLimit = Math.max(1_000, Math.min(60_000, maxCharacters));
         return onBrowser(() -> {
-            Page p = pageFor(tabId);
-            SavedDocument saved = document(p).saved;
-            if (saved != null) return snapshots.read(new SavedPageSource(saved), maxCharacters);
-            return snapshots.read(new PlaywrightPageSource(p, document(p).mainDocument), maxCharacters);
+            List<Map<String, Object>> results = new ArrayList<>();
+            for (String tabId : requestedTabs) {
+                Map<String, Object> result = new LinkedHashMap<>();
+                result.put("tab", tabId);
+                try {
+                    Page page = pageFor(tabId);
+                    result.put("url", shownUrl(page));
+                    result.put("snapshot", snapshotPage(page, characterLimit));
+                } catch (RuntimeException failure) {
+                    result.put("error", errorMessage(failure));
+                }
+                results.add(result);
+            }
+            return List.copyOf(results);
         });
     }
 
@@ -1144,22 +1317,46 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
     }
 
     public Map<String, Object> inspect(String selector, int limit, String tabId) {
+        return onBrowser(() -> inspectPage(pageFor(tabId), selector, limit));
+    }
+
+    private Map<String, Object> inspectPage(Page page, String selector, int limit) {
+        Object value = page.evaluate("""
+                ({selector,limit}) => [...document.querySelectorAll(selector)]
+                  .slice(0,limit).map(node => ({
+                    tag:node.tagName.toLowerCase(),
+                    text:(node.innerText||node.textContent||'').slice(0,600),
+                    id:node.id||null,
+                    classes:node.className && typeof node.className==='string'
+                      ? node.className.slice(0,180) : null,
+                    href:node.getAttribute('href'),
+                    role:node.getAttribute('role'),
+                    ariaLabel:node.getAttribute('aria-label')
+                  }))
+                """, Map.of("selector", selector, "limit", Math.min(50, Math.max(1, limit))));
+        return Map.of("url", page.url(), "elements", value);
+    }
+
+    /** Inspect a selector in several existing tabs without failing the whole batch on one bad tab. */
+    public List<Map<String, Object>> inspectPages(List<String> tabIds, String selector, int limit) {
+        List<String> requestedTabs = validateTabIds(tabIds);
+        if (selector == null || selector.isBlank()) {
+            throw new IllegalArgumentException("selector must not be blank");
+        }
+        int elementLimit = Math.max(1, Math.min(50, limit));
         return onBrowser(() -> {
-            Page p = pageFor(tabId);
-            Object value = p.evaluate("""
-                    ({selector,limit}) => [...document.querySelectorAll(selector)]
-                      .slice(0,limit).map(node => ({
-                        tag:node.tagName.toLowerCase(),
-                        text:(node.innerText||node.textContent||'').slice(0,600),
-                        id:node.id||null,
-                        classes:node.className && typeof node.className==='string'
-                          ? node.className.slice(0,180) : null,
-                        href:node.getAttribute('href'),
-                        role:node.getAttribute('role'),
-                        ariaLabel:node.getAttribute('aria-label')
-                      }))
-                    """, Map.of("selector", selector, "limit", Math.min(50, Math.max(1, limit))));
-            return Map.of("url", p.url(), "elements", value);
+            List<Map<String, Object>> results = new ArrayList<>();
+            for (String tabId : requestedTabs) {
+                Map<String, Object> result = new LinkedHashMap<>();
+                result.put("tab", tabId);
+                try {
+                    result.put("inspection", inspectPage(pageFor(tabId), selector, elementLimit));
+                } catch (RuntimeException failure) {
+                    result.put("error", errorMessage(failure));
+                }
+                results.add(result);
+            }
+            return List.copyOf(results);
         });
     }
 
@@ -1415,6 +1612,95 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
             if (RealInput.lineEnds(text).endsWith("\n")) settle(p);
             return new Interaction(resolved.description(), p.url(), safeTitle(p), null);
         });
+    }
+
+    // ---- Pointer --------------------------------------------------------------------------------------------
+    // Coordinates are CSS pixels in the tab's viewport: (0, 0) is its top left corner, scrolling does not shift it.
+    // These tools send plain native mouse commands, without the HumanMotion paths and pauses of clickTarget.
+
+    public Map<String, Object> mouseMove(double x, double y, String tabId) {
+        return onBrowser(() -> {
+            Page p = pageFor(tabId);
+            return pointerResult(p, "moved", input.pointerMove(p, x, y), null);
+        });
+    }
+
+    public Map<String, Object> mouseClick(double x, double y, String button, String tabId) {
+        MouseButton pressed = MouseButton.parse(button);
+        return onBrowser(() -> {
+            Page p = pageFor(tabId);
+            Set<String> before = tabs.all().keySet();
+            HumanMotion.Point point = input.pointerClick(p, x, y, pressed);
+            leaveSavedDocument(p);
+            settle(p);
+            boolean preserveCurrentTab = tabId != null && !tabId.isBlank();
+            String opened = adoptOpenedTab(before, !preserveCurrentTab);
+            Map<String, Object> result = pointerResult(preserveCurrentTab ? p : activePage(), "clicked", point, null);
+            result.put("button", pressed.name().toLowerCase(java.util.Locale.ROOT));
+            if (opened != null) result.put("openedTab", opened);
+            return result;
+        });
+    }
+
+    public Map<String, Object> hover(String target, String tabId) {
+        if (target == null || target.isBlank()) throw new IllegalArgumentException("target is required");
+        return onBrowser(() -> {
+            Page p = pageFor(tabId);
+            Resolved resolved = resolve(p, target);
+            return pointerResult(p, "hovered", input.pointerHover(p, resolved.locator()), resolved.description());
+        });
+    }
+
+    /**
+     * Turns the mouse wheel by the given CSS pixels (positive: down/right). The pointer first goes to {@code target}
+     * or to ({@code x}, {@code y}) when given, so the scrolling container under it receives the wheel.
+     */
+    public Map<String, Object> scroll(double deltaX, double deltaY, Double x, Double y, String target, String tabId) {
+        if (!Double.isFinite(deltaX) || !Double.isFinite(deltaY) || (deltaX == 0 && deltaY == 0)) {
+            throw new IllegalArgumentException("Give delta_x and/or delta_y in CSS pixels, e.g. delta_y=600");
+        }
+        if (Math.abs(deltaX) > 20_000 || Math.abs(deltaY) > 20_000) {
+            throw new IllegalArgumentException("Scroll at most 20000 CSS pixels per call");
+        }
+        if ((x == null) != (y == null)) throw new IllegalArgumentException("Give both x and y, or neither");
+        if (x != null && target != null && !target.isBlank()) {
+            throw new IllegalArgumentException("Give either target or x/y, not both");
+        }
+        return onBrowser(() -> {
+            Page p = pageFor(tabId);
+            String description = null;
+            if (target != null && !target.isBlank()) {
+                Resolved resolved = resolve(p, target);
+                input.pointerHover(p, resolved.locator());
+                description = resolved.description();
+            } else if (x != null) {
+                input.pointerMove(p, x, y);
+            }
+            input.pointerWheel(p, deltaX, deltaY);
+            p.waitForTimeout(150); // smooth scrolling and scroll events settle
+            Map<String, Object> result = pointerResult(p, "scrolled", null, description);
+            result.put("deltaX", deltaX);
+            result.put("deltaY", deltaY);
+            Object position = p.evaluate("() => [scrollX, scrollY]");
+            if (position instanceof List<?> values && values.size() == 2) {
+                result.put("pageScrollX", values.get(0));
+                result.put("pageScrollY", values.get(1));
+            }
+            return result;
+        });
+    }
+
+    private static Map<String, Object> pointerResult(Page p, String action, HumanMotion.Point point, String target) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("action", action);
+        if (target != null) result.put("target", target);
+        if (point != null) {
+            result.put("x", (long) point.x());
+            result.put("y", (long) point.y());
+        }
+        result.put("url", p.url());
+        result.put("title", safeTitle(p));
+        return result;
     }
 
     private record Resolved(Locator locator, String description) { }

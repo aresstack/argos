@@ -152,10 +152,15 @@ Diese Werkzeuge stehen in `ArgosBrowsingTools` als getrennte Listen `expert()` u
 
 | Tool | Profil | Zweck |
 | --- | --- | --- |
-| `browser_tabs`, `browser_tab_new`, `browser_tab_select`, `browser_tab_close` | expert | Tabs mit kurzen Ids (`t1`, `t2`); von Webseiten geöffnete Tabs (`target=_blank`) werden übernommen und nach einem Klick aktuell |
-| `browser_back`, `browser_forward`, `browser_reload` | expert | Historie des aktuellen Tabs |
+| `browser_tabs`, `browser_tab_new`, `browser_tab_select`, `browser_tab_close` | expert | Tabs mit kurzen IDs (`t1`, `t2`); von Webseiten geöffnete Tabs (`target=_blank`) werden übernommen und nach einem Klick aktuell |
+| `browser_navigate`, `browser_snapshot`, `browser_inspect`, `browser_click`, `browser_fill`, `browser_evaluate`, `browser_screenshot`, `browser_network` | legacy + expert | Optionales Feld `tab` adressiert einen bestimmten Tab; ohne Feld bleibt das aktuelle Verhalten erhalten |
+| `browser_back`, `browser_forward`, `browser_reload` | expert | Historie des aktuellen oder explizit adressierten Tabs |
+| `browser_pages_navigate`, `browser_pages_snapshot`, `browser_pages_inspect` | expert | Mehrere bestehende Tabs in einem MCP-Aufruf navigieren oder lesend inspizieren; Ergebnisse pro Tab und in Eingabereihenfolge |
 | `browser_controls` | expert | Bedienelemente mit Nummer, Aria-Ref und semantischem Locator (`role=button name="Suchen"`) |
 | `browser_click_target`, `browser_fill_target` | expert | Klick bzw. Eingabe auf Nummer, Ref, semantischen Locator (`role=`, `label=`, `placeholder=`, `text=`) oder sichtbaren Namen |
+| `browser_mouse_move`, `browser_mouse_click` | expert | Zeiger bewegen bzw. klicken (`button`: `left`, `middle`, `right`) an `x`/`y` in CSS-Pixeln des Viewports: (0, 0) ist dessen linke obere Ecke, wie im Screenshot, unabhängig vom Scrollstand; Punkte außerhalb werden abgelehnt |
+| `browser_hover` | expert | Zeiger auf ein Element (gleiche Ziele wie `browser_click_target`) legen, ohne zu klicken, z. B. für Hover-Menüs |
+| `browser_scroll` | expert | Mausrad um `delta_x`/`delta_y` CSS-Pixel (positiv: rechts/unten) drehen; optional erst über `target` oder `x`/`y`, damit der Scrollbereich darunter scrollt |
 | `browser_extract` | expert | `overview`, `headings`, `links`, `tables`, `lists`, `metadata` (inkl. `citation_*`, Open Graph), `jsonld` |
 | `web_controls`, `web_click`, `web_fill` | compact | Dieselbe Bedienung für kleine Modelle: nummerierte Textliste, ein bis zwei Parameter |
 
@@ -218,7 +223,7 @@ Die bisherigen Schlüssel `url`, `title` und `text` bleiben erhalten; neu sind `
 
 `browser_wait` verwendet dieselben Bedingungen (bei `fast` die von `balanced`) mit eigenem `timeoutMs` (500–60 000, Standard 10 000).
 
-Mit `ARGOS_TOOL_PROFILE=expert` kommen `browser_download`, `browser_document` und `browser_open_many` hinzu (Dokumente und mehrere Seiten über Hintergrund-Tabs derselben Session, ohne Skript-Injektion); Details und Parallelitätsmessung in [`docs/batch-and-documents.md`](docs/batch-and-documents.md).
+Mit `ARGOS_TOOL_PROFILE=expert` kommen `browser_download`, `browser_document`, `browser_open_many` und die `browser_pages_*`-Werkzeuge hinzu. `browser_open_many` nutzt Hintergrund-Tabs; `browser_pages_navigate` arbeitet auf vorhandenen, identifizierten Tabs und isoliert Ergebnisse pro Seite. Details und Parallelitätsgrenzen stehen in [`docs/batch-and-documents.md`](docs/batch-and-documents.md).
 
 `browser_network` entfernt Query-Parameter und Benutzerinformationen aus den protokollierten URLs. Bis zu 200 Ereignisse bleiben im Speicher. `browser_evaluate` kann Webseiten verändern und ist deshalb nur für ausdrücklich autorisierte Nutzer über das gesicherte MCP-Plugin bestimmt.
 

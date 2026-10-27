@@ -23,9 +23,13 @@ class RealInputTest {
         }
 
         @Override public void move(double x, double y) { calls.add("move " + x + "," + y); }
-        @Override public void down() { calls.add("down"); }
-        @Override public void up() { calls.add("up"); }
-        @Override public void wheel(double deltaX, double deltaY) { calls.add("wheel " + deltaY); }
+        @Override public void down(MouseButton button) {
+            calls.add(button == MouseButton.LEFT ? "down" : "down " + button);
+        }
+        @Override public void up(MouseButton button) { calls.add(button == MouseButton.LEFT ? "up" : "up " + button); }
+        @Override public void wheel(double deltaX, double deltaY) {
+            calls.add(deltaX == 0 ? "wheel " + deltaY : "wheel " + deltaX + "," + deltaY);
+        }
 
         @Override public void keyDown(String key) {
             if (!unicodeKeys && key.codePointCount(0, key.length()) == 1 && !HumanTyping.inLayout(key.codePointAt(0))) {
@@ -182,6 +186,20 @@ class RealInputTest {
         List<String> keys = device.calls;
         assertTrue(keys.indexOf("keyDown Shift") < keys.indexOf("keyDown B"));
         assertTrue(keys.indexOf("keyUp B") < keys.indexOf("keyUp Shift"));
+    }
+
+    @Test void viewportPointsStayInsideAfterConversionToWholePixels() {
+        HumanMotion.Box view = new HumanMotion.Box(0, 0, 1280, 720);
+        assertEquals(new HumanMotion.Point(1279, 719), RealInput.viewportPoint(1279.6, 719.999, view));
+        assertEquals(new HumanMotion.Point(0, 0), RealInput.viewportPoint(0, 0.4, view));
+        assertEquals(new HumanMotion.Point(640, 360), RealInput.viewportPoint(640, 360, view));
+        for (double[] outside : new double[][] {{1280, 10}, {10, 720}, {-0.1, 10}, {10, -1}, {Double.NaN, 1},
+                {1, Double.POSITIVE_INFINITY}}) {
+            assertThrows(IllegalArgumentException.class, () -> RealInput.viewportPoint(outside[0], outside[1], view),
+                    java.util.Arrays.toString(outside));
+        }
+        HumanMotion.Box fractional = new HumanMotion.Box(0, 0, 1279.5, 719.5);
+        assertEquals(new HumanMotion.Point(1279, 719), RealInput.viewportPoint(1279.4, 719.4, fractional));
     }
 
     /** The text a field would contain after these key downs. */

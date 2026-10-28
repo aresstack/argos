@@ -178,7 +178,7 @@ class CamoufoxInstallerTest {
     void refusesUnsupportedPlatformsAndUnpublishedArchives() {
         RuntimeException mac = assertThrows(CamoufoxDistribution.UnsupportedPlatformException.class,
                 () -> CamoufoxDistribution.target("Mac OS X", "aarch64"));
-        assertTrue(mac.getMessage().contains("ARGOS_CAMOUFOX_EXECUTABLE"));
+        assertTrue(mac.getMessage().contains("only on Windows x86_64 and Linux x86_64"), mac.getMessage());
         assertThrows(CamoufoxDistribution.UnsupportedPlatformException.class,
                 () -> CamoufoxDistribution.target("Linux", "aarch64"));
         assertEquals("win.x86_64", CamoufoxDistribution.target("Windows 11", "amd64"));

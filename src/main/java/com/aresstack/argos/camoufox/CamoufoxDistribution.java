@@ -72,7 +72,7 @@ public record CamoufoxDistribution(String release, String revision, URI baseUrl,
         if (sha == null) {
             throw new UnsupportedPlatformException("No Argos Camoufox distribution for " + target
                     + "; supported: " + archiveSha256.keySet()
-                    + ". Set ARGOS_CAMOUFOX_EXECUTABLE (and optionally BROWSER_LAUNCH_CONFIG) instead.");
+                    + ".");
         }
         if (!sha.matches("[0-9a-f]{64}")) {
             throw new IllegalStateException("The Argos Camoufox distribution " + name() + " for " + target
@@ -93,8 +93,7 @@ public record CamoufoxDistribution(String release, String revision, URI baseUrl,
         boolean x64 = machine.equals("amd64") || machine.equals("x86_64");
         if (system == null || !x64) {
             throw new UnsupportedPlatformException("Argos installs Camoufox only on Windows x86_64 and Linux x86_64, "
-                    + "not " + osName + " " + arch + ". Set ARGOS_CAMOUFOX_EXECUTABLE to a Camoufox build with the "
-                    + "WebDriver BiDi fixes instead.");
+                    + "not " + osName + " " + arch + ".");
         }
         return system + ".x86_64";
     }

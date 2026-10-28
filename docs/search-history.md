@@ -279,8 +279,6 @@ Mit Camoufox (lokal unter Windows):
 
 ```bat
 cd C:\Projects\argos
-set ARGOS_CAMOUFOX_EXECUTABLE=C:\path\to\camoufox\camoufox.exe
-set BROWSER_LAUNCH_CONFIG=C:\path\to\launch.json
 gradlew.bat test -PtestCamoufox=true --tests "com.aresstack.argos.SearchHistoryNetworkBrowserTest" --tests "com.aresstack.argos.SearchHistoryCollectorBrowserTest"
 gradlew.bat test --tests "com.aresstack.argos.history.*" --tests "com.aresstack.argos.network.*"
 ```

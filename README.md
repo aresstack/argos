@@ -81,7 +81,7 @@ Die Launch-Konfiguration (Fingerprint, Prefs, Startoptionen) ist immer vorhanden
 
 Einzelheiten, Overrides und Fehlerverhalten: [docs/camoufox-distribution.md](docs/camoufox-distribution.md).
 
-**Im AresStack Webserver haben die Umgebungsvariablen Vorrang vor den Properties.** Pflichtfeld ist `SERVER_PORT`; Argos besitzt **keinen fest einprogrammierten Standardport**. Wie bei Pyloros werden `SERVER_PORT`, `SERVER_HOST` (optional, nur Loopback), `SECURITY_MODE`, `REQUIRED_SCOPE`, `PUBLIC_ORIGIN` und `CENTRAL_OAUTH_ISSUER` ausgewertet. Für den Camoufox-Browser sind `ARGOS_PROFILE_DIR` und `ARGOS_HEADLESS` verfügbar; `ARGOS_CAMOUFOX_EXECUTABLE`, `BROWSER_LAUNCH_CONFIG`, `BROWSER_DIR` und `ARGOS_CAMOUFOX_DISTRIBUTION_URL` sind optionale Overrides (siehe [docs/camoufox-distribution.md](docs/camoufox-distribution.md)) und im Webserver nicht nötig.
+**Im AresStack Webserver haben die Umgebungsvariablen Vorrang vor den Properties.** Pflichtfeld ist `SERVER_PORT`; Argos besitzt **keinen fest einprogrammierten Standardport**. Wie bei Pyloros werden `SERVER_PORT`, `SERVER_HOST` (optional, nur Loopback), `SECURITY_MODE`, `REQUIRED_SCOPE`, `PUBLIC_ORIGIN` und `CENTRAL_OAUTH_ISSUER` ausgewertet. Für den Camoufox-Browser sind `ARGOS_PROFILE_DIR` und `ARGOS_HEADLESS` verfügbar; `BROWSER_LAUNCH_CONFIG`, `BROWSER_DIR` und `ARGOS_CAMOUFOX_DISTRIBUTION_URL` sind optionale Overrides (siehe [docs/camoufox-distribution.md](docs/camoufox-distribution.md)) und im Webserver nicht nötig.
 
 Die bereits angelegten Webserver-Variablen für Argos sind:
 
@@ -361,12 +361,12 @@ Im GitHub Release liegen die **direkt ausführbare `argos.jar`** und optional `a
 .\gradlew.bat test --tests "*CamoufoxProvisionedSmokeTest" -PtestCamoufox -PtestProvisionedCamoufox
 ```
 
-Ohne `ARGOS_CAMOUFOX_EXECUTABLE` verwenden die Camoufox-Tests die von Argos installierte Distribution (vorher einmal `CamoufoxProvisionedSmokeTest` laufen lassen, sonst meldet der erste Test nach 30 s „wird installiert“).
+Die Camoufox-Tests verwenden die von Argos unter `BROWSER_DIR` installierte Distribution (vorher einmal `CamoufoxProvisionedSmokeTest` laufen lassen, sonst meldet der erste Test nach 30 s „wird installiert“).
 
-Alle Camoufox-Browsertests auf einmal (auch die Eingabetests `FieldSelectionBrowserTest`, `KeyboardShortcutBrowserTest`, `HumanInputBrowserTest`, die ohne `-PtestHumanBrowser` automatisch `ARGOS_CAMOUFOX_EXECUTABLE` verwenden). `-PtestCamoufox` ohne Wert gilt ebenfalls als eingeschaltet:
+Alle Camoufox-Browsertests auf einmal (auch die Eingabetests `FieldSelectionBrowserTest`, `KeyboardShortcutBrowserTest`, `HumanInputBrowserTest`, die ohne `-PtestHumanBrowser` automatisch den von Argos installierten Camoufox verwenden). `-PtestCamoufox` ohne Wert gilt ebenfalls als eingeschaltet:
 
 ```powershell
-$env:ARGOS_CAMOUFOX_EXECUTABLE = "C:\Pfad\zu\camoufox.exe"
+$env:BROWSER_DIR = "D:\Argos Browser"
 .\gradlew.bat test -PtestCamoufox=true `
   --tests "*BrowserTest*" --tests "*Camoufox*"
 ```

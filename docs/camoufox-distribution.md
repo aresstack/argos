@@ -69,7 +69,7 @@ gemeldet, beim nächsten Werkzeugaufruf wird neu versucht. Protokolliert werden 
 und Installationsordner, keine Fingerprint-Werte, Umgebungsvariablen oder Zugangsdaten.
 
 **Nicht unterstützte Plattformen** (macOS, ARM): Argos meldet, dass es nur Windows x86_64 und Linux x86_64 selbst
-installiert, und verweist auf `ARGOS_CAMOUFOX_EXECUTABLE`.
+installiert; andere Plattformen werden nicht unterstützt.
 
 ## Eingebautes Profil
 
@@ -103,12 +103,11 @@ Surrogatpaar) und ergänzt sie zur geerbten Prozessumgebung. Unter Linux erzeugt
 
 | Variable / Property | Wirkung |
 |---|---|
-| `ARGOS_CAMOUFOX_EXECUTABLE` / `camoufox.executable` | eigener Camoufox statt der Distribution (muss existieren und `camoufox`/`camoufox.exe` heißen) |
 | `BROWSER_LAUNCH_CONFIG` / `browser.launch-config` | eigene `launch.json` statt des eingebauten Profils; fehlt oder ist sie ungültig, startet Argos nicht und nennt die Datei |
 | `BROWSER_DIR` / `browser.install-dir` | anderer Installationsordner als `~/.argos/browser` |
 | `ARGOS_CAMOUFOX_DISTRIBUTION_URL` / `camoufox.distributionUrl` | Spiegel der Archive (`https://…/` oder `file:///…/`); die gepinnten Prüfsummen gelten weiter |
 
-Umgebungsvariablen haben Vorrang vor `~/.argos/argos.properties` (oder `-Dargos.config`). Ein eigener Camoufox ohne
-eigene `launch.json` verlangt `addons/UBO` neben dem Executable, sonst nennt Argos beide Auswege.
+Umgebungsvariablen haben Vorrang vor `~/.argos/argos.properties` (oder `-Dargos.config`). Die ausführbare Datei ermittelt
+Argos immer selbst aus der verwalteten Installation unter `BROWSER_DIR`; einen eigenen Override dafür gibt es nicht.
 
 Nicht zur Distribution gehören Browserprofile: sie bleiben unter `~/.argos/profiles/` (Chat-Isolation unverändert).

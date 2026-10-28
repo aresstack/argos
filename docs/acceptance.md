@@ -54,7 +54,7 @@ python3 scripts/acceptance/summarize.py --compare \
   build/acceptance/baseline-main/summary.json build/acceptance/develop-<sha>/summary.json
 ```
 
-`run-suite.sh` erwartet `ARGOS_CAMOUFOX_EXECUTABLE` (Datei heißt `camoufox`, nicht `camoufox-bin`) und
+`run-suite.sh` verwendet den von Argos verwalteten Camoufox unter `BROWSER_DIR` und optional
 `BROWSER_LAUNCH_CONFIG` (launch.json, `env` nur `CAMOU_*`/`FONTCONFIG*`). Es setzt
 `-PtestCamoufox=true -PexpectUnicodeKeys=true`, damit eine abgelehnte Unicode-Taste als Fehler zählt.
 Unter Windows in Git Bash ausführen. Ergebnisse liegen unter `build/acceptance/<label>/` mit

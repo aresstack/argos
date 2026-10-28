@@ -47,7 +47,7 @@ class ArgosConfigTest {
 
         ArgosConfig config = ArgosConfig.fromEnvironment(Map.of(), userHome, argosConfig);
 
-        assertEquals(executable.toAbsolutePath(), config.executable());
+        assertNull(config.executable(), "the executable always comes from the managed installation");
         assertEquals(launchOptions.toAbsolutePath(), config.launchOptions());
     }
 
@@ -68,7 +68,7 @@ class ArgosConfigTest {
                 "SERVER_PORT", "8086"
         ), userHome, argosConfig);
 
-        assertEquals(environmentExecutable.toAbsolutePath(), config.executable());
+        assertNull(config.executable(), "ARGOS_CAMOUFOX_EXECUTABLE is gone");
         assertEquals(environmentLaunchOptions.toAbsolutePath(), config.launchOptions());
         assertEquals(8086, config.port());
 
@@ -97,10 +97,6 @@ class ArgosConfigTest {
         IllegalStateException error = assertThrows(IllegalStateException.class,
                 missingLaunch::requireBrowserConfiguration);
         assertTrue(error.getMessage().contains("does not exist"));
-
-        ArgosConfig missingExecutable = ArgosConfig.fromEnvironment(Map.of("ARGOS_CAMOUFOX_EXECUTABLE",
-                userHome.resolve("absent/camoufox").toString()), userHome, argosConfig);
-        assertThrows(IllegalStateException.class, missingExecutable::requireBrowserConfiguration);
     }
 
     @Test

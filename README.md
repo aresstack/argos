@@ -61,9 +61,25 @@ browser.profile=C:/Users/USERNAME/.argos/profiles/default
 browser.headless=false
 ```
 
-**Camoufox wird nicht von Hand installiert.** Beim ersten Browserzugriff lädt Argos seine eigene, geprüfte Camoufox-Distribution (Camoufox `156.0.1-beta.36` mit den WebDriver-BiDi-Fixes aus daijro/camoufox#952) nach `~/.argos/browser/`, prüft SHA-256 und Fixes und startet sie mit dem eingebauten Fingerprint-Profil. Es braucht weder Browserpfade noch eine `launch.json`; Argos liest keine Konfigurationsdateien anderer Anwendungen. Einzelheiten, Overrides und Fehlerverhalten: [docs/camoufox-distribution.md](docs/camoufox-distribution.md).
+**Camoufox wird nicht von Hand installiert.** Beim ersten Browserzugriff lädt Argos seine eigene Camoufox-Distribution (Camoufox `156.0.1-beta.36` mit den WebDriver-BiDi-Fixes aus daijro/camoufox#952) automatisch herunter, prüft ihre Integrität (gepinnte SHA-256-Prüfsumme und vorhandene BiDi-Fixes), installiert sie atomar und startet sie mit dem eingebauten Fingerprint-Profil. Weder eine manuelle Camoufox-Installation noch Browserpfade noch eine externe `launch.json` sind erforderlich; Argos liest keine Konfigurationsdateien anderer Anwendungen.
 
-**Im AresStack Webserver haben die Umgebungsvariablen Vorrang vor den Properties.** Pflichtfeld ist `SERVER_PORT`; Argos besitzt **keinen fest einprogrammierten Standardport**. Wie bei Pyloros werden `SERVER_PORT`, `SERVER_HOST` (optional, nur Loopback), `SECURITY_MODE`, `REQUIRED_SCOPE`, `PUBLIC_ORIGIN` und `CENTRAL_OAUTH_ISSUER` ausgewertet. Für den Camoufox-Browser sind `ARGOS_PROFILE_DIR` und `ARGOS_HEADLESS` verfügbar; `ARGOS_CAMOUFOX_EXECUTABLE`, `ARGOS_CAMOUFOX_LAUNCH_OPTIONS`, `ARGOS_BROWSER_DIR` und `ARGOS_CAMOUFOX_DISTRIBUTION_URL` sind optionale Overrides (siehe [docs/camoufox-distribution.md](docs/camoufox-distribution.md)) und im Webserver nicht nötig.
+Das Installationsverzeichnis ist optional über `BROWSER_DIR` (alternativ Property `browser.install-dir`; die Umgebungsvariable hat Vorrang) wählbar. Ohne Angabe verwendet Argos `~/.argos/browser`. Pfade mit Laufwerksbuchstaben und Leerzeichen sind erlaubt:
+
+```powershell
+# Windows
+$env:BROWSER_DIR = "D:\Argos Browser"
+java -jar argos.jar
+```
+
+```bash
+# Linux
+export BROWSER_DIR="/opt/argos browser"
+java -jar argos.jar
+```
+
+Einzelheiten, Overrides und Fehlerverhalten: [docs/camoufox-distribution.md](docs/camoufox-distribution.md).
+
+**Im AresStack Webserver haben die Umgebungsvariablen Vorrang vor den Properties.** Pflichtfeld ist `SERVER_PORT`; Argos besitzt **keinen fest einprogrammierten Standardport**. Wie bei Pyloros werden `SERVER_PORT`, `SERVER_HOST` (optional, nur Loopback), `SECURITY_MODE`, `REQUIRED_SCOPE`, `PUBLIC_ORIGIN` und `CENTRAL_OAUTH_ISSUER` ausgewertet. Für den Camoufox-Browser sind `ARGOS_PROFILE_DIR` und `ARGOS_HEADLESS` verfügbar; `ARGOS_CAMOUFOX_EXECUTABLE`, `ARGOS_CAMOUFOX_LAUNCH_OPTIONS`, `BROWSER_DIR` und `ARGOS_CAMOUFOX_DISTRIBUTION_URL` sind optionale Overrides (siehe [docs/camoufox-distribution.md](docs/camoufox-distribution.md)) und im Webserver nicht nötig.
 
 Die bereits angelegten Webserver-Variablen für Argos sind:
 

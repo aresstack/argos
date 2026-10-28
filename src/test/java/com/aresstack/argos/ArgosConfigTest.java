@@ -107,10 +107,30 @@ class ArgosConfigTest {
         assertEquals(userHome.resolve("configured").toAbsolutePath(), configured.root());
 
         ArgosConfig.BrowserInstallation environment = ArgosConfig.BrowserInstallation.fromEnvironment(
-                Map.of("ARGOS_BROWSER_DIR", userHome.resolve("env").toString(),
+                Map.of("BROWSER_DIR", userHome.resolve("env").toString(),
                         "ARGOS_CAMOUFOX_DISTRIBUTION_URL", "https://mirror.example/env/"), userHome, properties);
         assertEquals(userHome.resolve("env").toAbsolutePath(), environment.root());
         assertEquals("https://mirror.example/env/", environment.mirror().toString());
+
+        // The old prefixed name is gone: it neither overrides the property nor the default.
+        ArgosConfig.BrowserInstallation legacy = ArgosConfig.BrowserInstallation.fromEnvironment(
+                Map.of("ARGOS_BROWSER_DIR", userHome.resolve("legacy").toString()), userHome, properties);
+        assertEquals(userHome.resolve("configured").toAbsolutePath(), legacy.root());
+    }
+
+    @Test
+    void browserDirKeepsSpacesAndWindowsDriveLetters() {
+        Path spaced = userHome.resolve("Other Drive").resolve("Argos Browser");
+        ArgosConfig.BrowserInstallation explicit = ArgosConfig.BrowserInstallation.fromEnvironment(
+                Map.of("BROWSER_DIR", spaced.toString()), userHome, new java.util.Properties());
+        assertEquals(spaced.toAbsolutePath(), explicit.root());
+
+        if (java.io.File.separatorChar == '\\') {
+            ArgosConfig.BrowserInstallation drive = ArgosConfig.BrowserInstallation.fromEnvironment(
+                    Map.of("BROWSER_DIR", "D:\\Argos Browser\\camoufox"), userHome, new java.util.Properties());
+            assertEquals(Path.of("D:\\Argos Browser\\camoufox"), drive.root());
+            assertEquals("D:\\", drive.root().getRoot().toString());
+        }
     }
 
     private Path createArgosConfig(String content) throws IOException {

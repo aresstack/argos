@@ -252,7 +252,7 @@ public record ArgosConfig(
     }
 
     /**
-     * Where Argos installs its own Camoufox ({@code ARGOS_BROWSER_DIR}, default {@code ~/.argos/browser}) and an
+     * Where Argos installs its own Camoufox ({@code BROWSER_DIR}, default {@code ~/.argos/browser}) and an
      * optional mirror of the distribution archives ({@code ARGOS_CAMOUFOX_DISTRIBUTION_URL}); the pinned SHA-256
      * checksums apply to a mirror as well.
      */
@@ -266,7 +266,7 @@ public record ArgosConfig(
 
         static BrowserInstallation fromEnvironment(Map<String, String> environment, Path userHome,
                                                    Properties application) {
-            String root = setting(environment, "ARGOS_BROWSER_DIR", application, "browser.install-dir",
+            String root = setting(environment, "BROWSER_DIR", application, "browser.install-dir",
                     userHome.resolve(".argos").resolve("browser").toString());
             String mirror = setting(environment, "ARGOS_CAMOUFOX_DISTRIBUTION_URL", application,
                     "camoufox.distributionUrl", null);

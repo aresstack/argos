@@ -48,7 +48,7 @@ Python wird nur hier gebraucht, nicht auf dem Produktionsrechner.
 ## Installation zur Laufzeit
 
 Beim ersten Browserzugriff (nicht beim Start des HTTP-/MCP-Dienstes) prüft Argos, ob
-`~/.argos/browser/camoufox-<release>-<revision>-<ziel>/` eine verifizierte Installation enthält. Sonst:
+`~/.argos/browser/` (bzw. `BROWSER_DIR`) unter `camoufox-<release>-<revision>-<ziel>/` eine verifizierte Installation enthält. Sonst:
 
 1. Download nach `~/.argos/browser/.partial-<zufall>/` (Java-HTTP-Client, Redirects, Systemproxy-Einstellungen der JVM),
 2. SHA-256 gegen den Pin, bei Abweichung Abbruch ohne Installation,
@@ -105,7 +105,7 @@ Surrogatpaar) und ergänzt sie zur geerbten Prozessumgebung. Unter Linux erzeugt
 |---|---|
 | `ARGOS_CAMOUFOX_EXECUTABLE` / `camoufox.executable` | eigener Camoufox statt der Distribution (muss existieren und `camoufox`/`camoufox.exe` heißen) |
 | `ARGOS_CAMOUFOX_LAUNCH_OPTIONS` / `camoufox.launchOptions` | eigene `launch.json` statt des eingebauten Profils; fehlt oder ist sie ungültig, startet Argos nicht und nennt die Datei |
-| `ARGOS_BROWSER_DIR` / `browser.install-dir` | anderer Installationsordner als `~/.argos/browser` |
+| `BROWSER_DIR` / `browser.install-dir` | anderer Installationsordner als `~/.argos/browser` |
 | `ARGOS_CAMOUFOX_DISTRIBUTION_URL` / `camoufox.distributionUrl` | Spiegel der Archive (`https://…/` oder `file:///…/`); die gepinnten Prüfsummen gelten weiter |
 
 Umgebungsvariablen haben Vorrang vor `~/.argos/argos.properties` (oder `-Dargos.config`). Ein eigener Camoufox ohne

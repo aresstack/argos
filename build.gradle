@@ -58,9 +58,9 @@ tasks.named('test') {
     def camoufoxTests = providers.gradleProperty('testCamoufox').map { it.trim().isEmpty() || it.trim().toBoolean() }.orElse(false).get()
     systemProperty 'argos.testCamoufox', String.valueOf(camoufoxTests)
     // Browser tests without ARGOS_CAMOUFOX_EXECUTABLE use Argos' own distribution, installed under build/ (or
-    // ARGOS_BROWSER_DIR). Only -PtestProvisionedCamoufox may download it; other tests fail fast instead of fetching 1.3 GB.
-    if (!System.getenv('ARGOS_BROWSER_DIR')) {
-        environment 'ARGOS_BROWSER_DIR', layout.buildDirectory.dir('test-camoufox').get().asFile.absolutePath
+    // BROWSER_DIR). Only -PtestProvisionedCamoufox may download it; other tests fail fast instead of fetching 1.3 GB.
+    if (!System.getenv('BROWSER_DIR')) {
+        environment 'BROWSER_DIR', layout.buildDirectory.dir('test-camoufox').get().asFile.absolutePath
     }
     def provisionedTests = providers.gradleProperty('testProvisionedCamoufox')
             .map { it.trim().isEmpty() || it.trim().toBoolean() }.orElse(false).get()

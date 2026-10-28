@@ -82,6 +82,11 @@ class CamoufoxProvisionedSmokeTest {
             assertEquals(profile.path("screen.height").asInt(),
                     ((Number) first.evaluate("() => screen.height")).intValue());
 
+            // Media devices: enumeration works and, before any grant, exposes no audio output (Firefox rule).
+            Object outputs = first.evaluate("async () => (await navigator.mediaDevices.enumerateDevices())"
+                    + ".filter(d => d.kind === 'audiooutput').length");
+            assertEquals(0, ((Number) outputs).intValue());
+
             // The same profile keeps its cookie; another profile directory does not see it.
             first.navigate(base + "/read");
             assertTrue(String.valueOf(first.evaluate("() => document.querySelector('#cookie').textContent"))

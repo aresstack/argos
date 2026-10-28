@@ -39,6 +39,10 @@ manuell:
    `CamoufoxNetworkBoundaryTest` und die Konfigurations-/Installationstests gegen die Installation aus. Der Job schlägt
    fehl, wenn ein Browsertest übersprungen wurde.
 
+Nicht mehr verwendete Revisionen bleiben veröffentlicht und werden vom Workflow als `[superseded]` markiert
+(`SUPERSEDED_TAGS`, derzeit `argos.1`). Argos lädt ausschließlich die in `distribution.properties` gepinnte Revision
+mit deren Prüfsummen.
+
 Python wird nur hier gebraucht, nicht auf dem Produktionsrechner.
 
 ## Installation zur Laufzeit
@@ -73,8 +77,15 @@ installiert, und verweist auf `ARGOS_CAMOUFOX_EXECUTABLE`.
 (camoufox 0.5.8 `launch_options`, Windows-Fingerprint) ohne Änderung der Werte:
 
 - **Fingerprint (`CAMOU_CONFIG`)**: User-Agent Firefox 156 / Windows, `navigator.*`, Bildschirm 1366×800, Fenster
-  1293×752, 24 Kerne, Windows-Schriftliste, Media-Devices (2 Lautsprecher), `audio:seed`, Windows-SAPI-Stimmen,
-  WebGL/WebGL2 (ANGLE, GTX 980) samt Erweiterungen, Parametern und Präzisionen.
+  1293×752, 24 Kerne, Windows-Schriftliste, `audio:seed`, Windows-SAPI-Stimmen, WebGL/WebGL2 (ANGLE, GTX 980) samt
+  Erweiterungen, Parametern und Präzisionen.
+- **Media-Devices**: ein Lautsprecher `Speakers (Realtek(R) Audio)` (Gruppe `hw-1`), kein Mikrofon, keine Kamera.
+  Die Vorlage hatte zusätzlich `DELL S2721DGF (NVIDIA High Definition Audio)`. Beide Bezeichnungen stammen nicht vom
+  Rechner, sondern aus dem Katalog des camoufox-Launchers (`media-devices.json`, Windows): Er zieht pro Identität eine
+  Soundkarte und optional (28 %) ein Monitor-Audiogerät. Argos lässt diesen optionalen Schritt weg, damit kein
+  bestimmtes Monitormodell festgeschrieben ist; das Ergebnis ist eine Kombination, die der Launcher selbst erzeugt.
+  Firefox zeigt Audioausgaben ohnehin erst nach einer Gerätefreigabe; vor der Freigabe sieht eine Seite keinen
+  Unterschied (vom Smoke-Test geprüft). Eigene Hardwarewerte gehen weiterhin über eine eigene `launch.json`.
 - **Firefox-Prefs**: `intl.locale.requested=en-US`, Overlay-Scrollbars, Quota-Limit, DNT/GPC aus, WebGL2, WebRTC an,
   COOP; zusätzlich wie bisher als `CAMOU_PREFS_1..n`, damit Gecko sie schon beim Start liest.
 - **Startargumente**: keine (die Vorlage hatte keine).

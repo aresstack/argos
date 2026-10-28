@@ -29,6 +29,14 @@ class CamoufoxLaunchTest {
         assertTrue(config.path("fonts").size() > 100);
         assertTrue(config.path("webGl:renderer").asText().contains("GTX 980"));
         assertTrue(config.has("voices"));
+        // Media devices stay one consistent machine from the launcher's catalogue, without a monitor model.
+        assertEquals(1, config.path("mediaDevices:speakers").asInt());
+        assertEquals(1, config.path("mediaDevices:speakerLabels").size());
+        assertEquals(1, config.path("mediaDevices:speakerGroups").size());
+        assertEquals("Speakers (Realtek(R) Audio)", config.path("mediaDevices:speakerLabels").get(0).asText());
+        assertEquals(config.path("mediaDevices:micros").asInt(), config.path("mediaDevices:microphoneLabels").size());
+        assertEquals(config.path("mediaDevices:webcams").asInt(), config.path("mediaDevices:webcamLabels").size());
+        assertFalse(config.toString().contains("DELL"));
         assertTrue(config.has("audio:seed"));
         assertFalse(config.has("addons"), "add-on paths are resolved per installation");
         assertEquals("UBO", profile.path("bundledAddons").get(0).asText());

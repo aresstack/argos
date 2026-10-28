@@ -26,6 +26,8 @@ env:
   # uBlock Origin from addons.mozilla.org (the camoufox launcher's default add-on), pinned version and file.
   UBO_VERSION: '1.75.0'
   UBO_URL: https://addons.mozilla.org/firefox/downloads/file/5034826/ublock_origin-1.75.0.xpi
+  # Published revisions Argos no longer uses; kept for history, marked as superseded on the release page.
+  SUPERSEDED_TAGS: camoufox-156.0.1-beta.36-argos.1
   UBO_SHA256: 5b74415860456370644bd80f16125e865b0e6c356bb5dfcfb84069967eaa5287
 
 jobs:
@@ -146,6 +148,19 @@ jobs:
               --notes "Camoufox ${TAG#camoufox-} for Argos: daijro/camoufox release with the WebDriver BiDi fixes of daijro/camoufox#952 (aresstack/playwright4j $HOTPATCH_COMMIT docs/camoufox/hotpatch_omni.py) and uBlock Origin $UBO_VERSION under addons/UBO. Built by run $GITHUB_RUN_ID. Not an Argos release; Argos downloads it by itself and checks the SHA-256 pinned in src/main/resources/camoufox/distribution.properties." \
               *.zip SHA256SUMS
           fi
+
+      - name: Mark superseded revisions (kept, not deleted)
+        shell: bash
+        run: |
+          set -euo pipefail
+          for OLD in $SUPERSEDED_TAGS; do
+            [ "$OLD" = "$TAG" ] && continue
+            gh release view "$OLD" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1 || continue
+            TITLE=$(gh release view "$OLD" --repo "$GITHUB_REPOSITORY" --json name --jq .name)
+            case "$TITLE" in "[superseded]"*) continue ;; esac
+            gh release edit "$OLD" --repo "$GITHUB_REPOSITORY" --prerelease --title "[superseded] $TITLE" \
+              --notes "Superseded by $TAG and no longer used by Argos, which downloads only the revision pinned (with SHA-256) in src/main/resources/camoufox/distribution.properties. Kept for history. Known issue: font files with non-ASCII names cannot be unpacked by a JVM under a C/POSIX locale."
+          done
 
   smoke:
     name: Smoke ${{ matrix.os }} (nativeBehavior=${{ matrix.nativeBehavior }})

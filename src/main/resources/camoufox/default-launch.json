@@ -1,5 +1,5 @@
 {
- "_comment": "Argos default Camoufox launch profile. Fingerprint (CAMOU_CONFIG) and Firefox prefs taken from the launch.json in use on 2026-10-27 (camoufox 0.5.8 launch_options, os=windows, Camoufox 156.0.1-beta.36). The machine-specific addons path was replaced by bundledAddons, which name add-ons shipped inside the Argos Camoufox distribution.",
+ "_comment": "Argos default Camoufox launch profile. Fingerprint (CAMOU_CONFIG) and Firefox prefs taken from the launch.json in use on 2026-10-27 (camoufox 0.5.8 launch_options, os=windows, Camoufox 156.0.1-beta.36). The machine-specific addons path was replaced by bundledAddons, which name add-ons shipped inside the Argos Camoufox distribution. Media devices: the launch.json drew its devices from the camoufox launcher's catalogue (media-devices.json, win): the sound card 'Speakers (Realtek(R) Audio)' without microphone plus the optional display audio 'DELL S2721DGF (NVIDIA High Definition Audio)'. The display audio is left out (one draw step the launcher itself skips for 72 % of identities), so no specific monitor model is fixed; nothing else changed.",
  "config": {
   "navigator.userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:156.0) Gecko/20100101 Firefox/156.0",
   "navigator.hardwareConcurrency": 24,
@@ -146,18 +146,16 @@
   "mediaDevices:enabled": true,
   "mediaDevices:micros": 0,
   "mediaDevices:webcams": 0,
-  "mediaDevices:speakers": 2,
+  "mediaDevices:speakers": 1,
   "mediaDevices:microphoneLabels": [],
   "mediaDevices:microphoneGroups": [],
   "mediaDevices:webcamLabels": [],
   "mediaDevices:webcamGroups": [],
   "mediaDevices:speakerLabels": [
-   "Speakers (Realtek(R) Audio)",
-   "DELL S2721DGF (NVIDIA High Definition Audio)"
+   "Speakers (Realtek(R) Audio)"
   ],
   "mediaDevices:speakerGroups": [
-   "hw-1",
-   "hw-2"
+   "hw-1"
   ],
   "audio:seed": 3319231568,
   "voices": [

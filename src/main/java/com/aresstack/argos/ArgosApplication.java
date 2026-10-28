@@ -1,5 +1,13 @@
 package com.aresstack.argos;
 
+import com.aresstack.argos.history.SearchHistory;
+import com.aresstack.argos.convenience.ConvenienceSession;
+import com.aresstack.argos.convenience.DomainCoordinator;
+import com.aresstack.argos.history.SearchHistoryCapture;
+import com.aresstack.argos.search.ParallelWebSearch;
+import com.aresstack.argos.history.SearchHistoryDownloadServlet;
+import com.aresstack.argos.history.SearchHistoryDownloads;
+import com.aresstack.argos.history.SearchHistorySettings;
 import com.aresstack.argos.research.ResearchSettings;
 import com.aresstack.argos.search.BrowserWebSearch;
 import com.aresstack.argos.web.UrlPolicy;
@@ -46,25 +54,133 @@ public final class ArgosApplication {
             return;
         }
         ArgosConfig config = ArgosConfig.fromEnvironment();
-        CamoufoxBrowser browser = new CamoufoxBrowser(config);
-        // One security logic: every early URL check delegates to the proxy's NetworkPolicy.
-        UrlPolicy urlPolicy = UrlPolicy.from(config.network());
-        ResearchDocuments documents = new ResearchDocuments(browser, new DocumentStore(), urlPolicy);
-        List<SyncToolSpecification> tools = new ArgosTools(browser,
-                new WebSession(browser, urlPolicy, new BrowserWebSearch(browser)),
-                ResearchSettings.fromEnvironment(), new DocumentAndBatchTools(documents))
-                .forProfile(config.toolProfile());
+        ArgosConfig.ProfileIsolation isolation = ArgosConfig.ProfileIsolation.fromEnvironment();
+        SearchHistorySettings historySettings = SearchHistorySettings.fromEnvironment();
+        List<SyncToolSpecification> tools;
+        AutoCloseable browsers;
+        if (isolation.perChat()) {
+            // One isolated, persistent profile (and Camoufox process) per ChatGPT conversation context. The chat's
+            // Search History is history/ next to profile/ and contexts/ (all user contexts share it).
+            ChatRoutedTools routed = new ChatRoutedTools(new ChatProfiles(isolation.chatRoot()),
+                    profile -> workspace(config.withProfile(profile), historySettings.enabled()
+                            ? profile.getParent().resolve("history") : null, historySettings), isolation.maxBrowsers(),
+                    java.time.Duration.ofMinutes(isolation.idleMinutes()));
+            // The template only supplies the tool definitions; its browser is never started and its history
+            // directory is never written (its handlers are never called).
+            ChatRoutedTools.Workspace template = workspace(config, historySettings.enabled()
+                    ? isolation.chatRoot().resolve("_template").resolve("history") : null, historySettings);
+            tools = routed.specifications(template.tools(), config.toolProfile() == ToolProfile.EXPERT);
+            template.resources().close();
+            browsers = routed;
+        } else {
+            if (historySettings.enabled()) System.out.println(SINGLE_PROFILE_HISTORY);
+            ChatRoutedTools.Workspace single = workspace(config, null, historySettings);
+            tools = single.tools();
+            browsers = single.resources();
+        }
         RunningServer running = serve(config, tools);
         Runtime.getRuntime().addShutdownHook(Thread.ofPlatform().name("argos-shutdown").unstarted(() -> {
             running.close();
-            browser.close();
-            documents.close();
+            try {
+                browsers.close();
+            } catch (Exception error) {
+                System.err.println("Failed to stop Argos browsers: " + error.getMessage());
+            }
         }));
 
         System.out.println("Argos ready: http://" + config.host() + ":" + running.port()
                 + "/ (MCP root, health: /health, tool profile: "
-                + config.toolProfile().name().toLowerCase(java.util.Locale.ROOT) + ")");
+                + config.toolProfile().name().toLowerCase(java.util.Locale.ROOT)
+                + ", browser profiles: " + (isolation.perChat() ? "per ChatGPT conversation" : "single") + ")");
         running.server().join();
+    }
+
+    /** The complete Argos tool stack on one browser profile: browser, web session, documents. */
+    static ChatRoutedTools.Workspace workspace(ArgosConfig config) {
+        return workspace(config, null, null);
+    }
+
+    static final String SINGLE_PROFILE_HISTORY = "Search History is disabled: ARGOS_PROFILE_ISOLATION=single has no "
+            + "reliable chat key, and Argos keeps no global history. Start Argos with ARGOS_PROFILE_ISOLATION=chat "
+            + "(the default) to use search_history, search_history_export, search_history_capture_settings and "
+            + "browser_archive_html.";
+    static final String HISTORY_SWITCHED_OFF = "Search History is switched off on this Argos server "
+            + "(ARGOS_SEARCH_HISTORY=false).";
+
+    /**
+     * @param historyDirectory this chat's Search History, or null without one; then search_history and
+     *                         search_history_export are still published (stable tool list) and explain why they are off
+     * @param historySettings  null for the plain workspace without any Search History tools
+     */
+    static ChatRoutedTools.Workspace workspace(ArgosConfig config, java.nio.file.Path historyDirectory,
+                                               SearchHistorySettings historySettings) {
+        CamoufoxBrowser browser = new CamoufoxBrowser(config);
+        // One security logic: every early URL check delegates to the proxy's NetworkPolicy.
+        UrlPolicy urlPolicy = UrlPolicy.from(config.network());
+        ResearchDocuments documents = new ResearchDocuments(browser, new DocumentStore(), urlPolicy);
+        SearchHistoryCapture history = historyDirectory == null ? null : new SearchHistoryCapture(
+                new SearchHistory(historyDirectory, historySettings.captureDefaults()),
+                new SearchHistoryCapture.LivePages() {
+                    @Override
+                    public com.aresstack.argos.web.PageCapture capture(String tabId) {
+                        return browser.capturePage(tabId);
+                    }
+
+                    @Override
+                    public Object evaluate(String function, String tabId) {
+                        return browser.evaluate(function, tabId);
+                    }
+                }, historySettings.collectorTimeoutMillis());
+        // Received response bodies of this chat's browser go into this chat's history only.
+        if (history != null) browser.contentSink(history.networkContent());
+        com.aresstack.argos.web.WebSearchPort search = new BrowserWebSearch(browser);
+        if (history != null) search = history.capturingSearch(search);
+        ArgosTools argosTools = new ArgosTools(browser,
+                new WebSession(browser, urlPolicy, search),
+                ResearchSettings.fromEnvironment(), new DocumentAndBatchTools(documents), history);
+        if (config.toolProfile().convenienceBased()) {
+            argosTools.withConvenience(new ConvenienceTools(convenienceSession(browser, urlPolicy, history)));
+        }
+        List<SyncToolSpecification> tools = argosTools.forProfile(config.toolProfile());
+        if (history == null && historySettings != null && config.toolProfile() != ToolProfile.LEGACY) {
+            List<SyncToolSpecification> all = new java.util.ArrayList<>(tools);
+            all.addAll(com.aresstack.argos.history.SearchHistoryTools.disabled(historySettings.enabled()
+                    ? SINGLE_PROFILE_HISTORY : HISTORY_SWITCHED_OFF).specifications());
+            tools = List.copyOf(all);
+        }
+        java.util.function.BiConsumer<String, java.nio.file.Path> contexts = history == null ? browser::useContext
+                : (id, cookies) -> {
+                    browser.useContext(id, cookies);
+                    history.useContext(id);
+                };
+        return new ChatRoutedTools.Workspace(tools, contexts, () -> {
+            browser.close();
+            documents.close();
+        });
+    }
+
+    /**
+     * The convenience profile's research session of one workspace: parallel search over all engines in their own
+     * tabs, every navigation under the process-wide domain coordinator (shared by all chats), pages recorded in the
+     * chat's Search History (one event per web_search).
+     */
+    static ConvenienceSession convenienceSession(CamoufoxBrowser browser, UrlPolicy urlPolicy,
+                                                 SearchHistoryCapture history) {
+        DomainCoordinator coordinator = DomainCoordinator.shared();
+        ParallelWebSearch search = ParallelWebSearch.fromEnvironment(browser, coordinator);
+        ConvenienceSession.History recorder = history == null ? null : new ConvenienceSession.History() {
+            @Override
+            public void search(String query, String providers, List<com.aresstack.argos.web.SearchHit> hits) {
+                history.search(query, providers, hits);
+            }
+
+            @Override
+            public void page(com.aresstack.argos.web.PageCapture capture, String requestedUrl, boolean newVisit,
+                             String tool, String tab) {
+                history.tabPage(capture, requestedUrl, newVisit, tool, tab);
+            }
+        };
+        return new ConvenienceSession(browser, coordinator, urlPolicy, search::search, recorder);
     }
 
     /** The started HTTP endpoint: Streamable HTTP MCP at the root, /health and protected-resource metadata. */
@@ -91,6 +207,7 @@ public final class ArgosApplication {
         McpSyncServer mcp = McpServer.sync(transport)
                 .serverInfo("argos", ArgosTools.VERSION)
                 .capabilities(ServerCapabilities.builder().tools(true).build())
+                .instructions(config.toolProfile().convenienceBased() ? ConvenienceTools.INSTRUCTIONS : null)
                 .tools(tools).build();
 
         Server server = new Server(new InetSocketAddress(config.host(), config.port()));
@@ -103,10 +220,18 @@ public final class ArgosApplication {
         authorization.setAsyncSupported(true);
         context.addFilter(authorization, "/", EnumSet.of(DispatcherType.REQUEST, DispatcherType.ASYNC));
         context.addServlet(new ServletHolder(new HealthServlet()), "/health");
+        // Search History exports: outside the bearer filter (a browser download carries no token); the random,
+        // expiring export id is the link's credential, see SearchHistoryDownloads.
+        SearchHistoryDownloads downloads = SearchHistoryDownloads.shared();
+        context.addServlet(new ServletHolder(new SearchHistoryDownloadServlet(downloads)),
+                SearchHistoryDownloads.PATH + "*");
         context.addServlet(new ServletHolder(new ProtectedResourceServlet(config)),
                 "/.well-known/oauth-protected-resource");
         server.setHandler(context);
         server.start();
+        int port = ((org.eclipse.jetty.server.ServerConnector) server.getConnectors()[0]).getLocalPort();
+        downloads.origin(config.publicOrigin() != null ? config.publicOrigin()
+                : "http://" + (config.host().contains(":") ? "[" + config.host() + "]" : config.host()) + ":" + port);
         return new RunningServer(server, mcp,
                 ((org.eclipse.jetty.server.ServerConnector) server.getConnectors()[0]).getLocalPort());
     }

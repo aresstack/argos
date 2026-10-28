@@ -1,0 +1,861 @@
+[ {
+  "name" : "web_search",
+  "description" : "Search the web. Returns results result-1, result-2, ... with title, url and snippet. Example: {\"query\": \"camoufox webdriver bidi\"}",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "query" : {
+        "description" : "What to search for",
+        "type" : "string"
+      }
+    },
+    "required" : [ "query" ],
+    "additionalProperties" : false,
+    "$defs" : { },
+    "definitions" : { }
+  }
+}, {
+  "name" : "web_open",
+  "description" : "Open a web page and return its title and text. An 'HTTP error:' line marks a page the server could not deliver; then try another page or result. Example: {\"url\": \"https://en.wikipedia.org/wiki/Firefox\"}",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "url" : {
+        "description" : "Full http(s) URL",
+        "type" : "string"
+      }
+    },
+    "required" : [ "url" ],
+    "additionalProperties" : false,
+    "$defs" : { },
+    "definitions" : { }
+  }
+}, {
+  "name" : "web_read",
+  "description" : "Read the text of the page the browser shows, whichever tool opened it. Long pages come in parts: the answer says PART 1 of 3, then ask for the next part. Example: {\"part\": 2}",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "part" : {
+        "description" : "Part number, default 1",
+        "type" : "integer"
+      }
+    },
+    "required" : [ ],
+    "additionalProperties" : false,
+    "$defs" : { },
+    "definitions" : { }
+  }
+}, {
+  "name" : "web_find",
+  "description" : "Find a word or phrase on the page the browser shows without reading the whole page. Returns the number of matches and short snippets, each with the web_read part it is in. Example: {\"text\": \"opening hours\"}",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "text" : {
+        "description" : "Word or phrase to find; case does not matter",
+        "type" : "string"
+      }
+    },
+    "required" : [ "text" ],
+    "additionalProperties" : false,
+    "$defs" : { },
+    "definitions" : { }
+  }
+}, {
+  "name" : "web_links",
+  "description" : "List the links of the page the browser shows as link-1, link-2, ... Use the id with web_follow. Call web_read first if the page loaded more content. Example: {}",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : { },
+    "required" : [ ],
+    "additionalProperties" : false,
+    "$defs" : { },
+    "definitions" : { }
+  }
+}, {
+  "name" : "web_follow",
+  "description" : "Open a link by its id: link-3 from web_links or result-2 from web_search. A bare number uses the list you saw last. An 'HTTP error:' line marks a page the server could not deliver; then try another result or link. Example: {\"link_id\": \"link-3\"}",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "link_id" : {
+        "description" : "Id such as link-3 or result-2",
+        "type" : "string"
+      }
+    },
+    "required" : [ "link_id" ],
+    "additionalProperties" : false,
+    "$defs" : { },
+    "definitions" : { }
+  }
+}, {
+  "name" : "web_back",
+  "description" : "Go back to the previous page and return its text. Example: {}",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : { },
+    "required" : [ ],
+    "additionalProperties" : false,
+    "$defs" : { },
+    "definitions" : { }
+  }
+}, {
+  "name" : "browser_status",
+  "description" : "Report whether Argos' dedicated Camoufox session is running.",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : { },
+    "required" : [ ],
+    "additionalProperties" : false,
+    "$defs" : { },
+    "definitions" : { }
+  }
+}, {
+  "name" : "browser_navigate",
+  "description" : "Navigate the current tab or the specified tab id to an http(s) URL. Omit tab to keep current-tab behavior.",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "tab" : {
+        "description" : "Optional tab id from browser_tabs, e.g. t2",
+        "type" : "string"
+      },
+      "url" : {
+        "description" : "Full http(s) website URL",
+        "type" : "string"
+      }
+    },
+    "required" : [ "url" ],
+    "additionalProperties" : false,
+    "$defs" : { },
+    "definitions" : { }
+  }
+}, {
+  "name" : "browser_snapshot",
+  "description" : "Read the current tab or the specified tab id as text. Works for HTML (visible text), XML/RSS/Atom feeds (numbered entries), JSON and plain text; binary documents such as PDF are reported with documentType 'binary' and a hint instead of text.",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "tab" : {
+        "description" : "Optional tab id from browser_tabs, e.g. t2",
+        "type" : "string"
+      },
+      "maxCharacters" : {
+        "description" : "Maximum characters (1000–60000, default 16000)",
+        "type" : "integer"
+      }
+    },
+    "required" : [ ],
+    "additionalProperties" : false,
+    "$defs" : { },
+    "definitions" : { }
+  }
+}, {
+  "name" : "browser_inspect",
+  "description" : "Inspect DOM elements matching a CSS selector in the current or specified tab, including text, links and attributes.",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "tab" : {
+        "description" : "Optional tab id from browser_tabs, e.g. t2",
+        "type" : "string"
+      },
+      "selector" : {
+        "description" : "CSS selector",
+        "type" : "string"
+      },
+      "limit" : {
+        "description" : "Maximum elements (1–50, default 20)",
+        "type" : "integer"
+      }
+    },
+    "required" : [ "selector" ],
+    "additionalProperties" : false,
+    "$defs" : { },
+    "definitions" : { }
+  }
+}, {
+  "name" : "browser_click",
+  "description" : "Click the first element matching a CSS selector in the current or specified tab.",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "tab" : {
+        "description" : "Optional tab id from browser_tabs, e.g. t2",
+        "type" : "string"
+      },
+      "selector" : {
+        "description" : "CSS selector",
+        "type" : "string"
+      }
+    },
+    "required" : [ "selector" ],
+    "additionalProperties" : false,
+    "$defs" : { },
+    "definitions" : { }
+  }
+}, {
+  "name" : "browser_fill",
+  "description" : "Fill an input field in the current or specified tab, replacing its existing contents.",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "tab" : {
+        "description" : "Optional tab id from browser_tabs, e.g. t2",
+        "type" : "string"
+      },
+      "selector" : {
+        "description" : "CSS selector",
+        "type" : "string"
+      },
+      "text" : {
+        "description" : "Text to enter",
+        "type" : "string"
+      }
+    },
+    "required" : [ "selector", "text" ],
+    "additionalProperties" : false,
+    "$defs" : { },
+    "definitions" : { }
+  }
+}, {
+  "name" : "browser_evaluate",
+  "description" : "Evaluate JavaScript in the current or specified tab and return its result. This can change that page.",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "tab" : {
+        "description" : "Optional tab id from browser_tabs, e.g. t2",
+        "type" : "string"
+      },
+      "expression" : {
+        "description" : "JavaScript expression or function, e.g. () => document.title",
+        "type" : "string"
+      }
+    },
+    "required" : [ "expression" ],
+    "additionalProperties" : false,
+    "$defs" : { },
+    "definitions" : { }
+  }
+}, {
+  "name" : "browser_network",
+  "description" : "List recent requests and responses for the whole session or one tab, one line per request with an id (URLs have query parameters redacted). Optional filter, e.g. \"xhr\", \"json\", \"failed\" or \"api/\".",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "tab" : {
+        "description" : "Optional tab id from browser_tabs, e.g. t2; page-scoped results omit proxy events that cannot be attributed to one tab",
+        "type" : "string"
+      },
+      "filter" : {
+        "description" : "Optional case-insensitive text matched against url, type, mime, kind, status",
+        "type" : "string"
+      }
+    },
+    "required" : [ ],
+    "additionalProperties" : false,
+    "$defs" : { },
+    "definitions" : { }
+  }
+}, {
+  "name" : "browser_screenshot",
+  "description" : "Take a PNG screenshot of the current Camoufox page or a specified tab. mode: viewport (default, what is on screen), full (whole page) or element (one control, needs target). mark=true draws the numbered controls into the image. A text part explains how image pixels map to viewport CSS pixels for mouse input. Example: {\"mode\": \"viewport\", \"mark\": true}",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "mode" : {
+        "description" : "viewport | full | element",
+        "type" : "string"
+      },
+      "target" : {
+        "description" : "For mode element: control number, aria ref or locator, e.g. 3 or role=button name=\"Suchen\"",
+        "type" : "string"
+      },
+      "tab" : {
+        "description" : "Optional tab id from browser_tabs, e.g. t2",
+        "type" : "string"
+      },
+      "mark" : {
+        "description" : "Draw numbered boxes around the page's controls",
+        "type" : "boolean"
+      }
+    },
+    "required" : [ ],
+    "additionalProperties" : false,
+    "$defs" : { },
+    "definitions" : { }
+  }
+}, {
+  "name" : "browser_tabs",
+  "description" : "List open tabs (id, URL, title); the current tab is marked.",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : { },
+    "required" : [ ],
+    "additionalProperties" : false,
+    "$defs" : { },
+    "definitions" : { }
+  }
+}, {
+  "name" : "browser_tab_new",
+  "description" : "Open a new tab, make it current and optionally load an http(s) URL.",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "url" : {
+        "description" : "Optional URL, e.g. https://example.org",
+        "type" : "string"
+      }
+    },
+    "required" : [ ],
+    "additionalProperties" : false,
+    "$defs" : { },
+    "definitions" : { }
+  }
+}, {
+  "name" : "browser_tab_select",
+  "description" : "Make a tab current. Later browser tools act on it.",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "tab" : {
+        "description" : "Tab id from browser_tabs, e.g. t2",
+        "type" : "string"
+      }
+    },
+    "required" : [ "tab" ],
+    "additionalProperties" : false,
+    "$defs" : { },
+    "definitions" : { }
+  }
+}, {
+  "name" : "browser_tab_close",
+  "description" : "Close a tab. The last remaining tab cannot be closed.",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "tab" : {
+        "description" : "Tab id from browser_tabs, e.g. t2",
+        "type" : "string"
+      }
+    },
+    "required" : [ "tab" ],
+    "additionalProperties" : false,
+    "$defs" : { },
+    "definitions" : { }
+  }
+}, {
+  "name" : "browser_back",
+  "description" : "Go back one page in the current or specified tab's history.",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "tab" : {
+        "description" : "Optional tab id from browser_tabs, e.g. t2",
+        "type" : "string"
+      }
+    },
+    "required" : [ ],
+    "additionalProperties" : false,
+    "$defs" : { },
+    "definitions" : { }
+  }
+}, {
+  "name" : "browser_forward",
+  "description" : "Go forward one page in the current or specified tab's history.",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "tab" : {
+        "description" : "Optional tab id from browser_tabs, e.g. t2",
+        "type" : "string"
+      }
+    },
+    "required" : [ ],
+    "additionalProperties" : false,
+    "$defs" : { },
+    "definitions" : { }
+  }
+}, {
+  "name" : "browser_reload",
+  "description" : "Reload the current or specified tab.",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "tab" : {
+        "description" : "Optional tab id from browser_tabs, e.g. t2",
+        "type" : "string"
+      }
+    },
+    "required" : [ ],
+    "additionalProperties" : false,
+    "$defs" : { },
+    "definitions" : { }
+  }
+}, {
+  "name" : "browser_controls",
+  "description" : "List visible, enabled controls on the current or specified tab (fields, buttons, checkboxes, selects, tabs, menu items) with number, aria ref and a reusable semantic locator.",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "filter" : {
+        "description" : "Optional text the role, name or value must contain",
+        "type" : "string"
+      },
+      "tab" : {
+        "description" : "Optional tab id from browser_tabs, e.g. t2",
+        "type" : "string"
+      },
+      "limit" : {
+        "description" : "Maximum controls (1-200, default 60)",
+        "type" : "integer"
+      }
+    },
+    "required" : [ ],
+    "additionalProperties" : false,
+    "$defs" : { },
+    "definitions" : { }
+  }
+}, {
+  "name" : "browser_click_target",
+  "description" : "Click an element in the current or specified tab with real mouse input at its on-screen position. A control number from the control list (e.g. 3), an aria ref (e.g. e12), a semantic locator (e.g. role=button name=\"Suchen\", label=\"E-Mail\", placeholder=\"Search\", text=\"Weiter\") or simply the visible name (e.g. Suchen).",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "target" : {
+        "description" : "What to click, e.g. role=button name=\"Anmelden\"",
+        "type" : "string"
+      },
+      "tab" : {
+        "description" : "Optional tab id from browser_tabs, e.g. t2",
+        "type" : "string"
+      }
+    },
+    "required" : [ "target" ],
+    "additionalProperties" : false,
+    "$defs" : { },
+    "definitions" : { }
+  }
+}, {
+  "name" : "browser_fill_target",
+  "description" : "Click into a field in the current or specified tab and type text with real key presses, replacing its content. End the text with a newline to press Enter. A control number from the control list (e.g. 3), an aria ref (e.g. e12), a semantic locator (e.g. role=button name=\"Suchen\", label=\"E-Mail\", placeholder=\"Search\", text=\"Weiter\") or simply the visible name (e.g. Suchen).",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "target" : {
+        "description" : "Which field, e.g. label=\"Suche\"",
+        "type" : "string"
+      },
+      "tab" : {
+        "description" : "Optional tab id from browser_tabs, e.g. t2",
+        "type" : "string"
+      },
+      "text" : {
+        "description" : "Text to type",
+        "type" : "string"
+      }
+    },
+    "required" : [ "target", "text" ],
+    "additionalProperties" : false,
+    "$defs" : { },
+    "definitions" : { }
+  }
+}, {
+  "name" : "browser_mouse_move",
+  "description" : "Move the mouse pointer to a point in the current or specified tab without clicking. Coordinates are CSS pixels in the browser viewport (the visible part of the page, as in browser_screenshot): x=0, y=0 is its top left corner and does not move when the page scrolls.",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "y" : {
+        "description" : "Vertical position in CSS pixels from the viewport's top edge",
+        "type" : "number"
+      },
+      "x" : {
+        "description" : "Horizontal position in CSS pixels from the viewport's left edge",
+        "type" : "number"
+      },
+      "tab" : {
+        "description" : "Optional tab id from browser_tabs, e.g. t2",
+        "type" : "string"
+      }
+    },
+    "required" : [ "x", "y" ],
+    "additionalProperties" : false,
+    "$defs" : { },
+    "definitions" : { }
+  }
+}, {
+  "name" : "browser_mouse_click",
+  "description" : "Click with real mouse input at a point in the current or specified tab. Prefer browser_click_target when the element is a listed control; use this for canvases, maps or spots without a name. Coordinates are CSS pixels in the browser viewport (the visible part of the page, as in browser_screenshot): x=0, y=0 is its top left corner and does not move when the page scrolls.",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "button" : {
+        "description" : "left (default), middle or right",
+        "type" : "string"
+      },
+      "y" : {
+        "description" : "Vertical position in CSS pixels from the viewport's top edge",
+        "type" : "number"
+      },
+      "x" : {
+        "description" : "Horizontal position in CSS pixels from the viewport's left edge",
+        "type" : "number"
+      },
+      "tab" : {
+        "description" : "Optional tab id from browser_tabs, e.g. t2",
+        "type" : "string"
+      }
+    },
+    "required" : [ "x", "y" ],
+    "additionalProperties" : false,
+    "$defs" : { },
+    "definitions" : { }
+  }
+}, {
+  "name" : "browser_hover",
+  "description" : "Rest the mouse pointer on an element in the current or specified tab without clicking, e.g. to open a hover menu or show a tooltip. Scrolls it into view with the mouse wheel if needed. A control number from the control list (e.g. 3), an aria ref (e.g. e12), a semantic locator (e.g. role=button name=\"Suchen\", label=\"E-Mail\", placeholder=\"Search\", text=\"Weiter\") or simply the visible name (e.g. Suchen).",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "target" : {
+        "description" : "What to hover, e.g. role=menuitem name=\"Produkte\"",
+        "type" : "string"
+      },
+      "tab" : {
+        "description" : "Optional tab id from browser_tabs, e.g. t2",
+        "type" : "string"
+      }
+    },
+    "required" : [ "target" ],
+    "additionalProperties" : false,
+    "$defs" : { },
+    "definitions" : { }
+  }
+}, {
+  "name" : "browser_scroll",
+  "description" : "Turn the mouse wheel in the current or specified tab. Positive delta_y scrolls down, negative up; positive delta_x scrolls right, negative left (CSS pixels). The element under the pointer scrolls: give a target or x/y to scroll a list or panel instead of the page. Coordinates are CSS pixels in the browser viewport (the visible part of the page, as in browser_screenshot): x=0, y=0 is its top left corner and does not move when the page scrolls.",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "delta_x" : {
+        "description" : "Horizontal wheel distance in CSS pixels (default 0)",
+        "type" : "number"
+      },
+      "y" : {
+        "description" : "Optional pointer y in CSS pixels; requires x",
+        "type" : "number"
+      },
+      "target" : {
+        "description" : "Optional element to scroll over. A control number from the control list (e.g. 3), an aria ref (e.g. e12), a semantic locator (e.g. role=button name=\"Suchen\", label=\"E-Mail\", placeholder=\"Search\", text=\"Weiter\") or simply the visible name (e.g. Suchen).",
+        "type" : "string"
+      },
+      "x" : {
+        "description" : "Optional pointer x in CSS pixels; requires y",
+        "type" : "number"
+      },
+      "tab" : {
+        "description" : "Optional tab id from browser_tabs, e.g. t2",
+        "type" : "string"
+      },
+      "delta_y" : {
+        "description" : "Vertical wheel distance in CSS pixels (default 0)",
+        "type" : "number"
+      }
+    },
+    "required" : [ ],
+    "additionalProperties" : false,
+    "$defs" : { },
+    "definitions" : { }
+  }
+}, {
+  "name" : "browser_drag",
+  "description" : "Drag and drop with real mouse input in the current or specified tab: press on the source, move, release on the target, e.g. to sort a list, move a card or drop a file entry onto a folder. Give the source as source or from_x/from_y and the target as target or to_x/to_y. Works for pages that drag with pointer or mouse events (sliders, maps, most sortable lists); native HTML5 drag and drop (draggable elements) does not complete in Firefox, the result then carries a warning. A control number from the control list (e.g. 3), an aria ref (e.g. e12), a semantic locator (e.g. role=button name=\"Suchen\", label=\"E-Mail\", placeholder=\"Search\", text=\"Weiter\") or simply the visible name (e.g. Suchen). Coordinates are CSS pixels in the browser viewport (the visible part of the page, as in browser_screenshot): x=0, y=0 is its top left corner and does not move when the page scrolls.",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "target" : {
+        "description" : "Element to drop on, e.g. role=region name=\"Erledigt\"",
+        "type" : "string"
+      },
+      "source" : {
+        "description" : "Element to pick up, e.g. text=\"Karte 1\"",
+        "type" : "string"
+      },
+      "to_y" : {
+        "description" : "End y in CSS pixels instead of target; requires to_x",
+        "type" : "number"
+      },
+      "to_x" : {
+        "description" : "End x in CSS pixels instead of target; requires to_y",
+        "type" : "number"
+      },
+      "from_y" : {
+        "description" : "Start y in CSS pixels instead of source; requires from_x",
+        "type" : "number"
+      },
+      "from_x" : {
+        "description" : "Start x in CSS pixels instead of source; requires from_y",
+        "type" : "number"
+      },
+      "tab" : {
+        "description" : "Optional tab id from browser_tabs, e.g. t2",
+        "type" : "string"
+      }
+    },
+    "required" : [ ],
+    "additionalProperties" : false,
+    "$defs" : { },
+    "definitions" : { }
+  }
+}, {
+  "name" : "browser_press_key",
+  "description" : "Press a key or shortcut in the current or specified tab with real key events, e.g. Enter, Escape, Tab, ArrowDown, PageDown, Control+a, Shift+Tab. Optionally click into a target first; otherwise the focused element gets the keys. To type text, use browser_fill_target. A control number from the control list (e.g. 3), an aria ref (e.g. e12), a semantic locator (e.g. role=button name=\"Suchen\", label=\"E-Mail\", placeholder=\"Search\", text=\"Weiter\") or simply the visible name (e.g. Suchen).",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "target" : {
+        "description" : "Optional element to focus first, e.g. label=\"Suche\"",
+        "type" : "string"
+      },
+      "times" : {
+        "description" : "How often to press it (1-20, default 1)",
+        "type" : "integer"
+      },
+      "tab" : {
+        "description" : "Optional tab id from browser_tabs, e.g. t2",
+        "type" : "string"
+      },
+      "keys" : {
+        "description" : "Key or combination, e.g. Escape or Control+Enter",
+        "type" : "string"
+      }
+    },
+    "required" : [ "keys" ],
+    "additionalProperties" : false,
+    "$defs" : { },
+    "definitions" : { }
+  }
+}, {
+  "name" : "browser_extract",
+  "description" : "Extract structure from the current or specified tab's HTML page. kind: overview (default), headings, links, tables, lists, metadata (description, Open Graph, citation_* tags), jsonld.",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "kind" : {
+        "description" : "overview | headings | links | tables | lists | metadata | jsonld",
+        "type" : "string"
+      },
+      "tab" : {
+        "description" : "Optional tab id from browser_tabs, e.g. t2",
+        "type" : "string"
+      },
+      "scope" : {
+        "description" : "Optional landmark role or name limiting headings/links/tables/lists, e.g. main, article, navigation",
+        "type" : "string"
+      }
+    },
+    "required" : [ ],
+    "additionalProperties" : false,
+    "$defs" : { },
+    "definitions" : { }
+  }
+}, {
+  "name" : "browser_pages_navigate",
+  "description" : "Navigate 1-10 distinct existing tabs in one call. Starts up to 4 navigations to response commit, then waits for each page; document loading can overlap. Results remain in input order. A failed or timed-out page gets its own error result; other pages continue. Do not include a tab more than once.",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "pages" : {
+        "items" : {
+          "properties" : {
+            "tab" : {
+              "description" : "Existing tab id from browser_tabs, e.g. t2",
+              "type" : "string"
+            },
+            "url" : {
+              "description" : "Absolute http(s) URL to navigate to",
+              "type" : "string"
+            }
+          },
+          "type" : "object",
+          "required" : [ "tab", "url" ],
+          "additionalProperties" : false
+        },
+        "description" : "1-10 objects with a distinct tab id and absolute http(s) URL",
+        "type" : "array"
+      },
+      "parallel" : {
+        "description" : "Maximum in-flight pages (1-4, default 4)",
+        "type" : "integer"
+      },
+      "timeoutMs" : {
+        "description" : "Per-page timeout in milliseconds for response commit and for document load (500-20000, default 10000)",
+        "type" : "integer"
+      }
+    },
+    "required" : [ "pages" ],
+    "additionalProperties" : false,
+    "$defs" : { },
+    "definitions" : { }
+  }
+}, {
+  "name" : "browser_pages_snapshot",
+  "description" : "Read snapshots from 1-10 existing tabs in one call. Each result identifies its tab and URL; a missing or unreadable tab produces an error for that tab only.",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "maxCharacters" : {
+        "description" : "Maximum characters per snapshot (1000-60000, default 16000)",
+        "type" : "integer"
+      },
+      "tabs" : {
+        "items" : {
+          "type" : "string"
+        },
+        "description" : "Distinct tab ids from browser_tabs, e.g. [\"t1\", \"t2\"]",
+        "type" : "array"
+      }
+    },
+    "required" : [ "tabs" ],
+    "additionalProperties" : false,
+    "$defs" : { },
+    "definitions" : { }
+  }
+}, {
+  "name" : "browser_pages_inspect",
+  "description" : "Inspect the same CSS selector in 1-10 existing tabs in one read-only batch. Each result identifies its tab and URL; a missing or unreadable tab produces an error for that tab only.",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "tabs" : {
+        "items" : {
+          "type" : "string"
+        },
+        "description" : "Distinct tab ids from browser_tabs, e.g. [\"t1\", \"t2\"]",
+        "type" : "array"
+      },
+      "selector" : {
+        "description" : "CSS selector to inspect in each tab",
+        "type" : "string"
+      },
+      "limit" : {
+        "description" : "Maximum elements per tab (1-50, default 20)",
+        "type" : "integer"
+      }
+    },
+    "required" : [ "tabs", "selector" ],
+    "additionalProperties" : false,
+    "$defs" : { },
+    "definitions" : { }
+  }
+}, {
+  "name" : "browser_wait",
+  "description" : "Wait until the page has finished loading (network quiet; stricter checks if configured). Optionally also wait for a visible element or text. Never fails on timeout; check readiness.state ('ready' or 'timeout') and readiness.pending. Example: {\"text\": \"Search results\", \"timeoutMs\": 10000}",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "timeoutMs" : {
+        "description" : "Maximum wait in milliseconds (500–60000, default 10000)",
+        "type" : "integer"
+      },
+      "selector" : {
+        "description" : "Optional CSS selector that must become visible, e.g. '#results'",
+        "type" : "string"
+      },
+      "tab" : {
+        "description" : "Optional tab id from browser_tabs, e.g. t2",
+        "type" : "string"
+      },
+      "text" : {
+        "description" : "Optional text that must become visible on the page",
+        "type" : "string"
+      }
+    },
+    "required" : [ ],
+    "additionalProperties" : false,
+    "$defs" : { },
+    "definitions" : { }
+  }
+}, {
+  "name" : "browser_network_json",
+  "description" : "List the JSON data the page loaded in the background (XHR/fetch APIs), newest first, with id, URL and top-level keys, e.g. {results[20], total}. Read one fully with browser_network_detail and body=true. Captured invisibly by the browser. Example: {\"filter\":\"search\"}",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "filter" : {
+        "description" : "Optional text the URL must contain",
+        "type" : "string"
+      },
+      "tab" : {
+        "description" : "Optional tab id from browser_tabs, e.g. t2",
+        "type" : "string"
+      },
+      "limit" : {
+        "description" : "Maximum responses (1–20, default 10)",
+        "type" : "integer"
+      }
+    },
+    "required" : [ ],
+    "additionalProperties" : false,
+    "$defs" : { },
+    "definitions" : { }
+  }
+}, {
+  "name" : "browser_network_detail",
+  "description" : "Show one request from browser_network by id: full URL, status, MIME type, timing, request/response headers and POST data. Secrets (cookies, tokens, passwords) are masked. Set body=true to include the text response body. Example: {\"id\":\"n12\",\"body\":true}",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "id" : {
+        "description" : "Request id from browser_network, e.g. n12",
+        "type" : "string"
+      },
+      "tab" : {
+        "description" : "Optional tab id from browser_tabs; reject ids from other tabs",
+        "type" : "string"
+      },
+      "body" : {
+        "description" : "Include the response body for text/JSON/XML responses (default false)",
+        "type" : "boolean"
+      }
+    },
+    "required" : [ "id" ],
+    "additionalProperties" : false,
+    "$defs" : { },
+    "definitions" : { }
+  }
+}, {
+  "name" : "browser_network_har",
+  "description" : "Export the newest recorded requests as HAR 1.2 JSON with masked secrets. Bodies appear only if already captured. Example: {\"limit\":30}",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "tab" : {
+        "description" : "Optional tab id from browser_tabs, e.g. t2",
+        "type" : "string"
+      },
+      "limit" : {
+        "description" : "Newest entries to export (1–200, default 50)",
+        "type" : "integer"
+      }
+    },
+    "required" : [ ],
+    "additionalProperties" : false,
+    "$defs" : { },
+    "definitions" : { }
+  }
+}, {
+  "name" : "browser_network_clear",
+  "description" : "Forget all recorded requests, e.g. before an action you want to observe in isolation.",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : { },
+    "required" : [ ],
+    "additionalProperties" : false,
+    "$defs" : { },
+    "definitions" : { }
+  }
+} ]

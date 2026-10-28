@@ -1,5 +1,10 @@
 package com.aresstack.argos;
 
+import com.aresstack.argos.camoufox.CamoufoxInstaller;
+import com.aresstack.argos.camoufox.CamoufoxLaunch;
+import com.aresstack.argos.convenience.ConvenienceBrowser;
+import com.aresstack.argos.convenience.NavigationGate;
+import com.aresstack.argos.search.ChallengeCheck;
 import com.aresstack.argos.web.BrowserPagePort;
 import com.aresstack.argos.web.PageCapture;
 import com.aresstack.argos.web.PageText;
@@ -46,8 +51,10 @@ import java.net.Socket;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Deque;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -75,9 +82,14 @@ import java.util.regex.Pattern;
  * Owns one persistent Camoufox browser and serializes every Playwright API call
  * onto a single driver thread. Never attaches to an existing user's browser.
  */
-public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAccess, AutoCloseable {
+public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAccess, ConvenienceBrowser, AutoCloseable {
     /** Source documents above this size are not pulled through the protocol for a snapshot. */
     private static final long MAX_SOURCE_BYTES = 8_000_000;
+    /**
+     * How long a tool waits for Argos' own Camoufox installation before it reports the progress instead (the
+     * download continues in the background; the tool budget is 90 s).
+     */
+    private static final java.time.Duration INSTALL_WAIT = java.time.Duration.ofSeconds(30);
     private static final long SAVED_DOCUMENT_WAIT_NANOS = 5_000_000_000L;
     /** Requests whose transfer ended, from context-level protocol events (driver thread); by identity, weak. */
     private final Set<Request> finishedRequests = Collections.newSetFromMap(new WeakHashMap<>());
@@ -89,9 +101,24 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
     private final ObjectMapper mapper = new ObjectMapper();
     private final SecretMasker masker = new SecretMasker();
     private final NetworkRecorder network;
-    private final BrowserTabs tabs = new BrowserTabs();
+    /** The tabs of the active user context; each context keeps its own. */
+    private BrowserTabs tabs = new BrowserTabs();
+    /** The persistent profile's own context ("start") and its tabs while another user context is active. */
+    private BrowserContext startContext;
+    private final BrowserTabs startTabs = tabs;
+    /** Additional WebDriver BiDi user contexts in this browser, by context id. */
+    private final Map<String, UserContext> userContexts = new java.util.LinkedHashMap<>();
+    /** The user context the next task should run in, and where its cookies are kept between browser starts. */
+    private volatile String wantedContext = START_CONTEXT;
+    private volatile Path wantedCookies;
+    private String activeContext = START_CONTEXT;
+    static final String START_CONTEXT = "start";
+
+    /** One BiDi user context: isolated cookies and storage inside the same Camoufox. */
+    private record UserContext(BrowserContext context, BrowserTabs tabs, Path cookies) { }
     private final Map<Page, PageControls> controlSnapshots = new IdentityHashMap<>();
     private final RealInput input;
+    private final RealDrag drag;
     private final UrlPolicy urlPolicy;
     private final SnapshotReader snapshots = new SnapshotReader();
     /** Per-tab protocol observations: in-flight requests and the top-level document of each tab. */
@@ -129,6 +156,7 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
     private CamoufoxBrowser(ArgosConfig config, HumanInputSettings humanInput, HostResolver resolver) {
         this.config = config;
         this.input = new RealInput(humanInput);
+        this.drag = new RealDrag(input, humanInput.random());
         this.resolver = resolver;
         this.urlPolicy = UrlPolicy.from(config.network(), resolver);
         this.network = new NetworkRecorder(masker, config.networkBodies());
@@ -148,10 +176,12 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
             startedAt.set(System.nanoTime());
             if (!claimed.compareAndSet(false, true)) return null; // the caller was already told nothing was done
             try {
+                switchToWantedContext();
                 return action.call();
             } finally {
                 // Outside Playwright event handlers, so protocol calls are safe here.
                 if (context != null) network.captureQueuedBodies();
+                saveCookiesQuietly();
             }
         });
         long budget = TimeUnit.SECONDS.toNanos(timeoutSeconds);
@@ -266,6 +296,8 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
             }
         }
         context = null;
+        startContext = null;
+        forgetUserContexts();
         playwright = null;
         driverProcesses.clear();
         launchingSince = null;
@@ -291,6 +323,11 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
         }
     }
 
+    /** For opt-in diagnostics tests only: runs {@code action} on the current tab on the browser thread. */
+    <T> T onActivePage(java.util.function.Function<Page, T> action) {
+        return onBrowser(() -> action.apply(activePage()));
+    }
+
     private Page activePage() throws Exception {
         Optional<Page> current = tabs.current();
         if (current.isPresent()) return current.get();
@@ -300,42 +337,33 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
         return tabs.select(adopt(first));
     }
 
+    /** Resolve an explicit tab without changing which tab is current. */
+    private Page pageFor(String tabId) throws Exception {
+        Page current = activePage();
+        return tabId == null || tabId.isBlank() ? current : tabs.get(tabId);
+    }
+
     private void ensureContext() throws Exception {
         if (context == null) {
             config.requireBrowserConfiguration();
+            // Explicit paths are developer overrides; otherwise Argos' own verified Camoufox and built-in profile.
+            ArgosConfig.BrowserInstallation installation = ArgosConfig.BrowserInstallation.fromEnvironment();
+            Path executable = config.executable() != null ? config.executable()
+                    : CamoufoxInstaller.shared(installation.root(), installation.mirror())
+                            .awaitExecutable(INSTALL_WAIT);
+            CamoufoxLaunch launch = config.launchOptions() != null ? CamoufoxLaunch.fromFile(config.launchOptions())
+                    : CamoufoxLaunch.builtIn(executable, installation.root());
             Files.createDirectories(config.profile());
-            JsonNode launch = mapper.readTree(Files.readString(config.launchOptions()));
-            JsonNode variables = launch.path("env");
-            if (!variables.isObject() || !variables.has("CAMOU_CONFIG_1")) {
-                throw new IllegalArgumentException("Official Camoufox fingerprint file requires env.CAMOU_CONFIG_1");
-            }
             Map<String, String> environment = new HashMap<>(System.getenv());
-            variables.fields().forEachRemaining(entry -> {
-                if (!entry.getKey().startsWith("CAMOU_") && !entry.getKey().startsWith("FONTCONFIG")) {
-                    throw new IllegalArgumentException("Unexpected fingerprint environment key: " + entry.getKey());
-                }
-                if (!entry.getValue().isTextual()) {
-                    throw new IllegalArgumentException("Invalid fingerprint environment value: " + entry.getKey());
-                }
-                environment.put(entry.getKey(), entry.getValue().asText());
-            });
-            fingerprintWindow(variables);
-            Map<String, Object> prefs = new LinkedHashMap<>();
-            JsonNode preferences = launch.has("firefoxUserPrefs") ? launch.get("firefoxUserPrefs")
-                    : launch.path("firefox_user_prefs");
-            preferences.fields().forEachRemaining(entry -> {
-                JsonNode value = entry.getValue();
-                if (value.isBoolean()) prefs.put(entry.getKey(), value.asBoolean());
-                else if (value.isIntegralNumber()) prefs.put(entry.getKey(), value.asInt());
-                else if (value.isTextual()) prefs.put(entry.getKey(), value.asText());
-                else throw new IllegalArgumentException("Unsupported Firefox pref: " + entry.getKey());
-            });
+            environment.putAll(launch.environment());
+            fingerprintWindow(launch.fingerprint());
+            Map<String, Object> prefs = new LinkedHashMap<>(launch.prefs());
             // Playwright's BiDi layer misses history traversals restored from the back-forward cache
             // (page.url() stays stale, goBack never settles). The official launch.json may still override it.
             prefs.putIfAbsent("browser.sessionhistory.max_total_viewers", 0);
             NetworkSettings network = config.network();
             if (network.strictMode()) {
-                network = withLaunchProxy(network, launch.path("proxy"));
+                network = withLaunchProxy(network, launch.proxy());
                 for (String key : prefs.keySet()) {
                     if (FirefoxNetworkPrefs.ownedPrefixes().stream().anyMatch(key::startsWith)) {
                         throw new IllegalArgumentException("launch.json sets " + key + ", but Argos owns the "
@@ -350,12 +378,11 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
                 System.err.println("ARGOS_NETWORK_POLICY=off: Camoufox connects directly and can reach "
                         + "loopback and intranet services.");
             }
-            List<String> args = new ArrayList<>();
-            launch.path("args").forEach(value -> args.add(value.asText()));
+            List<String> args = launch.args();
             BrowserType.LaunchPersistentContextOptions options =
                     new BrowserType.LaunchPersistentContextOptions()
                             .setChannel("moz-firefox")
-                            .setExecutablePath(config.executable())
+                            .setExecutablePath(executable)
                             .setHeadless(config.headless())
                             .setEnv(environment)
                             .setViewportSize(null)
@@ -373,6 +400,7 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
                 driverProcesses.addAll(childrenSince(before));
                 launchingSince = null;
                 context = playwright.firefox().launchPersistentContext(config.profile(), options);
+                startContext = context;
                 if (proxy != null) verifyNetworkBoundary();
             } catch (Exception error) {
                 Set<Long> launching = launchingSince;
@@ -384,10 +412,7 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
             }
             probeUnicode();
             // Tabs opened by websites (target=_blank, window.open) are adopted like our own.
-            context.onPage(this::adopt);
-            // Protocol events: when a download's transfer ended (its request may not belong to the tab any more).
-            context.onRequestFinished(finishedRequests::add);
-            context.onRequestFailed(failedRequests::add);
+            observe(context);
         }
     }
 
@@ -412,19 +437,11 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
      * The inner window size Camoufox gives the page ({@code window.innerWidth/innerHeight} of the fingerprint, which
      * is split over {@code CAMOU_CONFIG_1..n}). Real input scrolls and moves inside it without asking the page.
      */
-    private void fingerprintWindow(JsonNode variables) {
-        StringBuilder json = new StringBuilder();
-        for (int part = 1; variables.has("CAMOU_CONFIG_" + part); part++) {
-            json.append(variables.get("CAMOU_CONFIG_" + part).asText());
-        }
-        try {
-            JsonNode fingerprint = mapper.readTree(json.toString());
-            double width = fingerprint.path("window.innerWidth").asDouble(0);
-            double height = fingerprint.path("window.innerHeight").asDouble(0);
-            if (width > 0 && height > 0) input.viewport(width, height);
-        } catch (Exception unreadable) {
-            // Without it the viewport is read once from the page when the first click needs it.
-        }
+    private void fingerprintWindow(JsonNode fingerprint) {
+        double width = fingerprint.path("window.innerWidth").asDouble(0);
+        double height = fingerprint.path("window.innerHeight").asDouble(0);
+        // Without it the viewport is read once from the page when the first click needs it.
+        if (width > 0 && height > 0) input.viewport(width, height);
     }
 
     /** Registers a page as tab and records its network traffic. Idempotent. */
@@ -490,6 +507,13 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
 
     /** A source document the browser downloaded; current for its tab until the tab loads another document. */
     private record SavedDocument(String url, int status, String contentType, String text) { }
+
+    public record PageNavigationRequest(String tab, String url) { }
+
+    private record NavigationAttempt(Response response, Map<String, Object> immediateResult) { }
+
+    private record PendingPageNavigation(int index, String tab, String requestedUrl, Page page,
+                                         Response response, long startedNanos) { }
 
     private static boolean isMainDocument(Page owner, Request request) {
         try {
@@ -566,49 +590,207 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
     }
 
     public Map<String, Object> navigate(String target) {
-        requireWebUrl(target);
-        return onBrowser(() -> navigateHere(activePage(), target));
+        return navigate(target, null);
     }
 
-    /** {@link #navigate} on the driver thread. */
-    private Map<String, Object> navigateHere(Page p, String target) throws Exception {
-        {
-            ReadinessPolicy policy = config.readiness();
-            TabDocument tab = document(p);
-            MainDocument previousDocument = tab.mainDocument;
-            MainDocument previousDownload = tab.lastDownload;
-            Response response;
+    /** Navigate a specific tab without changing the current-tab selection. */
+    public Map<String, Object> navigate(String target, String tabId) {
+        requireWebUrl(target);
+        return onBrowser(() -> navigateHere(pageFor(tabId), target));
+    }
+
+    /**
+     * Navigate distinct tabs with bounded overlap. Each page starts at response commit; its document can load
+     * while the driver starts the next navigation. Results stay in request order and failures stay page-local.
+     * Firefox commits a navigation when the first body bytes arrive, so a server that sends headers and then
+     * stalls before any body byte delays the start of the following pages up to the commit timeout.
+     * Each page then waits for the readiness policy's load state, also bounded by the same per-page timeout.
+     */
+    public List<Map<String, Object>> navigatePages(List<PageNavigationRequest> requests, int parallelism,
+                                                   int commitTimeoutMillis) {
+        List<PageNavigationRequest> requestedPages = validatePageNavigationRequests(requests);
+        int parallelLimit = Math.max(1, Math.min(4, parallelism));
+        double commitTimeout = Math.max(500, Math.min(20_000, commitTimeoutMillis));
+        return onBrowser(() -> navigatePagesOnDriver(requestedPages, parallelLimit, commitTimeout), 300);
+    }
+
+    private List<Map<String, Object>> navigatePagesOnDriver(List<PageNavigationRequest> requests, int parallelLimit,
+                                                             double commitTimeoutMillis) throws Exception {
+        activePage();
+        List<Map<String, Object>> results = new ArrayList<>(Collections.nCopies(requests.size(), null));
+        Deque<PendingPageNavigation> pending = new ArrayDeque<>();
+
+        for (int index = 0; index < requests.size(); index++) {
+            PageNavigationRequest request = requests.get(index);
+            long startedNanos = System.nanoTime();
+            String tabId = BrowserTabs.normalize(request.tab());
             try {
-                response = p.navigate(target, new Page.NavigateOptions()
-                        .setWaitUntil(waitUntil(policy)).setTimeout(45_000));
-            } catch (PlaywrightException error) {
-                // Only a response of this navigation may turn the failure into a download.
-                MainDocument download = tab.lastDownload != previousDownload ? tab.lastDownload
-                        : tab.mainDocument != previousDocument ? tab.mainDocument : null;
-                if (!isDownload(error, download)) throw error;
-                tab.mainDocument = previousDocument; // the previous page stays rendered
-                Optional<SavedDocument> saved = savedSourceDocument(p, tab, download);
-                if (saved.isPresent()) {
-                    tab.saved = saved.get();
-                    return savedResult(saved.get());
+                requireWebUrl(request.url());
+                Page page = tabs.get(tabId);
+                NavigationAttempt attempt = startNavigation(page, request.url(), WaitUntilState.COMMIT,
+                        commitTimeoutMillis);
+                if (attempt.immediateResult() != null) {
+                    results.set(index, completedPageNavigation(tabId, request.url(), attempt.immediateResult(),
+                            startedNanos));
+                    continue;
                 }
-                return downloadResult(target, download);
+                pending.addLast(new PendingPageNavigation(index, tabId, request.url(), page, attempt.response(),
+                        startedNanos));
+                if (pending.size() >= parallelLimit) {
+                    finishPendingPageNavigation(pending.removeFirst(), results, commitTimeoutMillis);
+                }
+            } catch (RuntimeException failure) {
+                results.set(index, failedPageNavigation(tabId, request.url(), startedNanos, failure));
             }
+        }
+
+        while (!pending.isEmpty()) {
+            finishPendingPageNavigation(pending.removeFirst(), results, commitTimeoutMillis);
+        }
+        return List.copyOf(results);
+    }
+
+    private void finishPendingPageNavigation(PendingPageNavigation pending,
+                                             List<Map<String, Object>> results, double timeoutMillis) {
+        try {
+            // The batch started this page at commit only. Balanced readiness tolerates open requests,
+            // so a main document that is still streaming would count as quiet: wait for its load state
+            // like a single navigation does (a protocol event, nothing is read from the page).
+            ReadinessPolicy policy = config.readiness();
+            WaitUntilState loadState = waitUntil(policy);
+            if (loadState != WaitUntilState.COMMIT) {
+                pending.page().waitForLoadState(loadState == WaitUntilState.LOAD ? LoadState.LOAD
+                        : LoadState.DOMCONTENTLOADED, new Page.WaitForLoadStateOptions().setTimeout(timeoutMillis));
+            }
+            Map<String, Object> result = new LinkedHashMap<>(
+                    finishNavigation(pending.page(), pending.response(), policy));
+            result.put("tab", pending.tab());
+            result.put("requestedUrl", pending.requestedUrl());
+            result.put("outcome", "SUCCESS");
+            result.put("elapsedMs", elapsedMillis(pending.startedNanos()));
+            results.set(pending.index(), result);
+        } catch (Exception failure) {
+            results.set(pending.index(), failedPageNavigation(pending.tab(), pending.requestedUrl(),
+                    pending.startedNanos(), failure));
+        }
+    }
+
+    private static Map<String, Object> completedPageNavigation(String tabId, String requestedUrl,
+                                                                Map<String, Object> navigationResult,
+                                                                long startedNanos) {
+        Map<String, Object> result = new LinkedHashMap<>(navigationResult);
+        result.put("tab", tabId);
+        result.put("requestedUrl", requestedUrl);
+        result.put("outcome", navigationResult.containsKey("hint") ? "DOWNLOAD" : "SUCCESS");
+        result.put("elapsedMs", elapsedMillis(startedNanos));
+        return result;
+    }
+
+    private static Map<String, Object> failedPageNavigation(String tabId, String requestedUrl,
+                                                             long startedNanos, Exception failure) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("tab", tabId);
+        result.put("requestedUrl", requestedUrl == null ? "" : requestedUrl);
+        result.put("outcome", "FAILED");
+        result.put("error", errorMessage(failure));
+        result.put("elapsedMs", elapsedMillis(startedNanos));
+        return result;
+    }
+
+    private static long elapsedMillis(long startedNanos) {
+        return (System.nanoTime() - startedNanos) / 1_000_000;
+    }
+
+    private static List<PageNavigationRequest> validatePageNavigationRequests(List<PageNavigationRequest> requests) {
+        if (requests == null || requests.isEmpty() || requests.size() > 10) {
+            throw new IllegalArgumentException("Give between 1 and 10 page navigation requests");
+        }
+        Set<String> uniqueTabs = new HashSet<>();
+        List<PageNavigationRequest> validated = new ArrayList<>(requests.size());
+        for (PageNavigationRequest request : requests) {
+            if (request == null || request.tab() == null || request.tab().isBlank()) {
+                throw new IllegalArgumentException("Each page navigation needs a tab id");
+            }
+            String normalizedTab = BrowserTabs.normalize(request.tab());
+            if (!uniqueTabs.add(normalizedTab)) {
+                throw new IllegalArgumentException("A tab may appear only once in one batch: " + normalizedTab);
+            }
+            validated.add(new PageNavigationRequest(normalizedTab, request.url()));
+        }
+        return List.copyOf(validated);
+    }
+
+    private static List<String> validateTabIds(List<String> tabIds) {
+        if (tabIds == null || tabIds.isEmpty() || tabIds.size() > 10) {
+            throw new IllegalArgumentException("Give between 1 and 10 tab ids");
+        }
+        Set<String> uniqueTabs = new HashSet<>();
+        List<String> validated = new ArrayList<>(tabIds.size());
+        for (String tabId : tabIds) {
+            String normalizedTab = BrowserTabs.normalize(tabId);
+            if (normalizedTab.isBlank()) throw new IllegalArgumentException("Each tab id must not be blank");
+            if (!uniqueTabs.add(normalizedTab)) {
+                throw new IllegalArgumentException("A tab may appear only once in one batch: " + normalizedTab);
+            }
+            validated.add(normalizedTab);
+        }
+        return List.copyOf(validated);
+    }
+
+    private static String errorMessage(Exception failure) {
+        return failure.getMessage() == null || failure.getMessage().isBlank()
+                ? failure.getClass().getSimpleName() : failure.getMessage();
+    }
+
+    /** Navigate and wait for readiness on the browser driver thread. */
+    private Map<String, Object> navigateHere(Page page, String target) throws Exception {
+        ReadinessPolicy policy = config.readiness();
+        NavigationAttempt attempt = startNavigation(page, target, waitUntil(policy), 45_000);
+        if (attempt.immediateResult() != null) return attempt.immediateResult();
+        return finishNavigation(page, attempt.response(), policy);
+    }
+
+    /** Start a navigation at the requested protocol milestone without waiting for the page to settle. */
+    private NavigationAttempt startNavigation(Page page, String target, WaitUntilState waitUntil,
+                                              double timeoutMillis) {
+        TabDocument tab = document(page);
+        MainDocument previousDocument = tab.mainDocument;
+        MainDocument previousDownload = tab.lastDownload;
+        try {
+            Response response = page.navigate(target, new Page.NavigateOptions()
+                    .setWaitUntil(waitUntil).setTimeout(timeoutMillis));
             // Keep the listener's instance: it may already carry the requestfinished flag.
-            if (response != null && isMainDocument(p, response.request())
+            if (response != null && isMainDocument(page, response.request())
                     && (tab.mainDocument == null || !tab.mainDocument.isFor(response.request()))) {
                 tab.mainDocument = new MainDocument(response);
             }
-            ReadinessReport readiness = settle(p, policy, null);
-            Map<String, Object> result = new LinkedHashMap<>();
-            result.put("url", p.url());
-            result.put("title", p.title());
-            result.put("status", response == null ? 0 : response.status());
-            result.put("documentType", documentType(p));
-            result.put("contentType", contentType(p));
-            result.put("readiness", readiness);
-            return result;
+            return new NavigationAttempt(response, null);
+        } catch (PlaywrightException error) {
+            // Only a response of this navigation may turn the failure into a download.
+            MainDocument download = tab.lastDownload != previousDownload ? tab.lastDownload
+                    : tab.mainDocument != previousDocument ? tab.mainDocument : null;
+            if (!isDownload(error, download)) throw error;
+            tab.mainDocument = previousDocument; // Keep the previous page rendered.
+            Optional<SavedDocument> saved = savedSourceDocument(page, tab, download);
+            if (saved.isPresent()) {
+                tab.saved = saved.get();
+                return new NavigationAttempt(null, savedResult(saved.get()));
+            }
+            return new NavigationAttempt(null, downloadResult(target, download));
         }
+    }
+
+    /** Finish a committed navigation after other pages had time to load concurrently. */
+    private Map<String, Object> finishNavigation(Page page, Response response, ReadinessPolicy policy) throws Exception {
+        ReadinessReport readiness = settle(page, policy, null);
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("url", page.url());
+        result.put("title", page.title());
+        result.put("status", response == null ? 0 : response.status());
+        result.put("documentType", documentType(page));
+        result.put("contentType", contentType(page));
+        result.put("readiness", readiness);
+        return result;
     }
 
     @Override
@@ -651,8 +833,12 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
      * visible element ({@code selector}) and/or visible {@code text}.
      */
     public Map<String, Object> waitFor(String selector, String text, int timeoutMillis) {
+        return waitFor(selector, text, timeoutMillis, null);
+    }
+
+    public Map<String, Object> waitFor(String selector, String text, int timeoutMillis, String tabId) {
         return onBrowser(() -> {
-            Page p = activePage();
+            Page p = pageFor(tabId);
             SavedDocument saved = document(p).saved;
             if (saved != null) return savedWaitResult(saved, selector, text);
             ReadinessPolicy configured = config.readiness().settles() ? config.readiness() : ReadinessPolicy.balanced();
@@ -694,6 +880,11 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
     @Override
     public PageCapture current() {
         return onBrowser(() -> captureWhenLoaded(activePage(), 0));
+    }
+
+    /** Like {@link #current()} for any tab (null = current tab), without changing which tab is current. */
+    public PageCapture capturePage(String tabId) {
+        return onBrowser(() -> capture(pageFor(tabId)));
     }
 
     private static final long LOADING_GRACE_MILLIS = 8_000;
@@ -786,12 +977,439 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
         };
     }
 
-    public PageSnapshot snapshot(int maxCharacters) {
+    // ---- Convenience profile: tab-addressed loads under the shared NavigationGate -----------------------------
+
+    /**
+     * How long one start waits for the response commit. Kept short: the start runs on the single driver thread, so
+     * a longer wait would hold back every other start while a server delays its answer (Firefox commits a
+     * navigation only with the first body bytes). After this slice the navigation keeps running in Firefox and the
+     * commit is detected by polling (the tab's main document response).
+     */
+    private static final double COMMIT_SLICE_MILLIS = 150;
+
+    private static final class LoadJob {
+        final int index;
+        final TabLoadRequest request;
+        final long queuedAt;
+        NavigationGate.Lease lease;
+        Page page;
+        String tab;
+        int status;
+        MainDocument previousDocument;
+        MainDocument previousDownload;
+        boolean committed;
+        long startedAt;
+        long domContentLoadedAt;
+        TabLoad result;
+        /** Milestones in ms since the call started, for diagnostics ({@link #lastLoadTimeline}). */
+        final StringBuilder timeline = new StringBuilder();
+
+        LoadJob(int index, TabLoadRequest request, long queuedAt) {
+            this.index = index;
+            this.request = request;
+            this.queuedAt = queuedAt;
+        }
+    }
+
+    /**
+     * Loads several pages with overlap, entirely on the driver thread (Playwright objects never leave it): a job
+     * starts when the gate grants its domain and fewer than {@code parallel} loads run; each start returns at
+     * response commit, then every running page is polled for its load state with short protocol waits, so the
+     * documents load concurrently in Firefox. A page counts as loaded at DOMContentLoaded plus up to 5 s for the
+     * load event (as {@link #loadHtml}). A job that waits for its domain or loads longer than {@code timeoutMillis}
+     * ends as TIMEOUT; a new tab that timed out is closed, so no navigation keeps running. Results keep the order
+     * of {@code requests}; failures stay local to their page.
+     */
+    @Override
+    public List<TabLoad> loadTabs(List<TabLoadRequest> requests, NavigationGate gate, int parallel,
+                                  long timeoutMillis) {
+        if (requests == null || requests.isEmpty() || requests.size() > 10) {
+            throw new IllegalArgumentException("Give between 1 and 10 pages to load");
+        }
+        int limit = Math.max(1, Math.min(4, parallel));
+        long timeout = Math.max(1_000, Math.min(60_000, timeoutMillis));
+        return onBrowser(() -> loadTabsOnDriver(requests, gate, limit, timeout), 300);
+    }
+
+    private List<TabLoad> loadTabsOnDriver(List<TabLoadRequest> requests, NavigationGate gate, int parallel,
+                                           long timeout) throws Exception {
+        List<LoadJob> jobs = new ArrayList<>();
+        loadClock = System.nanoTime();
+        try {
+            return runLoadJobs(requests, gate, parallel, timeout, jobs);
+        } finally {
+            // A driver failure must not keep a domain slot of the shared gate.
+            jobs.forEach(job -> release(job, 0, 0, false));
+            List<String> timeline = new ArrayList<>();
+            jobs.forEach(job -> timeline.add(job.index + " " + job.request.domain() + ":" + job.timeline));
+            lastLoadTimeline = List.copyOf(timeline);
+        }
+    }
+
+    private long loadClock;
+    private volatile List<String> lastLoadTimeline = List.of();
+
+    /**
+     * Milestones of each page of the last {@link #loadTabs} call (ms since the call started: slot acquired, start
+     * returned, response seen, committed, DOMContentLoaded, load, captured); diagnostics without URLs or content.
+     */
+    public List<String> lastLoadTimeline() {
+        return lastLoadTimeline;
+    }
+
+    private void mark(LoadJob job, String milestone) {
+        job.timeline.append(' ').append(milestone).append('@').append((System.nanoTime() - loadClock) / 1_000_000);
+    }
+
+    private List<TabLoad> runLoadJobs(List<TabLoadRequest> requests, NavigationGate gate, int parallel,
+                                      long timeout, List<LoadJob> jobs) throws Exception {
+        Page pump = activePage();
+        long now = System.currentTimeMillis();
+        for (int i = 0; i < requests.size(); i++) jobs.add(new LoadJob(i, requests.get(i), now));
+        for (LoadJob job : jobs) {
+            try {
+                requireWebUrl(job.request.url());
+            } catch (IllegalArgumentException refused) {
+                job.result = failedLoad(job, TabLoadOutcome.FAILED, refused.getMessage(), 0);
+            }
+        }
+        while (jobs.stream().anyMatch(job -> job.result == null)) {
+            boolean progressed = false;
+            long running = jobs.stream().filter(job -> job.result == null && job.page != null).count();
+            for (LoadJob job : jobs) {
+                if (job.result != null || job.page != null || running >= parallel) continue;
+                now = System.currentTimeMillis();
+                long cooldown = gate.cooldownMillis(job.request.domain());
+                if (cooldown > 0) {
+                    job.result = failedLoad(job, TabLoadOutcome.COOLING_DOWN, job.request.domain()
+                            + " refused recent requests", (cooldown + 999) / 1000);
+                    progressed = true;
+                    continue;
+                }
+                if (now - job.queuedAt > timeout) {
+                    job.result = failedLoad(job, TabLoadOutcome.TIMEOUT, "waited too long for "
+                            + job.request.domain() + " (another navigation of that domain was running)", 0);
+                    progressed = true;
+                    continue;
+                }
+                NavigationGate.Lease lease = gate.tryAcquire(job.request.domain());
+                if (lease == null) continue;
+                job.lease = lease;
+                mark(job, "slot");
+                startLoad(job, timeout);
+                progressed = true;
+                if (job.result == null) running++;
+            }
+            for (LoadJob job : jobs) {
+                if (job.result != null || job.page == null) continue;
+                if (pollLoad(job, timeout)) progressed = true;
+            }
+            if (!progressed) pump.waitForTimeout(20);
+        }
+        List<TabLoad> results = new ArrayList<>();
+        jobs.forEach(job -> results.add(job.result));
+        return results;
+    }
+
+    private void startLoad(LoadJob job, long timeout) {
+        try {
+            Page page;
+            if (job.request.tab() == null) {
+                page = context.newPage();
+                job.tab = adopt(page);
+            } else {
+                job.tab = BrowserTabs.normalize(job.request.tab());
+                page = tabs.get(job.tab);
+            }
+            job.page = page;
+            job.startedAt = System.currentTimeMillis();
+            job.previousDocument = document(page).mainDocument;
+            job.previousDownload = document(page).lastDownload;
+            mark(job, "navigate");
+            // At most a short wait for the response commit (COMMIT_SLICE_MILLIS), so a server that stalls before
+            // answering does not hold back the next start; on that timeout the navigation keeps running in Firefox
+            // and is polled below.
+            NavigationAttempt attempt = startNavigation(page, job.request.url(), WaitUntilState.COMMIT,
+                    COMMIT_SLICE_MILLIS);
+            job.committed = true;
+            mark(job, "commit(start)");
+            if (attempt.immediateResult() != null) {
+                // A download: a saved feed/JSON/text document is readable, anything else is reported.
+                SavedDocument saved = document(page).saved;
+                if (saved != null) {
+                    finishLoad(job, capture(page), saved.contentType());
+                } else {
+                    job.result = failedLoad(job, TabLoadOutcome.DOWNLOAD,
+                            String.valueOf(attempt.immediateResult().getOrDefault("hint", "download")), 0);
+                    release(job, 0, 0, false);
+                }
+                return;
+            }
+            job.status = attempt.response() == null ? 0 : attempt.response().status();
+        } catch (RuntimeException failed) {
+            if (job.page != null && failed instanceof TimeoutError) {
+                mark(job, "slice-over");
+                return; // still loading; polled below
+            }
+            boolean timedOut = failed instanceof TimeoutError;
+            job.result = failedLoad(job, timedOut ? TabLoadOutcome.TIMEOUT : TabLoadOutcome.FAILED,
+                    errorMessage(failed), 0);
+            release(job, 0, 0, false);
+            abandon(job);
+        }
+    }
+
+    /** @return true when the job finished */
+    private boolean pollLoad(LoadJob job, long timeout) {
+        long now = System.currentTimeMillis();
+        try {
+            if (!job.committed && document(job.page).lastDownload != job.previousDownload) {
+                // The navigation turned into a download after the commit slice: no page to read.
+                job.result = failedLoad(job, TabLoadOutcome.DOWNLOAD, "the address is a download", 0);
+                release(job, 0, 0, false);
+                abandon(job);
+                return true;
+            }
+            if (!job.committed) {
+                // The load state below belongs to the old document until the new one is committed: its response
+                // arrived (non-redirect) AND the frame shows its address. Firefox commits only with the first body
+                // bytes, so a response whose body has not started yet still leaves the old document (about:blank in
+                // a new tab) with its load states in place.
+                MainDocument main = document(job.page).mainDocument;
+                boolean answered = main != null && main != job.previousDocument
+                        && (main.status() < 300 || main.status() >= 400);
+                if (answered && job.timeline.indexOf(" response@") < 0) mark(job, "response");
+                job.committed = answered
+                        && WebAddress.withoutFragment(main.url()).equals(WebAddress.withoutFragment(job.page.url()));
+                if (job.committed) mark(job, "commit");
+            }
+            if (job.committed && job.domContentLoadedAt == 0) {
+                if (reached(job.page, LoadState.DOMCONTENTLOADED)) {
+                    job.domContentLoadedAt = System.currentTimeMillis();
+                    mark(job, "dcl");
+                }
+            }
+            if (job.domContentLoadedAt > 0 && (reached(job.page, LoadState.LOAD)
+                    || System.currentTimeMillis() - job.domContentLoadedAt > 5_000)) {
+                mark(job, System.currentTimeMillis() - job.domContentLoadedAt > 5_000 ? "load-cap" : "load");
+                MainDocument main = document(job.page).mainDocument;
+                finishLoad(job, capture(job.page, job.status), main == null ? null : main.contentType());
+                mark(job, "released");
+                return true;
+            }
+        } catch (RuntimeException failed) {
+            if (!stillNavigating(failed)) {
+                job.result = failedLoad(job, TabLoadOutcome.FAILED, errorMessage(failed), 0);
+                release(job, 0, 0, false);
+                abandon(job);
+                return true;
+            }
+            // The document was replaced while it was read (a redirect or a script navigation): read it again.
+            job.domContentLoadedAt = 0;
+            job.committed = false;
+            job.previousDocument = null;
+        }
+        if (now - job.startedAt > timeout) {
+            job.result = failedLoad(job, TabLoadOutcome.TIMEOUT, "the page did not finish loading in time", 0);
+            release(job, 0, 0, false);
+            abandon(job);
+            return true;
+        }
+        return false;
+    }
+
+    /** Playwright refuses page.content() while the frame navigates; the load is not over then. */
+    private static boolean stillNavigating(RuntimeException failed) {
+        String message = failed.getMessage();
+        return message != null && message.contains("page is navigating");
+    }
+
+    private static boolean reached(Page page, LoadState state) {
+        try {
+            page.waitForLoadState(state, new Page.WaitForLoadStateOptions().setTimeout(15));
+            return true;
+        } catch (TimeoutError notYet) {
+            return false;
+        }
+    }
+
+    private void finishLoad(LoadJob job, PageCapture capture, String contentType) {
+        boolean challenge = ChallengeCheck.isChallenge(capture.html(), capture.url(), capture.text());
+        long retryAfter = retryAfterSeconds(job.page);
+        job.result = new TabLoad(job.tab, job.request.url(), TabLoadOutcome.OK, capture, contentType, retryAfter,
+                challenge, "");
+        release(job, capture.status(), retryAfter, challenge);
+    }
+
+    private static void release(LoadJob job, int status, long retryAfter, boolean challenge) {
+        if (job.lease != null) {
+            job.lease.release(status, retryAfter, challenge);
+            job.lease = null;
+        }
+    }
+
+    /**
+     * A failed new tab is closed, which stops its navigation (the context's last tab goes to about:blank); an
+     * existing tab keeps whatever it shows, so a failed link never throws away the agent's page.
+     */
+    private void abandon(LoadJob job) {
+        if (job.page == null) return;
+        try {
+            if (job.request.tab() == null && tabs.size() > 1) {
+                job.page.close();
+                tabs.forget(job.page);
+            } else if (job.request.tab() == null) {
+                job.page.navigate("about:blank");
+            }
+        } catch (RuntimeException ignored) {
+            // The tab is unusable either way.
+        }
+    }
+
+    private static TabLoad failedLoad(LoadJob job, TabLoadOutcome outcome, String error, long retryAfter) {
+        return new TabLoad(job.tab == null ? "" : job.tab, job.request.url(), outcome, null, null, retryAfter, false,
+                error == null ? "" : error);
+    }
+
+    /** Retry-After of the tab's main document response: seconds, or an HTTP date; 0 without one. */
+    private long retryAfterSeconds(Page page) {
+        MainDocument main = document(page).mainDocument;
+        if (main == null) return 0;
+        String value;
+        try {
+            value = main.response.headerValue("retry-after");
+        } catch (RuntimeException unavailable) {
+            return 0;
+        }
+        if (value == null || value.isBlank()) return 0;
+        String trimmed = value.trim();
+        if (trimmed.matches("\\d{1,7}")) return Long.parseLong(trimmed);
+        try {
+            long at = java.time.ZonedDateTime.parse(trimmed, java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME)
+                    .toInstant().toEpochMilli();
+            return Math.max(0, (at - System.currentTimeMillis() + 999) / 1000);
+        } catch (RuntimeException unparsable) {
+            return 0;
+        }
+    }
+
+    /** Reads a tab again (one serialized DOM, no navigation). */
+    @Override
+    public TabLoad readTab(String tabId) {
         return onBrowser(() -> {
-            Page p = activePage();
-            SavedDocument saved = document(p).saved;
-            if (saved != null) return snapshots.read(new SavedPageSource(saved), maxCharacters);
-            return snapshots.read(new PlaywrightPageSource(p, document(p).mainDocument), maxCharacters);
+            activePage();
+            String tab = BrowserTabs.normalize(tabId);
+            Page page = tabs.get(tab);
+            PageCapture capture = capture(page);
+            MainDocument main = document(page).mainDocument;
+            return new TabLoad(tab, capture.url(), TabLoadOutcome.OK, capture, main == null ? null : main.contentType(),
+                    0, ChallengeCheck.isChallenge(capture.html(), capture.url(), capture.text()), "");
+        });
+    }
+
+    /** Goes back one history entry in a tab and reads it; null without history. The caller holds the domain slot. */
+    @Override
+    public TabLoad backTab(String tabId) {
+        return onBrowser(() -> {
+            activePage();
+            String tab = BrowserTabs.normalize(tabId);
+            Page page = tabs.get(tab);
+            Response previous = page.goBack(new Page.GoBackOptions()
+                    .setWaitUntil(WaitUntilState.DOMCONTENTLOADED).setTimeout(45_000));
+            if (previous == null) return null;
+            settleLoad(page);
+            PageCapture capture = capture(page, previous.status());
+            MainDocument main = document(page).mainDocument;
+            return new TabLoad(tab, capture.url(), TabLoadOutcome.OK, capture, main == null ? null : main.contentType(),
+                    retryAfterSeconds(page), ChallengeCheck.isChallenge(capture.html(), capture.url(), capture.text()), "");
+        });
+    }
+
+    /** {@link #clickWithTrustedInput} in a given tab (the search's consent banner). */
+    @Override
+    public boolean clickInTab(String selector, String tabId) {
+        return onBrowser(() -> {
+            activePage();
+            Page p = tabs.get(tabId);
+            Locator target = p.locator(selector).first();
+            if (target.count() == 0) return false;
+            TabDocument tab = document(p);
+            int navigations = tab.navigations;
+            MainDocument before = tab.mainDocument;
+            try {
+                input.click(p, target);
+            } catch (RuntimeException unreachable) {
+                return false;
+            }
+            leaveSavedDocument(p);
+            awaitNavigationAfterInput(p, tab, navigations, before);
+            settleLoad(p);
+            return true;
+        });
+    }
+
+    /** True while the tab is open in the browser context the calls go to. */
+    @Override
+    public boolean hasOpenTab(String tabId) {
+        return onBrowser(() -> tabs.all().containsKey(BrowserTabs.normalize(tabId)));
+    }
+
+    /** Closes a tab; the last tab of the context is emptied instead (about:blank). */
+    @Override
+    public void closeTabQuietly(String tabId) {
+        onBrowser(() -> {
+            String tab = BrowserTabs.normalize(tabId);
+            Page page = tabs.all().get(tab);
+            if (page == null) return null;
+            if (tabs.size() <= 1) {
+                page.navigate("about:blank");
+            } else {
+                page.close();
+                tabs.forget(page);
+            }
+            return null;
+        });
+    }
+
+    /** The browser context (BiDi user context) the calls go to. */
+    @Override
+    public String contextId() {
+        return onBrowser(() -> activeContext);
+    }
+
+    public PageSnapshot snapshot(int maxCharacters) {
+        return snapshot(maxCharacters, null);
+    }
+
+    public PageSnapshot snapshot(int maxCharacters, String tabId) {
+        return onBrowser(() -> snapshotPage(pageFor(tabId), maxCharacters));
+    }
+
+    private PageSnapshot snapshotPage(Page page, int maxCharacters) {
+        SavedDocument saved = document(page).saved;
+        if (saved != null) return snapshots.read(new SavedPageSource(saved), maxCharacters);
+        return snapshots.read(new PlaywrightPageSource(page, document(page).mainDocument), maxCharacters);
+    }
+
+    /** Read several existing tabs in one driver task, preserving one result per tab. */
+    public List<Map<String, Object>> snapshotPages(List<String> tabIds, int maxCharacters) {
+        List<String> requestedTabs = validateTabIds(tabIds);
+        int characterLimit = Math.max(1_000, Math.min(60_000, maxCharacters));
+        return onBrowser(() -> {
+            List<Map<String, Object>> results = new ArrayList<>();
+            for (String tabId : requestedTabs) {
+                Map<String, Object> result = new LinkedHashMap<>();
+                result.put("tab", tabId);
+                try {
+                    Page page = pageFor(tabId);
+                    result.put("url", shownUrl(page));
+                    result.put("snapshot", snapshotPage(page, characterLimit));
+                } catch (RuntimeException failure) {
+                    result.put("error", errorMessage(failure));
+                }
+                results.add(result);
+            }
+            return List.copyOf(results);
         });
     }
 
@@ -1121,28 +1739,60 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
     }
 
     public Map<String, Object> inspect(String selector, int limit) {
+        return inspect(selector, limit, null);
+    }
+
+    public Map<String, Object> inspect(String selector, int limit, String tabId) {
+        return onBrowser(() -> inspectPage(pageFor(tabId), selector, limit));
+    }
+
+    private Map<String, Object> inspectPage(Page page, String selector, int limit) {
+        Object value = page.evaluate("""
+                ({selector,limit}) => [...document.querySelectorAll(selector)]
+                  .slice(0,limit).map(node => ({
+                    tag:node.tagName.toLowerCase(),
+                    text:(node.innerText||node.textContent||'').slice(0,600),
+                    id:node.id||null,
+                    classes:node.className && typeof node.className==='string'
+                      ? node.className.slice(0,180) : null,
+                    href:node.getAttribute('href'),
+                    role:node.getAttribute('role'),
+                    ariaLabel:node.getAttribute('aria-label')
+                  }))
+                """, Map.of("selector", selector, "limit", Math.min(50, Math.max(1, limit))));
+        return Map.of("url", page.url(), "elements", value);
+    }
+
+    /** Inspect a selector in several existing tabs without failing the whole batch on one bad tab. */
+    public List<Map<String, Object>> inspectPages(List<String> tabIds, String selector, int limit) {
+        List<String> requestedTabs = validateTabIds(tabIds);
+        if (selector == null || selector.isBlank()) {
+            throw new IllegalArgumentException("selector must not be blank");
+        }
+        int elementLimit = Math.max(1, Math.min(50, limit));
         return onBrowser(() -> {
-            Page p = activePage();
-            Object value = p.evaluate("""
-                    ({selector,limit}) => [...document.querySelectorAll(selector)]
-                      .slice(0,limit).map(node => ({
-                        tag:node.tagName.toLowerCase(),
-                        text:(node.innerText||node.textContent||'').slice(0,600),
-                        id:node.id||null,
-                        classes:node.className && typeof node.className==='string'
-                          ? node.className.slice(0,180) : null,
-                        href:node.getAttribute('href'),
-                        role:node.getAttribute('role'),
-                        ariaLabel:node.getAttribute('aria-label')
-                      }))
-                    """, Map.of("selector", selector, "limit", Math.min(50, Math.max(1, limit))));
-            return Map.of("url", p.url(), "elements", value);
+            List<Map<String, Object>> results = new ArrayList<>();
+            for (String tabId : requestedTabs) {
+                Map<String, Object> result = new LinkedHashMap<>();
+                result.put("tab", tabId);
+                try {
+                    result.put("inspection", inspectPage(pageFor(tabId), selector, elementLimit));
+                } catch (RuntimeException failure) {
+                    result.put("error", errorMessage(failure));
+                }
+                results.add(result);
+            }
+            return List.copyOf(results);
         });
     }
 
     public Map<String, Object> click(String selector) {
+        return click(selector, null);
+    }
+
+    public Map<String, Object> click(String selector, String tabId) {
         return onBrowser(() -> {
-            Page p = activePage();
+            Page p = pageFor(tabId);
             input.click(p, p.locator(selector).first());
             leaveSavedDocument(p);
             settle(p);
@@ -1151,8 +1801,12 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
     }
 
     public Map<String, Object> fill(String selector, String text) {
+        return fill(selector, text, null);
+    }
+
+    public Map<String, Object> fill(String selector, String text, String tabId) {
         return onBrowser(() -> {
-            Page p = activePage();
+            Page p = pageFor(tabId);
             input.replaceText(p, p.locator(selector).first(), text);
             leaveSavedDocument(p);
             return Map.of("filled", selector, "url", p.url());
@@ -1233,15 +1887,27 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
     // ---- History ----------------------------------------------------------------------------------------
 
     public Map<String, Object> historyBack() {
-        return traverse("back");
+        return historyBack(null);
+    }
+
+    public Map<String, Object> historyBack(String tabId) {
+        return traverse("back", tabId);
     }
 
     public Map<String, Object> forward() {
-        return traverse("forward");
+        return forward(null);
+    }
+
+    public Map<String, Object> forward(String tabId) {
+        return traverse("forward", tabId);
     }
 
     public Map<String, Object> reload() {
-        return traverse("reload");
+        return reload(null);
+    }
+
+    public Map<String, Object> reload(String tabId) {
+        return traverse("reload", tabId);
     }
 
     /**
@@ -1254,9 +1920,9 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
     }
 
     /** History traversal via BiDi {@code browsingContext.traverseHistory} / {@code reload}; no page script. */
-    private Map<String, Object> traverse(String direction) {
+    private Map<String, Object> traverse(String direction, String tabId) {
         return onBrowser(() -> {
-            Page p = activePage();
+            Page p = pageFor(tabId);
             SavedDocument saved = document(p).saved;
             if (saved != null && !direction.equals("forward")) {
                 // The saved feed is no history entry of its own: back returns to the page shown before it,
@@ -1302,8 +1968,12 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
 
     /** A fresh numbered control snapshot of the current tab, replacing the previous one. */
     public PageControls controls() {
+        return controls(null);
+    }
+
+    public PageControls controls(String tabId) {
         return onBrowser(() -> {
-            Page p = activePage();
+            Page p = pageFor(tabId);
             PageControls snapshot = takeControlSnapshot(p);
             leaveSavedDocument(p);
             return snapshot;
@@ -1337,27 +2007,195 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
     public record Interaction(String target, String url, String title, String openedTab) { }
 
     public Interaction clickTarget(String target) {
+        return clickTarget(target, null);
+    }
+
+    public Interaction clickTarget(String target, String tabId) {
         return onBrowser(() -> {
-            Page p = activePage();
+            Page p = pageFor(tabId);
             Set<String> before = tabs.all().keySet();
             Resolved resolved = resolve(p, target);
             input.click(p, resolved.locator());
             leaveSavedDocument(p);
             settle(p);
-            String opened = adoptOpenedTab(before);
-            Page now = activePage();
-            return new Interaction(resolved.description(), now.url(), safeTitle(now), opened);
+            boolean preserveCurrentTab = tabId != null && !tabId.isBlank();
+            String opened = adoptOpenedTab(before, !preserveCurrentTab);
+            Page resultPage = preserveCurrentTab ? p : activePage();
+            return new Interaction(resolved.description(), resultPage.url(), safeTitle(resultPage), opened);
         });
     }
 
     public Interaction fillTarget(String target, String text) {
+        return fillTarget(target, text, null);
+    }
+
+    public Interaction fillTarget(String target, String text, String tabId) {
         return onBrowser(() -> {
-            Page p = activePage();
+            Page p = pageFor(tabId);
             Resolved resolved = resolve(p, target);
             input.replaceText(p, resolved.locator(), text);
             leaveSavedDocument(p);
             if (RealInput.lineEnds(text).endsWith("\n")) settle(p);
             return new Interaction(resolved.description(), p.url(), safeTitle(p), null);
+        });
+    }
+
+    // ---- Pointer --------------------------------------------------------------------------------------------
+    // Coordinates are CSS pixels in the tab's viewport: (0, 0) is its top left corner, scrolling does not shift it.
+    // These tools send plain native mouse commands, without the HumanMotion paths and pauses of clickTarget.
+
+    public Map<String, Object> mouseMove(double x, double y, String tabId) {
+        return onBrowser(() -> {
+            Page p = pageFor(tabId);
+            return pointerResult(p, "moved", input.pointerMove(p, x, y), null);
+        });
+    }
+
+    public Map<String, Object> mouseClick(double x, double y, String button, String tabId) {
+        MouseButton pressed = MouseButton.parse(button);
+        return onBrowser(() -> {
+            Page p = pageFor(tabId);
+            Set<String> before = tabs.all().keySet();
+            HumanMotion.Point point = input.pointerClick(p, x, y, pressed);
+            leaveSavedDocument(p);
+            settle(p);
+            boolean preserveCurrentTab = tabId != null && !tabId.isBlank();
+            String opened = adoptOpenedTab(before, !preserveCurrentTab);
+            Map<String, Object> result = pointerResult(preserveCurrentTab ? p : activePage(), "clicked", point, null);
+            result.put("button", pressed.name().toLowerCase(java.util.Locale.ROOT));
+            if (opened != null) result.put("openedTab", opened);
+            return result;
+        });
+    }
+
+    public Map<String, Object> hover(String target, String tabId) {
+        if (target == null || target.isBlank()) throw new IllegalArgumentException("target is required");
+        return onBrowser(() -> {
+            Page p = pageFor(tabId);
+            Resolved resolved = resolve(p, target);
+            return pointerResult(p, "hovered", input.pointerHover(p, resolved.locator()), resolved.description());
+        });
+    }
+
+    /**
+     * Turns the mouse wheel by the given CSS pixels (positive: down/right). The pointer first goes to {@code target}
+     * or to ({@code x}, {@code y}) when given, so the scrolling container under it receives the wheel.
+     */
+    public Map<String, Object> scroll(double deltaX, double deltaY, Double x, Double y, String target, String tabId) {
+        if (!Double.isFinite(deltaX) || !Double.isFinite(deltaY) || (deltaX == 0 && deltaY == 0)) {
+            throw new IllegalArgumentException("Give delta_x and/or delta_y in CSS pixels, e.g. delta_y=600");
+        }
+        if (Math.abs(deltaX) > 20_000 || Math.abs(deltaY) > 20_000) {
+            throw new IllegalArgumentException("Scroll at most 20000 CSS pixels per call");
+        }
+        if ((x == null) != (y == null)) throw new IllegalArgumentException("Give both x and y, or neither");
+        if (x != null && target != null && !target.isBlank()) {
+            throw new IllegalArgumentException("Give either target or x/y, not both");
+        }
+        return onBrowser(() -> {
+            Page p = pageFor(tabId);
+            String description = null;
+            if (target != null && !target.isBlank()) {
+                Resolved resolved = resolve(p, target);
+                input.pointerHover(p, resolved.locator());
+                description = resolved.description();
+            } else if (x != null) {
+                input.pointerMove(p, x, y);
+            }
+            input.pointerWheel(p, deltaX, deltaY);
+            p.waitForTimeout(150); // smooth scrolling and scroll events settle
+            Map<String, Object> result = pointerResult(p, "scrolled", null, description);
+            result.put("deltaX", deltaX);
+            result.put("deltaY", deltaY);
+            Object position = p.evaluate("() => [scrollX, scrollY]");
+            if (position instanceof List<?> values && values.size() == 2) {
+                result.put("pageScrollX", values.get(0));
+                result.put("pageScrollY", values.get(1));
+            }
+            return result;
+        });
+    }
+
+    /**
+     * Drags with the real mouse from {@code source} (element or x/y) to {@code target} (element or x/y): press, move,
+     * release, all as trusted input, so the page sees the browser's own drag and drop events.
+     */
+    /** Read-only: whether pressing on the element starts the browser's own HTML5 drag (draggable, links, images). */
+    private static final String HTML5_DRAGGABLE = """
+            element => { for (let node = element; node; node = node.parentElement) if (node.draggable) return true;
+              return false; }""";
+    static final String HTML5_DRAG_LIMIT = "The source is an HTML5 draggable element. Firefox/Camoufox does not finish "
+            + "native drag and drop started by automated input (Mozilla bug 1515879): no drop or dragend reaches the page "
+            + "and it may stay mid-drag. Drags handled with pointer or mouse events (sliders, maps, sortable lists in "
+            + "fallback mode) work. Check the result, e.g. with browser_snapshot, before relying on it.";
+
+    public Map<String, Object> drag(String source, Double fromX, Double fromY, String target, Double toX, Double toY,
+                                    String tabId) {
+        boolean fromElement = source != null && !source.isBlank();
+        boolean toElement = target != null && !target.isBlank();
+        if (fromElement == (fromX != null || fromY != null) || (!fromElement && (fromX == null || fromY == null))) {
+            throw new IllegalArgumentException("Give either source or both from_x and from_y");
+        }
+        if (toElement == (toX != null || toY != null) || (!toElement && (toX == null || toY == null))) {
+            throw new IllegalArgumentException("Give either target or both to_x and to_y");
+        }
+        return onBrowser(() -> {
+            Page p = pageFor(tabId);
+            Resolved from = fromElement ? resolve(p, source) : null;
+            Resolved to = toElement ? resolve(p, target) : null;
+            boolean nativeDrag = from != null && Boolean.TRUE.equals(RealInput.onElement(from.locator(), HTML5_DRAGGABLE, null));
+            HumanMotion.Point[] points = drag.drag(p,
+                    from != null ? RealDrag.End.of(from.locator()) : RealDrag.End.at(fromX, fromY),
+                    to != null ? RealDrag.End.of(to.locator()) : RealDrag.End.at(toX, toY));
+            settle(p);
+            Map<String, Object> result = pointerResult(p, "dragged", null, null);
+            if (from != null) result.put("source", from.description());
+            if (to != null) result.put("target", to.description());
+            result.put("fromX", (long) points[0].x());
+            result.put("fromY", (long) points[0].y());
+            result.put("toX", (long) points[1].x());
+            result.put("toY", (long) points[1].y());
+            if (nativeDrag) result.put("warning", HTML5_DRAG_LIMIT);
+            return result;
+        });
+    }
+
+    private static Map<String, Object> pointerResult(Page p, String action, HumanMotion.Point point, String target) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("action", action);
+        if (target != null) result.put("target", target);
+        if (point != null) {
+            result.put("x", (long) point.x());
+            result.put("y", (long) point.y());
+        }
+        result.put("url", p.url());
+        result.put("title", safeTitle(p));
+        return result;
+    }
+
+    /**
+     * Presses a key or shortcut with real key events, optionally after focusing {@code target} by a real click. Enter
+     * and other keys can submit or navigate, so the page is settled like after a click.
+     */
+    public Interaction pressKey(String target, String keys, int times) {
+        return pressKey(target, keys, times, null);
+    }
+
+    public Interaction pressKey(String target, String keys, int times, String tabId) {
+        return onBrowser(() -> {
+            Page p = pageFor(tabId);
+            Set<String> before = tabs.all().keySet();
+            input.chord(keys); // refuse a bad combination before the target is even resolved
+            Resolved resolved = target == null || target.isBlank() ? null : resolve(p, target);
+            RealInput.KeyChord chord = input.press(p, resolved == null ? null : resolved.locator(), keys, times);
+            leaveSavedDocument(p);
+            settle(p);
+            boolean preserveCurrentTab = tabId != null && !tabId.isBlank();
+            String opened = adoptOpenedTab(before, !preserveCurrentTab);
+            Page now = preserveCurrentTab ? p : activePage();
+            String pressed = chord + (times > 1 ? " x" + times : "")
+                    + (resolved == null ? "" : " in " + resolved.description());
+            return new Interaction(pressed, now.url(), safeTitle(now), opened);
         });
     }
 
@@ -1420,11 +2258,15 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
 
     /** If the last action opened a tab, it becomes current, as it would for a person. */
     private String adoptOpenedTab(Set<String> before) {
+        return adoptOpenedTab(before, true);
+    }
+
+    private String adoptOpenedTab(Set<String> before, boolean selectOpened) {
         for (Page candidate : context.pages()) adopt(candidate);
         List<String> opened = tabs.all().keySet().stream().filter(id -> !before.contains(id)).toList();
         if (opened.isEmpty()) return null;
         String newest = opened.get(opened.size() - 1);
-        Page tab = tabs.select(newest);
+        Page tab = selectOpened ? tabs.select(newest) : tabs.get(newest);
         try {
             tab.waitForLoadState(LoadState.DOMCONTENTLOADED, new Page.WaitForLoadStateOptions().setTimeout(10_000));
         } catch (TimeoutError slow) {
@@ -1451,12 +2293,16 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
      * getAttribute would dispatch {@code __playwright_mark_target__} events into the page (playwright4j #38).
      */
     public Map<String, Object> extract(String kind, String scope) {
+        return extract(kind, scope, null);
+    }
+
+    public Map<String, Object> extract(String kind, String scope, String tabId) {
         String what = kind == null || kind.isBlank() ? "overview" : kind.trim().toLowerCase(java.util.Locale.ROOT);
         if (!PageExtractor.KINDS.contains(what)) {
             throw new IllegalArgumentException("kind must be one of " + PageExtractor.KINDS);
         }
         return onBrowser(() -> {
-            Page p = activePage();
+            Page p = pageFor(tabId);
             if (document(p).saved != null || p.locator("body").count() == 0) {
                 throw new IllegalStateException("browser_extract needs an HTML page; use browser_snapshot for "
                         + "XML, JSON or text documents.");
@@ -1513,23 +2359,161 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
     }
 
     public Object evaluate(String expression) {
-        return onBrowser(() -> activePage().evaluate(expression));
+        return evaluate(expression, null);
+    }
+
+    public Object evaluate(String expression, String tabId) {
+        return onBrowser(() -> pageFor(tabId).evaluate(expression));
+    }
+
+    /**
+     * Evaluates in exactly this tab (never the current one) and reports whether the script made the tab leave its
+     * page, so a navigation by the caller's script is visible in the answer. Other tabs are not touched.
+     */
+    public Map<String, Object> evaluateInTab(String expression, String tabId) {
+        if (tabId == null || tabId.isBlank()) throw new IllegalArgumentException("Give the tabId to evaluate in.");
+        return onBrowser(() -> {
+            Page page = tabs.get(tabId);
+            if (page == null) throw new IllegalArgumentException("Tab " + tabId + " is not open.");
+            String before = page.url();
+            Map<String, Object> answer = new LinkedHashMap<>();
+            try {
+                answer.put("result", page.evaluate(expression));
+                answer.put("ok", true);
+            } catch (RuntimeException error) {
+                answer.put("ok", false);
+                answer.put("error", error.getMessage() == null ? error.getClass().getSimpleName()
+                        : error.getMessage().lines().findFirst().orElse(""));
+            }
+            if (!before.equals(page.url())) answer.put("navigated", true);
+            return answer;
+        });
     }
 
     public byte[] screenshot() {
-        return onBrowser(() -> activePage().screenshot(new Page.ScreenshotOptions()
+        return screenshot(null);
+    }
+
+    public byte[] screenshot(String tabId) {
+        return onBrowser(() -> pageFor(tabId).screenshot(new Page.ScreenshotOptions()
                 .setFullPage(false).setTimeout(15_000)));
     }
 
+    /** Full-page and element images stop after this many CSS pixels; longer pages are cut off and say so. */
+    static final int MAX_CAPTURE_HEIGHT = 8_000;
+    /** At most this many controls are measured and marked. */
+    static final int MAX_MARKS = 60;
+    /** Read-only, transient: viewport size, device pixel ratio, scroll offset and document size. */
+    private static final String GEOMETRY = "() => [innerWidth, innerHeight, devicePixelRatio, scrollX, scrollY, "
+            + "Math.max(document.documentElement.scrollWidth, document.body ? document.body.scrollWidth : 0), "
+            + "Math.max(document.documentElement.scrollHeight, document.body ? document.body.scrollHeight : 0)]";
+
+    /**
+     * A screenshot the model can steer by. The page is neither scrolled nor changed: element and full-page
+     * images are cut from a document capture, and marks are drawn into the image only. With {@code mark} the
+     * controls are numbered as in the control list, so the numbers work with the click and fill tools.
+     *
+     * @param target the element for {@link PageScreenshot.Mode#ELEMENT}: a number, aria ref or locator
+     */
+    public PageScreenshot capture(PageScreenshot.Mode mode, String target, boolean mark) {
+        return capture(mode, target, mark, null);
+    }
+
+    public PageScreenshot capture(PageScreenshot.Mode mode, String target, boolean mark, String tabId) {
+        return onBrowser(() -> {
+            Page p = pageFor(tabId);
+            double[] g = geometry(p);
+            double viewportWidth = g[0], viewportHeight = g[1], ratio = g[2] > 0 ? g[2] : 1, scrollX = g[3], scrollY = g[4];
+            Page.ScreenshotOptions options = new Page.ScreenshotOptions().setTimeout(15_000);
+            PageScreenshot.Box origin;
+            String note = null;
+            switch (mode) {
+                case VIEWPORT -> origin = new PageScreenshot.Box(0, 0, viewportWidth, viewportHeight);
+                case FULL -> {
+                    double pageWidth = Math.max(g[5], viewportWidth), pageHeight = Math.max(g[6], viewportHeight);
+                    options.setFullPage(true);
+                    if (pageHeight > MAX_CAPTURE_HEIGHT) {
+                        options.setClip(0, 0, pageWidth, MAX_CAPTURE_HEIGHT);
+                        note = "page cut off after " + MAX_CAPTURE_HEIGHT + " of " + Math.round(pageHeight) + " CSS pixels";
+                    }
+                    origin = new PageScreenshot.Box(-scrollX, -scrollY, pageWidth, pageHeight);
+                }
+                case ELEMENT -> {
+                    if (target == null || target.isBlank()) {
+                        throw new IllegalArgumentException("An element screenshot needs a target, e.g. 3 or role=button name=\"Suchen\".");
+                    }
+                    Resolved resolved = resolve(p, target);
+                    PageScreenshot.Box box = box(resolved.locator());
+                    if (box == null) throw new IllegalArgumentException(resolved.description() + " is not visible on the page.");
+                    double height = Math.min(box.height(), MAX_CAPTURE_HEIGHT);
+                    // Document coordinates, so an element below the fold is captured without scrolling.
+                    options.setFullPage(true).setClip(box.x() + scrollX, box.y() + scrollY, box.width(), height);
+                    origin = box;
+                    note = resolved.description();
+                }
+                default -> throw new IllegalArgumentException("Unknown screenshot mode " + mode);
+            }
+            List<PageScreenshot.Mark> marks = mark ? marks(p) : List.of();
+            byte[] raw = p.screenshot(options);
+            leaveSavedDocument(p);
+            return PageScreenshot.of(raw, new PageScreenshot.Geometry(mode, viewportWidth, viewportHeight, ratio,
+                    scrollX, scrollY, origin, note), marks);
+        });
+    }
+
+    private static double[] geometry(Page p) {
+        Object values = p.evaluate(GEOMETRY);
+        double[] numbers = new double[7];
+        if (values instanceof List<?> list && list.size() == numbers.length) {
+            for (int i = 0; i < numbers.length; i++) {
+                if (list.get(i) instanceof Number number) numbers[i] = number.doubleValue();
+            }
+        }
+        if (numbers[0] <= 0 || numbers[1] <= 0) throw new IllegalStateException("Viewport size is unknown");
+        return numbers;
+    }
+
+    /** Numbered controls of a fresh snapshot (the one the click tools then use) with their viewport boxes. */
+    private List<PageScreenshot.Mark> marks(Page p) {
+        List<PageScreenshot.Mark> marks = new ArrayList<>();
+        for (PageControls.Control control : takeControlSnapshot(p).all()) {
+            if (marks.size() >= MAX_MARKS) break;
+            PageScreenshot.Box box = box(refLocator(p, control.ref()));
+            if (box == null) continue;
+            String name = control.name().isBlank() ? "" : " \"" + control.name() + "\"";
+            marks.add(new PageScreenshot.Mark(control.number(), control.role() + name, box));
+        }
+        return marks;
+    }
+
+    /** Viewport box of a single element via an element handle; unlike locator actions it marks nothing. */
+    private static PageScreenshot.Box box(Locator locator) {
+        if (locator.count() != 1) return null;
+        com.microsoft.playwright.ElementHandle handle = locator.elementHandle(
+                new Locator.ElementHandleOptions().setTimeout(5_000));
+        try {
+            com.microsoft.playwright.options.BoundingBox box = handle.boundingBox();
+            return box == null || box.width <= 0 || box.height <= 0 ? null
+                    : new PageScreenshot.Box(box.x, box.y, box.width, box.height);
+        } finally {
+            handle.dispose();
+        }
+    }
+
     public List<Map<String, Object>> networkEvents() {
-        return networkEvents(null);
+        return networkEvents(null, null);
     }
 
     public List<Map<String, Object>> networkEvents(String filter) {
+        return networkEvents(filter, null);
+    }
+
+    public List<Map<String, Object>> networkEvents(String filter, String tabId) {
         return onBrowser(() -> {
-            List<Map<String, Object>> rows = network.summary(filter);
-            if (proxy == null) return rows;
-            // Refused connections never reach the page as requests; merge them in time order.
+            Page ownerPage = tabId == null || tabId.isBlank() ? null : pageFor(tabId);
+            List<Map<String, Object>> rows = network.summary(filter, ownerPage);
+            // Proxy-blocked events are session-wide and cannot reliably be attributed to one page.
+            if (proxy == null || ownerPage != null) return rows;
             String needle = filter == null ? "" : filter.trim().toLowerCase(java.util.Locale.ROOT);
             List<Map<String, Object>> events = new ArrayList<>(rows);
             for (Map<String, Object> blocked : proxy.blockedEvents()) {
@@ -1545,15 +2529,38 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
     }
 
     public Map<String, Object> networkDetail(String id, boolean includeBody) {
-        return onBrowser(() -> network.detail(id, includeBody));
+        return networkDetail(id, includeBody, null);
+    }
+
+    public Map<String, Object> networkDetail(String id, boolean includeBody, String tabId) {
+        return onBrowser(() -> network.detail(id, includeBody,
+                tabId == null || tabId.isBlank() ? null : pageFor(tabId)));
     }
 
     public List<Map<String, Object>> networkJson(String filter, int limit) {
-        return onBrowser(() -> network.jsonResponses(filter, limit));
+        return networkJson(filter, limit, null);
+    }
+
+    public List<Map<String, Object>> networkJson(String filter, int limit, String tabId) {
+        return onBrowser(() -> network.jsonResponses(filter, limit,
+                tabId == null || tabId.isBlank() ? null : pageFor(tabId)));
     }
 
     public Map<String, Object> networkHar(int limit) {
-        return onBrowser(() -> network.har(limit, ArgosTools.VERSION));
+        return networkHar(limit, null);
+    }
+
+    public Map<String, Object> networkHar(int limit, String tabId) {
+        return onBrowser(() -> network.har(limit, ArgosTools.VERSION,
+                tabId == null || tabId.isBlank() ? null : pageFor(tabId)));
+    }
+
+    /**
+     * The durable consumer of response bodies (the chat's Search History): reuses this browser's protocol network
+     * events, reads only bodies the browser already received, never issues a request. Null switches it off.
+     */
+    public void contentSink(com.aresstack.argos.network.ResponseContentSink sink) {
+        network.contentSink(sink);
     }
 
     public Map<String, Object> clearNetwork() {
@@ -1561,6 +2568,84 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
             network.clear();
             return Map.of("cleared", true);
         });
+    }
+
+    /**
+     * Selects the WebDriver BiDi user context for the following calls. {@code start} is the persistent
+     * profile's own context; any other id is a separate user context in the same Camoufox (Playwright
+     * {@code newContext}), created on first use. Its cookies are kept in {@code cookies} between browser starts,
+     * read and written over the protocol only (no page script). Takes effect with the next browser task.
+     */
+    public void useContext(String id, Path cookies) {
+        wantedCookies = cookies;
+        wantedContext = id;
+    }
+
+    /** Protocol observers for a context; only the ACTIVE context's new tabs are adopted. */
+    private void observe(BrowserContext observed) {
+        // Tabs opened by websites (target=_blank, window.open) are adopted like our own.
+        observed.onPage(page -> {
+            if (context == observed) adopt(page);
+        });
+        // Protocol events: when a download's transfer ended (its request may not belong to the tab any more).
+        observed.onRequestFinished(finishedRequests::add);
+        observed.onRequestFailed(failedRequests::add);
+    }
+
+    private void switchToWantedContext() throws Exception {
+        String wanted = wantedContext;
+        if (wanted.equals(activeContext) && (context != null || START_CONTEXT.equals(wanted))) return;
+        ensureContext();
+        if (wanted.equals(activeContext)) return;
+        saveCookiesQuietly();
+        controlSnapshots.clear();
+        if (START_CONTEXT.equals(wanted)) {
+            context = startContext;
+            tabs = startTabs;
+        } else {
+            UserContext user = userContexts.get(wanted);
+            if (user == null) {
+                com.microsoft.playwright.Browser owner = startContext.browser();
+                if (owner == null) {
+                    throw new IllegalStateException("This Camoufox session cannot create additional user contexts.");
+                }
+                BrowserContext created = owner.newContext();
+                Path cookies = wantedCookies;
+                if (cookies != null && Files.isRegularFile(cookies)) {
+                    List<com.microsoft.playwright.options.Cookie> saved = List.of(mapper.readValue(
+                            Files.readString(cookies), com.microsoft.playwright.options.Cookie[].class));
+                    if (!saved.isEmpty()) created.addCookies(saved);
+                }
+                observe(created);
+                user = new UserContext(created, new BrowserTabs(), cookies);
+                userContexts.put(wanted, user);
+            }
+            context = user.context();
+            tabs = user.tabs();
+        }
+        activeContext = wanted;
+    }
+
+    /** Writes the active user context's cookies (protocol only); the start context keeps them in its profile. */
+    private void saveCookiesQuietly() {
+        UserContext user = userContexts.get(activeContext);
+        if (user == null || user.cookies() == null || context != user.context()) return;
+        try {
+            Path temporary = user.cookies().resolveSibling(user.cookies().getFileName() + ".tmp");
+            Files.createDirectories(user.cookies().getParent());
+            Files.writeString(temporary, mapper.writeValueAsString(user.context().cookies()));
+            Files.move(temporary, user.cookies(), java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+                    java.nio.file.StandardCopyOption.ATOMIC_MOVE);
+        } catch (Exception error) {
+            System.err.println("Argos: could not save the cookies of context " + activeContext + ": "
+                    + error.getClass().getSimpleName());
+        }
+    }
+
+    private void forgetUserContexts() {
+        userContexts.clear();
+        tabs = startTabs;
+        activeContext = START_CONTEXT;
     }
 
     public Map<String, Object> status() {
@@ -1667,10 +2752,14 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
 
     private void shutDown() {
         try {
-            if (context != null) context.close();
+            saveCookiesQuietly();
+            for (UserContext user : userContexts.values()) user.context().close();
+            if (startContext != null) startContext.close();
             if (playwright != null) playwright.close();
         } finally {
             context = null;
+            startContext = null;
+            forgetUserContexts();
             playwright = null;
             driverProcesses.clear();
             // The proxy goes last: until then the browser still has its only route through it.

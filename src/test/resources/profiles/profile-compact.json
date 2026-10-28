@@ -1,0 +1,103 @@
+[ {
+  "name" : "web_search",
+  "description" : "Search the web. Returns results result-1, result-2, ... with title, url and snippet. Example: {\"query\": \"camoufox webdriver bidi\"}",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "query" : {
+        "description" : "What to search for",
+        "type" : "string"
+      }
+    },
+    "required" : [ "query" ],
+    "additionalProperties" : false,
+    "$defs" : { },
+    "definitions" : { }
+  }
+}, {
+  "name" : "web_open",
+  "description" : "Open a web page and return its title and text. An 'HTTP error:' line marks a page the server could not deliver; then try another page or result. Example: {\"url\": \"https://en.wikipedia.org/wiki/Firefox\"}",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "url" : {
+        "description" : "Full http(s) URL",
+        "type" : "string"
+      }
+    },
+    "required" : [ "url" ],
+    "additionalProperties" : false,
+    "$defs" : { },
+    "definitions" : { }
+  }
+}, {
+  "name" : "web_read",
+  "description" : "Read the text of the page the browser shows, whichever tool opened it. Long pages come in parts: the answer says PART 1 of 3, then ask for the next part. Example: {\"part\": 2}",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "part" : {
+        "description" : "Part number, default 1",
+        "type" : "integer"
+      }
+    },
+    "required" : [ ],
+    "additionalProperties" : false,
+    "$defs" : { },
+    "definitions" : { }
+  }
+}, {
+  "name" : "web_find",
+  "description" : "Find a word or phrase on the page the browser shows without reading the whole page. Returns the number of matches and short snippets, each with the web_read part it is in. Example: {\"text\": \"opening hours\"}",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "text" : {
+        "description" : "Word or phrase to find; case does not matter",
+        "type" : "string"
+      }
+    },
+    "required" : [ "text" ],
+    "additionalProperties" : false,
+    "$defs" : { },
+    "definitions" : { }
+  }
+}, {
+  "name" : "web_links",
+  "description" : "List the links of the page the browser shows as link-1, link-2, ... Use the id with web_follow. Call web_read first if the page loaded more content. Example: {}",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : { },
+    "required" : [ ],
+    "additionalProperties" : false,
+    "$defs" : { },
+    "definitions" : { }
+  }
+}, {
+  "name" : "web_follow",
+  "description" : "Open a link by its id: link-3 from web_links or result-2 from web_search. A bare number uses the list you saw last. An 'HTTP error:' line marks a page the server could not deliver; then try another result or link. Example: {\"link_id\": \"link-3\"}",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "link_id" : {
+        "description" : "Id such as link-3 or result-2",
+        "type" : "string"
+      }
+    },
+    "required" : [ "link_id" ],
+    "additionalProperties" : false,
+    "$defs" : { },
+    "definitions" : { }
+  }
+}, {
+  "name" : "web_back",
+  "description" : "Go back to the previous page and return its text. Example: {}",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : { },
+    "required" : [ ],
+    "additionalProperties" : false,
+    "$defs" : { },
+    "definitions" : { }
+  }
+} ]

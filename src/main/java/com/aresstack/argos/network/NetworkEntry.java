@@ -1,5 +1,6 @@
 package com.aresstack.argos.network;
 
+import com.microsoft.playwright.Page;
 import com.microsoft.playwright.Request;
 import com.microsoft.playwright.Response;
 
@@ -24,6 +25,7 @@ final class NetworkEntry {
     final String postData;
     final String redirectedFromId;
     final Request request;
+    final Page ownerPage;
 
     State state = State.REQUEST;
     Response response;
@@ -40,10 +42,19 @@ final class NetworkEntry {
     Integer bodyBytes;
     boolean bodyTruncated;
     String bodyUnavailable;
+    /** Handed to the content sink once (finish and response events may come in either order). */
+    boolean contentOffered;
 
     NetworkEntry(String id, Instant startedAt, long startedNanos, String method, String listUrl, String url,
                  String resourceType, Map<String, String> requestHeaders, String postData,
                  String redirectedFromId, Request request) {
+        this(id, startedAt, startedNanos, method, listUrl, url, resourceType, requestHeaders, postData,
+                redirectedFromId, request, null);
+    }
+
+    NetworkEntry(String id, Instant startedAt, long startedNanos, String method, String listUrl, String url,
+                 String resourceType, Map<String, String> requestHeaders, String postData,
+                 String redirectedFromId, Request request, Page ownerPage) {
         this.id = id;
         this.startedAt = startedAt;
         this.startedNanos = startedNanos;
@@ -55,6 +66,7 @@ final class NetworkEntry {
         this.postData = postData;
         this.redirectedFromId = redirectedFromId;
         this.request = request;
+        this.ownerPage = ownerPage;
     }
 
     String kind() {

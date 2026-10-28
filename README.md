@@ -46,7 +46,7 @@ build/distributions/argos-package.zip  ← enthält nur argos.jar
 
 ## Lokaler Start
 
-In der vorhandenen Windows-Entwicklungsumgebung erkennt Argos standardmäßig die **Camoufox-Binärdatei und die offizielle Fingerprint-JSON** aus `~/.browser-event-hub/desktop/camoufox.properties`, falls keine Argos-Konfiguration vorliegt. **Browserprofile werden ausdrücklich nicht übernommen.** Argos verwendet ausschließlich `~/.argos/profiles/default`.
+Argos liest Browserpfade ausschließlich aus Umgebungsvariablen oder seiner eigenen Konfiguration `~/.argos/argos.properties` (alternativ über `-Dargos.config`). **Konfigurationsdateien anderer Anwendungen werden nicht gelesen.** Fehlen beide Browserpfade, meldet Argos beim ersten Browseraufruf eine verständliche Konfigurationsfehlermeldung. Argos verwendet ausschließlich eigene Browserprofile unter `~/.argos/profiles/default`.
 
 Eigenständige Konfiguration über `~/.argos/argos.properties`:
 
@@ -57,15 +57,31 @@ security.mode=central-oauth
 public.origin=https://argos.aresstack.de
 oauth.central-issuer=https://argos.aresstack.de
 security.required-scope=argos
-camoufox.executable=G:/camoufox-bidi-smoke-20261025/browser/camoufox.exe
-camoufox.launchOptions=G:/camoufox-bidi-smoke-20261025/cmp/launch.json
 browser.profile=C:/Users/USERNAME/.argos/profiles/default
 browser.headless=false
 ```
 
-Die angegebenen Dateipfade sind Beispiele aus der isolierten Testinstallation und sind nicht Teil des Git-Repositories.
+**Camoufox wird nicht von Hand installiert.** Beim ersten Browserzugriff lädt Argos seine eigene Camoufox-Distribution (Camoufox `156.0.1-beta.36` mit den WebDriver-BiDi-Fixes aus daijro/camoufox#952) automatisch herunter, prüft ihre Integrität (gepinnte SHA-256-Prüfsumme und vorhandene BiDi-Fixes), installiert sie atomar und startet sie mit dem eingebauten Fingerprint-Profil. Weder eine manuelle Camoufox-Installation noch Browserpfade noch eine externe `launch.json` sind erforderlich; Argos liest keine Konfigurationsdateien anderer Anwendungen.
 
-**Im AresStack Webserver haben die Umgebungsvariablen Vorrang vor den Properties.** Pflichtfeld ist `SERVER_PORT`; Argos besitzt **keinen fest einprogrammierten Standardport**. Wie bei Pyloros werden `SERVER_PORT`, `SERVER_HOST` (optional, nur Loopback), `SECURITY_MODE`, `REQUIRED_SCOPE`, `PUBLIC_ORIGIN` und `CENTRAL_OAUTH_ISSUER` ausgewertet. Für den Camoufox-Browser bleiben zusätzlich `ARGOS_CAMOUFOX_EXECUTABLE`, `ARGOS_CAMOUFOX_LAUNCH_OPTIONS`, `ARGOS_PROFILE_DIR` und `ARGOS_HEADLESS` verfügbar.
+Das Installationsverzeichnis ist optional über `BROWSER_DIR` (alternativ Property `browser.install-dir`; die Umgebungsvariable hat Vorrang) wählbar. Ohne Angabe verwendet Argos `~/.argos/browser`. Pfade mit Laufwerksbuchstaben und Leerzeichen sind erlaubt:
+
+```powershell
+# Windows
+$env:BROWSER_DIR = "D:\Argos Browser"
+java -jar argos.jar
+```
+
+```bash
+# Linux
+export BROWSER_DIR="/opt/argos browser"
+java -jar argos.jar
+```
+
+Die Launch-Konfiguration (Fingerprint, Prefs, Startoptionen) ist immer vorhanden: Ohne `BROWSER_LAUNCH_CONFIG` (Property `browser.launch-config`) verwendet Argos sein eingebautes Standardprofil; nur wer eine eigene Datei will, setzt die Variable auf deren Pfad. Die ausführbare Datei ermittelt Argos selbst aus seiner verwalteten Installation.
+
+Einzelheiten, Overrides und Fehlerverhalten: [docs/camoufox-distribution.md](docs/camoufox-distribution.md).
+
+**Im AresStack Webserver haben die Umgebungsvariablen Vorrang vor den Properties.** Pflichtfeld ist `SERVER_PORT`; Argos besitzt **keinen fest einprogrammierten Standardport**. Wie bei Pyloros werden `SERVER_PORT`, `SERVER_HOST` (optional, nur Loopback), `SECURITY_MODE`, `REQUIRED_SCOPE`, `PUBLIC_ORIGIN` und `CENTRAL_OAUTH_ISSUER` ausgewertet. Für den Camoufox-Browser sind `ARGOS_PROFILE_DIR` und `ARGOS_HEADLESS` verfügbar; `BROWSER_LAUNCH_CONFIG`, `BROWSER_DIR` und `ARGOS_CAMOUFOX_DISTRIBUTION_URL` sind optionale Overrides (siehe [docs/camoufox-distribution.md](docs/camoufox-distribution.md)) und im Webserver nicht nötig.
 
 Die bereits angelegten Webserver-Variablen für Argos sind:
 
@@ -143,7 +159,7 @@ Der Login allein ist **keine** Discovery-Abnahme. Nach erfolgreicher OAuth-Verbi
 | `browser_click` | Elemente anklicken |
 | `browser_fill` | Eingabefelder ausfüllen |
 | `browser_evaluate` | JavaScript in der Webseite ausführen |
-| `browser_screenshot` | Screenshot als MCP-Image zurückgeben |
+| `browser_screenshot` | Screenshot als MCP-Image plus Textlegende: `mode` = `viewport` (Standard), `full` oder `element` (mit `target`), `mark=true` zeichnet die nummerierten Bedienelemente nur ins Bild (nicht ins DOM). Ein Bildpixel entspricht einem CSS-Pixel des Viewports (Device-Pixel-Ratio herausgerechnet, große Bilder auf max. 2000 px skaliert); die Legende nennt Umrechnung und Mittelpunkte in Viewport-Koordinaten für die Maus-Werkzeuge |
 | `browser_network` | Letzte HTTP-Requests, Responses und Fehler untersuchen (eine Zeile je Request mit ID, optional `filter`) |
 
 ### Tabs, Historie, Bedienelemente und Extraktion
@@ -152,10 +168,16 @@ Diese Werkzeuge stehen in `ArgosBrowsingTools` als getrennte Listen `expert()` u
 
 | Tool | Profil | Zweck |
 | --- | --- | --- |
-| `browser_tabs`, `browser_tab_new`, `browser_tab_select`, `browser_tab_close` | expert | Tabs mit kurzen Ids (`t1`, `t2`); von Webseiten geöffnete Tabs (`target=_blank`) werden übernommen und nach einem Klick aktuell |
-| `browser_back`, `browser_forward`, `browser_reload` | expert | Historie des aktuellen Tabs |
+| `browser_tabs`, `browser_tab_new`, `browser_tab_select`, `browser_tab_close` | expert | Tabs mit kurzen IDs (`t1`, `t2`); von Webseiten geöffnete Tabs (`target=_blank`) werden übernommen und nach einem Klick aktuell |
+| `browser_navigate`, `browser_snapshot`, `browser_inspect`, `browser_click`, `browser_fill`, `browser_evaluate`, `browser_screenshot`, `browser_network` | legacy + expert | Optionales Feld `tab` adressiert einen bestimmten Tab; ohne Feld bleibt das aktuelle Verhalten erhalten |
+| `browser_back`, `browser_forward`, `browser_reload` | expert | Historie des aktuellen oder explizit adressierten Tabs |
+| `browser_pages_navigate`, `browser_pages_snapshot`, `browser_pages_inspect` | expert | Mehrere bestehende Tabs in einem MCP-Aufruf navigieren oder lesend inspizieren; Ergebnisse pro Tab und in Eingabereihenfolge |
 | `browser_controls` | expert | Bedienelemente mit Nummer, Aria-Ref und semantischem Locator (`role=button name="Suchen"`) |
 | `browser_click_target`, `browser_fill_target` | expert | Klick bzw. Eingabe auf Nummer, Ref, semantischen Locator (`role=`, `label=`, `placeholder=`, `text=`) oder sichtbaren Namen |
+| `browser_mouse_move`, `browser_mouse_click` | expert | Zeiger bewegen bzw. klicken (`button`: `left`, `middle`, `right`) an `x`/`y` in CSS-Pixeln des Viewports: (0, 0) ist dessen linke obere Ecke, wie im Screenshot, unabhängig vom Scrollstand; Punkte außerhalb werden abgelehnt |
+| `browser_hover` | expert | Zeiger auf ein Element (gleiche Ziele wie `browser_click_target`) legen, ohne zu klicken, z. B. für Hover-Menüs |
+| `browser_scroll` | expert | Mausrad um `delta_x`/`delta_y` CSS-Pixel (positiv: rechts/unten) drehen; optional erst über `target` oder `x`/`y`, damit der Scrollbereich darunter scrollt |
+| `browser_drag` | expert | Ziehen und Ablegen mit echter Maus (drücken, bewegen, loslassen über WebDriver BiDi): Quelle `source` oder `from_x`/`from_y`, Ziel `target` oder `to_x`/`to_y`; kein `locator.dragTo`, keine Skript-Events. Funktioniert für Seiten, die mit Pointer-/Maus-Events ziehen (Slider, Karten, Sortierlisten im Fallback-Modus). **Bekannte Grenze:** natives HTML5-Drag-and-Drop (`draggable`) schließt Firefox/Camoufox bei automatisierter Eingabe nicht ab ([Mozilla-Bug 1515879](https://bugzilla.mozilla.org/show_bug.cgi?id=1515879)): `dragstart`/`dragover` kommen, `drop`/`dragend` nicht; das Ergebnis enthält dann `warning`. Abnahme: `DragToolsBrowserTest.pointerDragsCompleteWithTrustedEvents` (muss grün sein); die Grenze prüft `html5DragReportsTheKnownFirefoxLimit` (Warnung, kein Drop vorausgesetzt) |
 | `browser_extract` | expert | `overview`, `headings`, `links`, `tables`, `lists`, `metadata` (inkl. `citation_*`, Open Graph), `jsonld` |
 | `web_controls`, `web_click`, `web_fill` | compact | Dieselbe Bedienung für kleine Modelle: nummerierte Textliste, ein bis zwei Parameter |
 
@@ -218,7 +240,7 @@ Die bisherigen Schlüssel `url`, `title` und `text` bleiben erhalten; neu sind `
 
 `browser_wait` verwendet dieselben Bedingungen (bei `fast` die von `balanced`) mit eigenem `timeoutMs` (500–60 000, Standard 10 000).
 
-Mit `ARGOS_TOOL_PROFILE=expert` kommen `browser_download`, `browser_document` und `browser_open_many` hinzu (Dokumente und mehrere Seiten über Hintergrund-Tabs derselben Session, ohne Skript-Injektion); Details und Parallelitätsmessung in [`docs/batch-and-documents.md`](docs/batch-and-documents.md).
+Mit `ARGOS_TOOL_PROFILE=expert` kommen `browser_download`, `browser_document`, `browser_open_many` und die `browser_pages_*`-Werkzeuge hinzu. `browser_open_many` nutzt Hintergrund-Tabs; `browser_pages_navigate` arbeitet auf vorhandenen, identifizierten Tabs und isoliert Ergebnisse pro Seite. Details und Parallelitätsgrenzen stehen in [`docs/batch-and-documents.md`](docs/batch-and-documents.md).
 
 `browser_network` entfernt Query-Parameter und Benutzerinformationen aus den protokollierten URLs. Bis zu 200 Ereignisse bleiben im Speicher. `browser_evaluate` kann Webseiten verändern und ist deshalb nur für ausdrücklich autorisierte Nutzer über das gesicherte MCP-Plugin bestimmt.
 
@@ -243,7 +265,7 @@ Ohne Angabe gilt das bisherige Profil (`legacy`) mit genau den neun Werkzeugen o
 
 **Schutz des Browser-Threads:** Bodies werden nur nach vollständig abgeschlossenem Download geholt, nie bei 204/304/Weiterleitungen, HEAD oder abgebrochenen Requests und nie, wenn `Content-Length` über 2 MB liegt. Automatisches Laden (`browser_network_json`, eager Capture) hat pro Browser-Aufruf ein Budget von höchstens 5 Bodies und 2 Sekunden; der Rest folgt beim nächsten Aufruf. Dauert ein einzelner Abruf länger als 3 Sekunden, wird das automatische Laden bis `browser_network_clear` ausgesetzt; `browser_network_detail` mit `body=true` bleibt als ausdrücklicher Einzelabruf möglich. Ein einzelner `Response.body()`-Aufruf lässt sich in Playwright nicht abbrechen; er betrifft aber nur bereits im Browser gesammelte Daten.
 
-`ARGOS_NETWORK_BODIES=true` (Property `network.bodies`) speichert Text-Bodies von Dokument-, XHR- und Fetch-Antworten bereits beim Laden, damit sie auch nach einer weiteren Navigation noch abrufbar sind. Standard ist `false`; dann werden Bodies nur auf Anfrage geladen, solange der Browser sie noch vorhält. `browser_evaluate` kann Webseiten verändern und ist deshalb nur für ausdrücklich autorisierte Nutzer über das gesicherte MCP-Plugin bestimmt.
+`ARGOS_NETWORK_BODIES=true` (Property `network.bodies`) speichert Text-Bodies von Dokument-, XHR- und Fetch-Antworten bereits beim Laden, damit sie auch nach einer weiteren Navigation noch abrufbar sind. Standard ist `false`; dann werden Bodies nur auf Anfrage geladen, solange der Browser sie noch vorhält. Diese Diagnoseeinstellung ist unabhängig von der dauerhaften Erfassung der Search History (`ARGOS_SEARCH_HISTORY_CAPTURE_*`, siehe [docs/search-history.md](docs/search-history.md)). `browser_evaluate` kann Webseiten verändern und ist deshalb nur für ausdrücklich autorisierte Nutzer über das gesicherte MCP-Plugin bestimmt.
 
 ### Werkzeugprofile
 
@@ -251,11 +273,15 @@ Welche Werkzeuge Argos veröffentlicht, bestimmt `ARGOS_TOOL_PROFILE` (Property 
 
 | Profil | Werkzeuge | Gedacht für |
 | --- | --- | --- |
-| `legacy` (Standard) | die neun `browser_*`-Werkzeuge oben | bestehende Clients, unverändert |
+| `legacy` | die neun `browser_*`-Werkzeuge oben | bestehende Clients, unverändert |
 | `compact` | nur `web_search`, `web_open`, `web_read`, `web_find`, `web_links`, `web_follow`, `web_back` | kleine lokale Modelle (wie in AskAI erprobt) |
-| `expert` | `web_*`, `browser_*`, Tabs/Historie/Bedienelemente/Extraktion, `browser_wait`, Dokumente und Batches, Netzwerkanalyse | leistungsfähige Modelle |
+| `expert` | `web_*`, `browser_*`, Tabs/Historie/Bedienelemente/Extraktion, Maus, Tastatur, Drag-and-drop, `browser_wait`, Dokumente und Batches, Netzwerkanalyse | leistungsfähige Modelle |
+| `convenience` | `web_search`, `web_select_results`, `web_select_links`, `web_follow_link`, `web_read_tab`, `web_back`, `web_open_url`, `web_get_url`, `web_close_tabs`, `web_screenshot` (plus Search History) | Recherche mit ChatGPT: alle Suchmaschinen parallel, Seiten in eigenen Tabs, Navigation nur über IDs, JSON-Antworten |
+| `developer` (Standard) | alle `convenience`-Werkzeuge plus `web_evaluate`, `web_inspect`, `web_extract`, `web_network`, `web_network_detail`, `web_network_json`, `web_network_har`, `web_network_clear` | technische Analyse von Webseiten auf denselben Tab-IDs |
 
-Mit `ARGOS_RESEARCH=true` kommen in jedem Profil `web_research` und `web_research_stop` hinzu. `web_open`/`web_read` lesen Feeds, XML, JSON und Text wie `browser_snapshot` aus dem Antwort-Body und melden Binärdokumente mit Hinweis auf die Dokumentwerkzeuge. Antwortet der Server für das Hauptdokument mit Status 400 oder höher, steht in `web_open`, `web_follow`, `web_read` und `web_back` nach `TITLE` die Zeile `HTTP error: 500 Internal Server Error — the requested content may not be available on this page.` (Standard-Reason-Phrase nach RFC 9110, bei unbekanntem Code nur die Zahl): Kleine Modelle lasen „TITLE: 500 Internal Server Error" samt Servertext sonst als Inhalt und blieben an der Adresse hängen, statt den nächsten Treffer zu öffnen (Phase 7, `broken-link`). Mehr geschieht nicht: keine automatische Navigation, keine Bewertung des Inhalts. Der Status stammt aus der Navigationsantwort, die Argos ohnehin für Dokumenttyp und Bereitschaft aus den Protokollereignissen liest; ohne bekannte Antwort entfällt die Zeile (etwa wenn die Seite ihre Adresse nach dem Laden per Skript geändert hat; `web_back` lädt das Dokument neu, weil Argos den Back-Forward-Cache abschaltet, und kennt den Status). Es wird dafür kein Seitenskript ausgeführt.
+Ohne `ARGOS_TOOL_PROFILE` (oder leer) gilt `developer`; `convenience` bleibt mit `ARGOS_TOOL_PROFILE=convenience` wählbar. `legacy`, `compact` und `expert` sind dadurch unverändert (Namen, Schemata, Verhalten; geprüft gegen Snapshots von develop in `ProfileSnapshotTest`). Details zum Convenience-Profil: [docs/convenience-profile.md](docs/convenience-profile.md).
+
+Mit `ARGOS_RESEARCH=true` kommen in den Profilen `legacy`, `compact` und `expert` `web_research` und `web_research_stop` hinzu (nicht in `convenience`). `web_open`/`web_read` lesen Feeds, XML, JSON und Text wie `browser_snapshot` aus dem Antwort-Body und melden Binärdokumente mit Hinweis auf die Dokumentwerkzeuge. Antwortet der Server für das Hauptdokument mit Status 400 oder höher, steht in `web_open`, `web_follow`, `web_read` und `web_back` nach `TITLE` die Zeile `HTTP error: 500 Internal Server Error — the requested content may not be available on this page.` (Standard-Reason-Phrase nach RFC 9110, bei unbekanntem Code nur die Zahl): Kleine Modelle lasen „TITLE: 500 Internal Server Error" samt Servertext sonst als Inhalt und blieben an der Adresse hängen, statt den nächsten Treffer zu öffnen (Phase 7, `broken-link`). Mehr geschieht nicht: keine automatische Navigation, keine Bewertung des Inhalts. Der Status stammt aus der Navigationsantwort, die Argos ohnehin für Dokumenttyp und Bereitschaft aus den Protokollereignissen liest; ohne bekannte Antwort entfällt die Zeile (etwa wenn die Seite ihre Adresse nach dem Laden per Skript geändert hat; `web_back` lädt das Dokument neu, weil Argos den Back-Forward-Cache abschaltet, und kennt den Status). Es wird dafür kein Seitenskript ausgeführt.
 
 Die `web_*`-Werkzeuge haben höchstens einen Parameter, Beispiele in der Beschreibung und antworten mit kurzem Klartext statt JSON:
 
@@ -279,9 +305,11 @@ Pro `web_open`/`web_read`/`web_find`/`web_back` liest Argos einmal `page.content
 
 Die `web_*`-Werkzeuge folgen dem Browser: `web_read` und `web_links` lesen auch eine Seite, die ein anderes Werkzeug geöffnet hat, im Profil `expert` `browser_navigate`, ein Klick oder ein Tab-Wechsel, in jedem Profil die zuletzt von `web_research` geladene Seite; die Link-IDs gehören dann zu dieser Seite, wofür `web_links` sie einmal neu liest. Alle Werkzeuge arbeiten auf demselben aktuellen Tab. Nur die Ergebnisseite der Suchmaschine nach `web_search` wird nicht übernommen (erkannt an Schema, Host und Pfad), auch nicht nach einer Suche ohne Treffer oder einer an einer Consent-/Challenge-Seite gescheiterten: Dort ist zuerst ein Treffer mit `web_follow` zu öffnen. Ein leerer Tab ist nichts zu lesen und meldet „No page is open yet" (nach einer `web_search` mit Treffern „No page is open since the last web_search"); ein Dokument ohne `http(s)`-Adresse (`blob:`, `srcdoc`) wird ebenso gemeldet, ohne den Tab zu verändern.
 
-`web_search` liest Suchergebnisseiten ausschließlich über `page.content()` (isolierte Playwright-Welt) und analysiert sie in der JVM; Consent-Banner werden per echter Mausbewegung über WebDriver BiDi angeklickt. Konfiguration: `ARGOS_SEARCH_ENGINES` (Reihenfolge, Standard `duckduckgo,bing,google`) und `ARGOS_SEARCH_MAX_RESULTS` (Standard 10). Consent-Banner werden nur abgelehnt (oder auf „nur notwendige“ gesetzt); „Alle akzeptieren“ nur mit `ARGOS_SEARCH_CONSENT_ACCEPT=true`. Details: [docs/web-search.md](docs/web-search.md).
+`web_search` liest Suchergebnisseiten ausschließlich über `page.content()` (isolierte Playwright-Welt) und analysiert sie in der JVM; Consent-Banner werden per echter Mausbewegung über WebDriver BiDi angeklickt. Konfiguration: `ARGOS_SEARCH_ENGINES` (Reihenfolge, Standard `duckduckgo,bing,google`; im Profil `convenience` die Menge der parallel befragten Suchmaschinen, keine Fallback-Reihenfolge) und `ARGOS_SEARCH_MAX_RESULTS` (Standard 10). Consent-Banner werden nur abgelehnt (oder auf „nur notwendige“ gesetzt); „Alle akzeptieren“ nur mit `ARGOS_SEARCH_CONSENT_ACCEPT=true`. Details: [docs/web-search.md](docs/web-search.md).
 
 Optional (`ARGOS_RESEARCH=true`, Standard aus) kommen `web_research(question)` und `web_research_stop()` hinzu: eine begrenzte, deterministische Recherche nach dem Vorbild des AskAI-`ResearchLoop` (Suche → relevante Seiten lesen → relevanten Links folgen → nummerierte Quellen mit Zitat), ohne KI-Modell und ohne Seiten-Skripte. Details: [docs/research.md](docs/research.md).
+
+Search History (Standard an, nur mit `ARGOS_PROFILE_ISOLATION=chat`): Argos speichert je Chat alle Suchen, Treffer und gelesenen Seiten dauerhaft unter `~/.argos/profiles/chats/<hash>/history/`, durchsuchbar per Lucene (`search_history`) und exportierbar als TXT, JSONL oder Single-File-HTML-ZIP (`search_history_export`). Details und Stealth-Hinweis: [docs/search-history.md](docs/search-history.md).
 
 Modellvergleich (Phase 7): `gradlew evalModels` lässt lokale Ollama-Modelle (Standard: `gemma4:e2b` und `gpt-oss:20b`) Argos über MCP gegen eine lokale Fixture-Welt bedienen und schreibt einen JSON- und Markdown-Bericht. Details: [docs/model-evaluation.md](docs/model-evaluation.md).
 
@@ -310,7 +338,7 @@ Gesetzte Firefox-Prefs (gegen Firefox `StaticPrefList.yaml`/`all.js` und Camoufo
 
 ## GitHub Actions und Releases
 
-Der Workflow [Build and Release Argos](.github/workflows/build-release.yml) läuft bei jedem Push auf `main`, bei Pull Requests und manuell über **Actions → Build and Release Argos → Run workflow**. Er baut Playwright4J aus einem **festgepinnten Commit** selbst in Maven Local, führt die Java-Tests aus und erstellt das plattformübergreifende `argos-package.zip`. Anschließend prüft ein separater Windows-Job sowohl den **echten Playwright4J-Treiberstart aus der einzelnen JAR** (`--verify-runtime`) als auch den MCP-Handshake und die Browserwerkzeugliste, ohne dass ein externes `lib/`-Verzeichnis existiert. Die Browser-Funktionstests mit echter Camoufox-Binärdatei bleiben lokal, da der Runner diese nicht mitbringt.
+Der Workflow [Build and Release Argos](.github/workflows/build-release.yml) läuft bei jedem Push auf `main`, bei Pull Requests und manuell über **Actions → Build and Release Argos → Run workflow**. Er baut Playwright4J aus einem **festgepinnten Commit** selbst in Maven Local, führt die Java-Tests aus und erstellt das plattformübergreifende `argos-package.zip`. Anschließend prüft ein separater Windows-Job sowohl den **echten Playwright4J-Treiberstart aus der einzelnen JAR** (`--verify-runtime`) als auch den MCP-Handshake und die Browserwerkzeugliste, ohne dass ein externes `lib/`-Verzeichnis existiert. Echte Camoufox-Tests laufen im Workflow [Camoufox distribution](.github/workflows/camoufox-distribution.yml): Er baut die Browserdistribution, veröffentlicht sie einmalig und lässt Argos sie unter Linux und Windows (je mit und ohne `playwright4j.bidi.nativeBehavior`) selbst herunterladen und starten.
 
 **Ein GitHub Release wird ausschließlich beim Push eines Versionstags veröffentlicht**, und nur wenn Linux- und Windows-Jobs erfolgreich waren. Ein Push auf `main` oder ein manueller Workflow-Lauf veröffentlicht **kein** Release.
 
@@ -321,7 +349,7 @@ git tag v0.1.0
 git push origin v0.1.0
 ```
 
-Im GitHub Release liegen die **direkt ausführbare `argos.jar`** und optional `argos-package.zip` (enthält nur dieselbe JAR). Beide enthalten **keine Camoufox-Binärdatei, Fingerprint-Konfiguration oder Benutzerprofile**; diese werden auf dem Zielrechner gesondert eingerichtet. Der Webserver benötigt nur die einzelne JAR.
+Im GitHub Release liegen die **direkt ausführbare `argos.jar`** und optional `argos-package.zip` (enthält nur dieselbe JAR). Beide enthalten **keine Camoufox-Binärdatei und keine Benutzerprofile**; den Browser lädt Argos beim ersten Bedarf aus dem separaten Release `camoufox-<version>-argos.<n>`, das eingebaute Fingerprint-Profil steckt in der JAR. Der Webserver benötigt nur die einzelne JAR.
 
 ## Tests und Stand
 
@@ -329,6 +357,18 @@ Im GitHub Release liegen die **direkt ausführbare `argos.jar`** und optional `a
 .\gradlew.bat test
 .\gradlew.bat test --tests com.aresstack.argos.CamoufoxBrowserTest -PtestCamoufox=true
 .\gradlew.bat test --tests com.aresstack.argos.CamoufoxNetworkBoundaryTest -PtestCamoufox=true
+# Argos' eigene Distribution: Download, Prüfung und Start mit dem eingebauten Profil (lädt ~1,3 GB)
+.\gradlew.bat test --tests "*CamoufoxProvisionedSmokeTest" -PtestCamoufox -PtestProvisionedCamoufox
+```
+
+Die Camoufox-Tests verwenden die von Argos unter `BROWSER_DIR` installierte Distribution (vorher einmal `CamoufoxProvisionedSmokeTest` laufen lassen, sonst meldet der erste Test nach 30 s „wird installiert“).
+
+Alle Camoufox-Browsertests auf einmal (auch die Eingabetests `FieldSelectionBrowserTest`, `KeyboardShortcutBrowserTest`, `HumanInputBrowserTest`, die ohne `-PtestHumanBrowser` automatisch den von Argos installierten Camoufox verwenden). `-PtestCamoufox` ohne Wert gilt ebenfalls als eingeschaltet:
+
+```powershell
+$env:BROWSER_DIR = "D:\Argos Browser"
+.\gradlew.bat test -PtestCamoufox=true `
+  --tests "*BrowserTest*" --tests "*Camoufox*"
 ```
 
 `CamoufoxNetworkBoundaryTest` prüft mit dem echten Camoufox, dass ein Redirect auf `127.0.0.2`, ein `<img>` ins LAN und WebRTC-UDP zu einem lokalen STUN-Port abgewiesen werden, während die freigegebene Testseite normal lädt. DNS-Rebinding prüft `Socks5ProxyTest` mit einem steuerbaren Resolver.

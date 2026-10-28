@@ -34,4 +34,14 @@ class SearchRedirectsTest {
                 DomainNames.classify("https://duckduckgo.com/about", "https://html.duckduckgo.com/html/"));
         assertEquals("bbc.co.uk", DomainNames.registrableDomain("www.news.bbc.co.uk"));
     }
+
+    @Test
+    void googleWrappersAlsoCarryTheTargetInUrlOrUAndOnCountryHosts() {
+        assertEquals("https://example.org/u", SearchRedirects.resolve(
+                "https://www.google.com/url?sa=t&u=https%3A%2F%2Fexample.org%2Fu").targetUrl());
+        assertEquals("https://example.org/de", SearchRedirects.resolve(
+                "https://www.google.de/url?url=https://example.org/de").targetUrl());
+        assertEquals(SearchRedirects.Status.UNRESOLVED,
+                SearchRedirects.resolve("https://www.google.com/url?q=/search%3Fq%3Dx").status());
+    }
 }

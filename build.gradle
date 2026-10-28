@@ -39,6 +39,11 @@ dependencies {
     // Link extraction and search-page analysis from the serialized DOM on the Java side
     // (no page-visible scripts).
     implementation 'org.jsoup:jsoup:1.18.3'
+    // Registrable domains (Public Suffix List) for the convenience profile's per-domain navigation limit.
+    implementation 'com.google.guava:guava:33.4.0-jre'
+    // Search History: classic full-text search per chat (as AskAI research-knowledge-lucene); no vectors.
+    implementation 'org.apache.lucene:lucene-core:8.11.3'
+    implementation 'org.apache.lucene:lucene-analyzers-common:8.11.3'
     testImplementation 'org.junit.jupiter:junit-jupiter:5.13.1'
     testImplementation 'org.mockito:mockito-core:5.15.2'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher:1.13.1'
@@ -49,7 +54,29 @@ application { mainClass = 'com.aresstack.argos.ArgosApplication' }
 tasks.withType(JavaCompile).configureEach { options.encoding = 'UTF-8' }
 tasks.named('test') {
     useJUnitPlatform()
-    systemProperty 'argos.testCamoufox', providers.gradleProperty('testCamoufox').orElse('false').get()
+    // -PtestCamoufox and -PtestCamoufox=true both opt in (a bare property arrives as an empty string).
+    def camoufoxTests = providers.gradleProperty('testCamoufox').map { it.trim().isEmpty() || it.trim().toBoolean() }.orElse(false).get()
+    systemProperty 'argos.testCamoufox', String.valueOf(camoufoxTests)
+    // Browser tests use Argos' own distribution, installed under build/ (or
+    // BROWSER_DIR). Only -PtestProvisionedCamoufox may download it; other tests fail fast instead of fetching 1.3 GB.
+    if (!System.getenv('BROWSER_DIR')) {
+        environment 'BROWSER_DIR', layout.buildDirectory.dir('test-camoufox').get().asFile.absolutePath
+    }
+    def provisionedTests = providers.gradleProperty('testProvisionedCamoufox')
+            .map { it.trim().isEmpty() || it.trim().toBoolean() }.orElse(false).get()
+    if (!provisionedTests && !System.getenv('ARGOS_CAMOUFOX_DISTRIBUTION_URL')) {
+        environment 'ARGOS_CAMOUFOX_DISTRIBUTION_URL',
+                layout.buildDirectory.dir('no-camoufox-download').get().asFile.toURI().toString()
+    }
+    systemProperty 'argos.testProvisionedCamoufox', String.valueOf(provisionedTests)
+    // Playwright4J release gate setting, forwarded so browser tests run with and without Firefox's own behaviour.
+    if (providers.gradleProperty('playwright4j.bidi.nativeBehavior').isPresent()) {
+        systemProperty 'playwright4j.bidi.nativeBehavior', providers.gradleProperty('playwright4j.bidi.nativeBehavior').get()
+    }
+    // Drag diagnostics (DragDiagnosticsBrowserTest): prints event traces of several drag variants, needs -PtestCamoufox.
+    systemProperty 'argos.dragDiagnostics', providers.gradleProperty('dragDiagnostics').orElse('false').get()
+    // Raw-Playwright input tests (FieldSelection, KeyboardShortcut, HumanInput) need an executable path; with
+    // -PtestCamoufox they take Argos' managed Camoufox unless -PtestHumanBrowser names another browser.
     systemProperty 'argos.testHumanBrowser', providers.gradleProperty('testHumanBrowser').orElse('').get()
     // Unicode input test: must Playwright4J type umlauts as trusted keys? Defaults to true when Playwright4J is built
     // from -Pplaywright4jSource (a fix under test), so a refusal fails the run instead of passing as fail-closed.

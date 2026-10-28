@@ -1,0 +1,276 @@
+name: Camoufox distribution
+
+# Builds Argos' own Camoufox distribution (docs/camoufox-distribution.md): the pinned Camoufox release with the
+# two WebDriver BiDi fixes of daijro/camoufox#952 applied by Playwright4J's hotpatch_omni.py, plus the bundled
+# uBlock Origin of the default profile. Publishes it once as a public GitHub release of this repository
+# (tag camoufox-<release>-<revision>), independent of Argos releases, then lets Argos download and start it on
+# Linux and Windows with the built-in profile, with and without playwright4j.bidi.nativeBehavior.
+
+on:
+  push:
+    paths:
+      - '.github/workflows/camoufox-distribution.yml'
+      - 'tools/camoufox/**'
+      - 'src/main/resources/camoufox/**'
+      - 'src/main/java/com/aresstack/argos/camoufox/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # aresstack/playwright4j master after PR #78: hotpatch_omni.py --install/--check. Never a moving ref.
+  HOTPATCH_COMMIT: 6b52161d1b501136ca8acab830bf51ee2b5effa8
+  # Playwright4J 0.3.0, the version Argos builds against (build-release.yml).
+  PLAYWRIGHT4J_COMMIT: 2e889ce9fdfa7cc360c1c3c4434d926e30f79784
+  # uBlock Origin from addons.mozilla.org (the camoufox launcher's default add-on), pinned version and file.
+  UBO_VERSION: '1.75.0'
+  UBO_URL: https://addons.mozilla.org/firefox/downloads/file/5034826/ublock_origin-1.75.0.xpi
+  # Published revisions Argos no longer uses; kept for history, marked as superseded on the release page.
+  SUPERSEDED_TAGS: camoufox-156.0.1-beta.36-argos.1
+  UBO_SHA256: 5b74415860456370644bd80f16125e865b0e6c356bb5dfcfb84069967eaa5287
+
+jobs:
+  package:
+    name: Package ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [lin.x86_64, win.x86_64]
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read the pinned distribution
+        id: meta
+        shell: bash
+        run: |
+          prop() { grep "^$1=" src/main/resources/camoufox/distribution.properties | cut -d= -f2-; }
+          RELEASE=$(prop release); REVISION=$(prop revision)
+          echo "release=$RELEASE" >> "$GITHUB_OUTPUT"
+          echo "revision=$REVISION" >> "$GITHUB_OUTPUT"
+          echo "tag=camoufox-$RELEASE-$REVISION" >> "$GITHUB_OUTPUT"
+          echo "asset=camoufox-$RELEASE-$REVISION-${{ matrix.target }}.zip" >> "$GITHUB_OUTPUT"
+
+      - name: Check out hotpatch_omni.py (pinned)
+        uses: actions/checkout@v4
+        with:
+          repository: aresstack/playwright4j
+          ref: ${{ env.HOTPATCH_COMMIT }}
+          path: playwright4j-hotpatch
+          sparse-checkout: docs/camoufox
+
+      - name: Install Camoufox with the WebDriver BiDi fixes
+        shell: bash
+        run: |
+          set -euo pipefail
+          RELEASE='${{ steps.meta.outputs.release }}'
+          SYSTEM='${{ matrix.target }}'
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/upstream.zip" \
+            "https://github.com/daijro/camoufox/releases/download/v$RELEASE/camoufox-$RELEASE-${SYSTEM%%.*}.x86_64.zip"
+          # --archive: the script checks the archive's pinned SHA-256 and the target it belongs to.
+          python3 playwright4j-hotpatch/docs/camoufox/hotpatch_omni.py --install "$RUNNER_TEMP/camoufox" \
+            --release "$RELEASE" --archive "$RUNNER_TEMP/upstream.zip"
+          python3 playwright4j-hotpatch/docs/camoufox/hotpatch_omni.py --check "$RUNNER_TEMP/camoufox"
+          rm "$RUNNER_TEMP/upstream.zip"
+
+      - name: Fetch uBlock Origin (pinned)
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/ubo.xpi" "$UBO_URL"
+          ACTUAL=$(sha256sum "$RUNNER_TEMP/ubo.xpi" | cut -d' ' -f1)
+          # addons.mozilla.org publishes the file hash of each version; it must match the download.
+          AMO=$(curl -fsSL "https://addons.mozilla.org/api/v5/addons/addon/ublock-origin/versions/$UBO_VERSION/" \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)["file"]["hash"].split(":",1)[1])')
+          echo "uBlock Origin $UBO_VERSION sha256 $ACTUAL (addons.mozilla.org: $AMO)"
+          test "$ACTUAL" = "$AMO"
+          if [ -n "$UBO_SHA256" ]; then test "$ACTUAL" = "$UBO_SHA256"; fi
+          unzip -p "$RUNNER_TEMP/ubo.xpi" manifest.json | python3 -c 'import json,sys; v=json.load(sys.stdin)["version"]; print(v); assert v == "${{ env.UBO_VERSION }}"'
+
+      - name: Package
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          python3 -I tools/camoufox/package_distribution.py --dir "$RUNNER_TEMP/camoufox" \
+            --target '${{ matrix.target }}' --release '${{ steps.meta.outputs.release }}' \
+            --revision '${{ steps.meta.outputs.revision }}' --hotpatch "$HOTPATCH_COMMIT" \
+            --addon "UBO=$RUNNER_TEMP/ubo.xpi" --out 'dist/${{ steps.meta.outputs.asset }}'
+          (cd dist && sha256sum '${{ steps.meta.outputs.asset }}' > '${{ steps.meta.outputs.asset }}.sha256')
+          cat dist/*.sha256
+          ls -l dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: camoufox-${{ matrix.target }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+
+  publish:
+    name: Publish release ${{ needs.package.outputs.tag }}
+    needs: package
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ needs.package.outputs.tag }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: camoufox-*
+          path: dist
+          merge-multiple: true
+
+      - name: Create the release once; never replace published archives
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist
+          cat *.sha256 | sort -k2 > SHA256SUMS
+          cat SHA256SUMS
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "Release $TAG exists; it stays as published."
+            gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern SHA256SUMS --dir published
+            if ! diff -u published/SHA256SUMS SHA256SUMS; then
+              echo "::notice::This build differs from the published $TAG (non-deterministic compression?); the published archives and their pinned checksums stay authoritative."
+            fi
+          else
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease \
+              --title "Camoufox $TAG for Argos" \
+              --notes "Camoufox ${TAG#camoufox-} for Argos: daijro/camoufox release with the WebDriver BiDi fixes of daijro/camoufox#952 (aresstack/playwright4j $HOTPATCH_COMMIT docs/camoufox/hotpatch_omni.py) and uBlock Origin $UBO_VERSION under addons/UBO. Built by run $GITHUB_RUN_ID. Not an Argos release; Argos downloads it by itself and checks the SHA-256 pinned in src/main/resources/camoufox/distribution.properties." \
+              *.zip SHA256SUMS
+          fi
+
+      - name: Mark superseded revisions (kept, not deleted)
+        shell: bash
+        run: |
+          set -euo pipefail
+          for OLD in $SUPERSEDED_TAGS; do
+            [ "$OLD" = "$TAG" ] && continue
+            gh release view "$OLD" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1 || continue
+            TITLE=$(gh release view "$OLD" --repo "$GITHUB_REPOSITORY" --json name --jq .name)
+            case "$TITLE" in "[superseded]"*) continue ;; esac
+            gh release edit "$OLD" --repo "$GITHUB_REPOSITORY" --prerelease --title "[superseded] $TITLE" \
+              --notes "Superseded by $TAG and no longer used by Argos, which downloads only the revision pinned (with SHA-256) in src/main/resources/camoufox/distribution.properties. Kept for history. Known issue: font files with non-ASCII names cannot be unpacked by a JVM under a C/POSIX locale."
+          done
+
+  smoke:
+    name: Smoke ${{ matrix.os }} (nativeBehavior=${{ matrix.nativeBehavior }})
+    needs: [package, publish]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        nativeBehavior: ['false', 'true']
+    env:
+      TAG: ${{ needs.package.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Checkout Playwright4J 0.3.0
+        uses: actions/checkout@v4
+        with:
+          repository: aresstack/playwright4j
+          ref: ${{ env.PLAYWRIGHT4J_COMMIT }}
+          path: playwright4j-source
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Install Playwright4J 0.3.0 in Maven Local
+        shell: bash
+        working-directory: playwright4j-source
+        run: |
+          chmod +x gradlew
+          ./gradlew publishToMavenLocal -Pversion=0.3.0 --no-daemon --console=plain
+
+      - name: Checksums pinned in Argos match the published release (anonymous download)
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL "https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/SHA256SUMS" -o SHA256SUMS
+          cat SHA256SUMS
+          PROPS=src/main/resources/camoufox/distribution.properties
+          while read -r SHA FILE; do
+            TARGET=${FILE%.zip}; TARGET=${TARGET##*-}
+            PINNED=$(grep "^sha256.$TARGET=" "$PROPS" | cut -d= -f2-)
+            if [ "$PINNED" = PENDING ]; then
+              # First build of a new revision: the repository pins these checksums in the following commit.
+              echo "::warning::sha256.$TARGET is not pinned yet; testing with the published $SHA"
+              sed -i.bak "s/^sha256.$TARGET=.*/sha256.$TARGET=$SHA/" "$PROPS"
+            elif [ "$PINNED" != "$SHA" ]; then
+              echo "::error::pinned sha256.$TARGET=$PINNED but the release has $SHA"; exit 1
+            fi
+          done < SHA256SUMS
+
+      # Fresh install first (download, SHA-256, BiDi fixes, atomic install), then the real browser checks.
+      - name: Install and start Camoufox through Argos (no browser paths, no launch.json)
+        shell: bash
+        env:
+          BROWSER_DIR: ${{ runner.temp }}/argos-browser
+        run: |
+          chmod +x gradlew
+          ./gradlew test --no-daemon --console=plain -PtestCamoufox -PtestProvisionedCamoufox \
+            "-Pplaywright4j.bidi.nativeBehavior=${{ matrix.nativeBehavior }}" \
+            --tests '*CamoufoxProvisionedSmokeTest'
+          # The next Gradle run replaces build/test-results; keep these for the check and the upload.
+          mkdir -p provisioned-results && cp -r build/test-results/test/. provisioned-results/
+
+      - name: Existing Camoufox smoke, network boundary and configuration tests on the installed browser
+        shell: bash
+        env:
+          BROWSER_DIR: ${{ runner.temp }}/argos-browser
+        run: |
+          ./gradlew test --no-daemon --console=plain -PtestCamoufox \
+            "-Pplaywright4j.bidi.nativeBehavior=${{ matrix.nativeBehavior }}" \
+            --tests '*.CamoufoxBrowserTest' --tests '*CamoufoxNetworkBoundaryTest' \
+            --tests '*camoufox.CamoufoxInstallerTest' --tests '*camoufox.CamoufoxLaunchTest' \
+            --tests '*ArgosConfigTest'
+
+      - name: Browser tests really ran (not skipped)
+        shell: bash
+        run: |
+          PY=$(command -v python3 || command -v python)
+          "$PY" - <<'PY'
+          import glob, xml.etree.ElementTree as T
+          need = {"CamoufoxProvisionedSmokeTest", "CamoufoxBrowserTest", "CamoufoxNetworkBoundaryTest"}
+          seen = {}
+          for f in glob.glob("build/test-results/test/*.xml") + glob.glob("provisioned-results/*.xml"):
+              r = T.parse(f).getroot()
+              name = r.get("name").rsplit(".", 1)[-1]
+              print(name, "tests", r.get("tests"), "skipped", r.get("skipped"), "failures", r.get("failures"), "errors", r.get("errors"))
+              seen[name] = int(r.get("tests")) - int(r.get("skipped"))
+          missing = [n for n in need if seen.get(n, 0) == 0]
+          if missing:
+              raise SystemExit(f"browser tests did not run: {missing}")
+          PY
+
+      - name: Report leftover browser processes
+        if: always()
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = Windows ]; then tasklist | grep -i camoufox || echo "none"; else pgrep -a camoufox || echo "none"; fi
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: camoufox-smoke-${{ matrix.os }}-nativeBehavior-${{ matrix.nativeBehavior }}
+          path: |
+            build/reports/tests/test/**
+            build/test-results/test/**
+            provisioned-results/**
+          retention-days: 14

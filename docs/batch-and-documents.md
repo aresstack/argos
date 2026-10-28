@@ -19,6 +19,27 @@ Status pro Batch-Eintrag: `SUCCESS`, `DUPLICATE`, `INVALID_REQUEST`, `NOT_FOUND`
 (401/403/429/451, wird nicht umgangen), `HTTP_ERROR`, `TIMEOUT`, `TOO_LARGE`, `EXTRACTION_FAILED`, `FAILED`.
 Fehlermeldungen der Einzelwerkzeuge beginnen mit derselben Kategorie (`TOO_LARGE: …`).
 
+## Batch-Werkzeuge für bestehende TabsBatch-Werkzeuge für bestehende Tabs
+
+Das Expert-Profil stellt zusätzlich `browser_pages_navigate`, `browser_pages_snapshot` und
+`browser_pages_inspect` für Tabs bereit, die im persistenten Browserkontext geöffnet bleiben.
+
+- `browser_pages_navigate` nimmt 1–10 unterschiedliche Paare `{tab, url}) entgegen. Es startet jede
+  Navigation bis zum Response-Commit und verwendet ein begrenztes Sliding Window mit höchstens vier
+  Tabs, bevor es auf die Bereitschaft der Seiten wartet. Eine langsame oder fehlerhafte Seite erhält
+  ein eigenes Ergebnis. Die Ergebnisliste bleibt in Eingabereihenfolge und enthält Tab-ID, Ziel-URL,
+  finale URL, HTTP-Status, Laufzeit und Ergebnisstatus.
+- `timeoutMs` begrenzt das Warten auf den Response-Commit pro Seite auf maximal 20 Sekunden.
+  Doppelte Tab-IDs werden vor jeder Navigation abgewiesen, damit ein Batch nicht zwei konkurrierende
+  Änderungen an derselben Seite ausführt.
+- `browser_pages_snapshot` und `browser_pages_inspect` liefern je Tab ein Ergebnis. Unbekannte oder
+  geschlossene Tabs werden einzeln als Fehler gemeldet, ohne erfolgreiche Ergebnisse anderer Tabs zu
+  verwerfen.
+- Die synchrone Playwright4J-API bleibt auf Argos' einzelnem Browser-Thread. Der Batch überlappt das
+  Laden der Dokumente nach dem jeweiligen Response-Commit; er verwendet keine unsicheren parallelen
+  Playwright-Threads und behauptet nicht, dass langsame Wartezeiten auf Response-Header überlappen.
+  Lesende Operationen werden in einem MCP-Aufruf gruppiert und sicher auf diesem Thread ausgeführt.
+
 ## Stealth: Wie geladen wird
 
 Jeder Download und jede Batch-Adresse wird in einem **Hintergrund-Tab derselben persistenten Session**

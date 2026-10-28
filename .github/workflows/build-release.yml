@@ -172,7 +172,8 @@ jobs:
             Invoke-WebRequest -Uri $url -Method POST -ContentType 'application/json' -Headers $headers -Body $notification -TimeoutSec 10 | Out-Null
             $request = '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
             $reply = Invoke-WebRequest -Uri $url -Method POST -ContentType 'application/json' -Headers $headers -Body $request -TimeoutSec 15
-            if ($reply.Content -notmatch '"browser_navigate"' -or $reply.Content -notmatch '"browser_screenshot"') {
+            # Default tool profile is 'developer' (web_* research tools incl. web_screenshot).
+            if ($reply.Content -notmatch '"web_search"' -or $reply.Content -notmatch '"web_screenshot"') {
               throw 'Argos browser MCP tools were not exposed'
             }
             Write-Host 'Argos packaged JAR + MCP tools verified on Windows'

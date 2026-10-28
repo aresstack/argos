@@ -1,5 +1,6 @@
 package com.aresstack.argos;
 
+import com.microsoft.playwright.Mouse;
 import com.microsoft.playwright.Page;
 
 /**
@@ -9,9 +10,17 @@ import com.microsoft.playwright.Page;
 interface InputDevice {
     void move(double x, double y);
 
-    void down();
+    default void down() {
+        down(MouseButton.LEFT);
+    }
 
-    void up();
+    default void up() {
+        up(MouseButton.LEFT);
+    }
+
+    void down(MouseButton button);
+
+    void up(MouseButton button);
 
     void wheel(double deltaX, double deltaY);
 
@@ -36,16 +45,17 @@ interface InputDevice {
                 page.mouse().move(x, y);
             }
 
-            @Override public void down() {
-                page.mouse().down();
+            @Override public void down(MouseButton button) {
+                page.mouse().down(new Mouse.DownOptions().setButton(button.playwright()));
             }
 
-            @Override public void up() {
-                page.mouse().up();
+            @Override public void up(MouseButton button) {
+                page.mouse().up(new Mouse.UpOptions().setButton(button.playwright()));
             }
 
             @Override public void wheel(double deltaX, double deltaY) {
-                page.mouse().wheel(deltaX, deltaY);
+                // BiDi wants whole pixels for wheel deltas; centring a box can yield fractions such as 412.5.
+                page.mouse().wheel(Math.round(deltaX), Math.round(deltaY));
             }
 
             @Override public void keyDown(String key) {

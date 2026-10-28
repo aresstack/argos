@@ -161,6 +161,74 @@ class SearchResultExtractorTest {
         assertTrue(result.diagnostics().stream().anyMatch(line -> line.contains("rejected")));
     }
 
+    @Test
+    void duplicateTargetsAreReportedOnceEvenBehindARedirectWrapper() {
+        String html = SerpFixtures.html("generic-cards.html").replace("</div>\n</div>",
+                "<article class=\"card\"><h3><a href=\"https://duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.org%2Fperovskite\">"
+                        + "Perovskite record, again</a></h3><p>The same article reached through a redirect wrapper.</p></article>"
+                        + "</div>\n</div>");
+        var result = extractInline(html);
+
+        assertEquals(SearchOutcome.ORGANIC_RESULTS, result.outcome());
+        assertEquals(4, result.candidates().size());
+        assertEquals(1, urls(result).stream().filter("https://example.org/perovskite"::equals).count());
+    }
+
+    @Test
+    void unresolvableRedirectWrappersNeverBecomeResults() {
+        String html = SerpFixtures.html("generic-cards.html").replace("</div>\n</div>",
+                "<article class=\"card\"><h3><a href=\"https://www.bing.com/ck/a?u=zz\">A broken wrapper link</a></h3>"
+                        + "<p>The target of this wrapper cannot be extracted safely.</p></article></div>\n</div>");
+        var result = extractInline(html);
+
+        assertEquals(SearchOutcome.ORGANIC_RESULTS, result.outcome());
+        assertFalse(urls(result).stream().anyMatch(url -> url.isEmpty() || url.contains("bing.com")));
+    }
+
+    @Test
+    void ununderstoodPageIsNotHarvestedOnAnEndpointThatListsStructuredResults() {
+        var endpoint = SearchEngine.custom(LOCAL).endpoints().get(0);
+        assertFalse(endpoint.harvestWhenUnstructured());
+        var result = extract("unknown-layout.html", LOCAL, endpoint, SearchEngine.custom(LOCAL));
+
+        assertEquals(SearchOutcome.EXTRACTION_FAILED, result.outcome());
+        assertTrue(result.candidates().isEmpty());
+    }
+
+    @Test
+    void failingAiResolverLeavesAnHonestExtractionFailure() {
+        SerpDocument document = SerpFixtures.parse("two-cards.html", LOCAL, "");
+        SearchLayoutResolver failing = request -> {
+            throw new IllegalStateException("model offline");
+        };
+        var result = new SearchResultExtractor(SearchAnalysisSettings.defaults(), failing)
+                .extract(document, "batteries", SearchEngine.custom(LOCAL).endpoints().get(0), Set.of());
+
+        assertEquals(SearchOutcome.EXTRACTION_FAILED, result.outcome());
+        assertTrue(result.diagnostics().stream().anyMatch(line -> line.contains("resolver failed")));
+    }
+
+    @Test
+    void aiDecisionForAnotherSnapshotIsRejected() {
+        SerpDocument document = SerpFixtures.parse("two-cards.html", LOCAL, "");
+        SerpContainer hits = document.containers().stream()
+                .filter(c -> c.classTokens().contains("hits")).findFirst().orElseThrow();
+        SearchLayoutResolver stale = request -> Optional.of(new SearchLayoutResolver.Decision(
+                request.snapshotId() + "-old", hits.id(), hits.childIds(), 0.9));
+        var result = new SearchResultExtractor(SearchAnalysisSettings.defaults(), stale)
+                .extract(document, "batteries", SearchEngine.custom(LOCAL).endpoints().get(0), Set.of());
+
+        assertEquals(SearchOutcome.EXTRACTION_FAILED, result.outcome());
+        assertTrue(result.diagnostics().stream().anyMatch(line -> line.contains("stale snapshot")));
+    }
+
+    private SearchResultExtractor.Extraction extractInline(String html) {
+        var endpoint = SearchEngine.custom(LOCAL).endpoints().get(0);
+        SerpDocument document = new SerpDocumentParser(SearchAnalysisSettings.defaults())
+                .parse(html, LOCAL, "", endpoint.resultBlockSelector(), 1);
+        return extractor.extract(document, "solar", endpoint, SearchEngine.custom(LOCAL).chromeDomains());
+    }
+
     private SearchResultExtractor.Extraction extract(String fixture, String url, SearchEngine.Endpoint endpoint,
                                                      SearchEngine engine) {
         SerpDocument document = SerpFixtures.parse(fixture, url, endpoint.resultBlockSelector());

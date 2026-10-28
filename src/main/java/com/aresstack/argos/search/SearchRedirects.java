@@ -29,7 +29,7 @@ final class SearchRedirects {
             return target == null ? unresolved() : new Resolution(Status.RESOLVED, target);
         }
         if (isGoogleHost(host) && (path.equals("/url") || path.startsWith("/url/"))) {
-            String target = firstNonEmpty(queryParameter(url, "q"), queryParameter(url, "url"));
+            String target = firstNonEmpty(queryParameter(url, "q"), queryParameter(url, "url"), queryParameter(url, "u"));
             return isHttp(target) ? new Resolution(Status.RESOLVED, target) : unresolved();
         }
         if (host.endsWith("duckduckgo.com") && path.startsWith("/l/")) {

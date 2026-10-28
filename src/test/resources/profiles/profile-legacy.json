@@ -1,0 +1,188 @@
+[ {
+  "name" : "browser_status",
+  "description" : "Report whether Argos' dedicated Camoufox session is running.",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : { },
+    "required" : [ ],
+    "additionalProperties" : false,
+    "$defs" : { },
+    "definitions" : { }
+  }
+}, {
+  "name" : "browser_navigate",
+  "description" : "Navigate the current tab or the specified tab id to an http(s) URL. Omit tab to keep current-tab behavior.",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "tab" : {
+        "description" : "Optional tab id from browser_tabs, e.g. t2",
+        "type" : "string"
+      },
+      "url" : {
+        "description" : "Full http(s) website URL",
+        "type" : "string"
+      }
+    },
+    "required" : [ "url" ],
+    "additionalProperties" : false,
+    "$defs" : { },
+    "definitions" : { }
+  }
+}, {
+  "name" : "browser_snapshot",
+  "description" : "Read the current tab or the specified tab id as text. Works for HTML (visible text), XML/RSS/Atom feeds (numbered entries), JSON and plain text; binary documents such as PDF are reported with documentType 'binary' and a hint instead of text.",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "tab" : {
+        "description" : "Optional tab id from browser_tabs, e.g. t2",
+        "type" : "string"
+      },
+      "maxCharacters" : {
+        "description" : "Maximum characters (1000–60000, default 16000)",
+        "type" : "integer"
+      }
+    },
+    "required" : [ ],
+    "additionalProperties" : false,
+    "$defs" : { },
+    "definitions" : { }
+  }
+}, {
+  "name" : "browser_inspect",
+  "description" : "Inspect DOM elements matching a CSS selector in the current or specified tab, including text, links and attributes.",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "tab" : {
+        "description" : "Optional tab id from browser_tabs, e.g. t2",
+        "type" : "string"
+      },
+      "selector" : {
+        "description" : "CSS selector",
+        "type" : "string"
+      },
+      "limit" : {
+        "description" : "Maximum elements (1–50, default 20)",
+        "type" : "integer"
+      }
+    },
+    "required" : [ "selector" ],
+    "additionalProperties" : false,
+    "$defs" : { },
+    "definitions" : { }
+  }
+}, {
+  "name" : "browser_click",
+  "description" : "Click the first element matching a CSS selector in the current or specified tab.",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "tab" : {
+        "description" : "Optional tab id from browser_tabs, e.g. t2",
+        "type" : "string"
+      },
+      "selector" : {
+        "description" : "CSS selector",
+        "type" : "string"
+      }
+    },
+    "required" : [ "selector" ],
+    "additionalProperties" : false,
+    "$defs" : { },
+    "definitions" : { }
+  }
+}, {
+  "name" : "browser_fill",
+  "description" : "Fill an input field in the current or specified tab, replacing its existing contents.",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "tab" : {
+        "description" : "Optional tab id from browser_tabs, e.g. t2",
+        "type" : "string"
+      },
+      "selector" : {
+        "description" : "CSS selector",
+        "type" : "string"
+      },
+      "text" : {
+        "description" : "Text to enter",
+        "type" : "string"
+      }
+    },
+    "required" : [ "selector", "text" ],
+    "additionalProperties" : false,
+    "$defs" : { },
+    "definitions" : { }
+  }
+}, {
+  "name" : "browser_evaluate",
+  "description" : "Evaluate JavaScript in the current or specified tab and return its result. This can change that page.",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "tab" : {
+        "description" : "Optional tab id from browser_tabs, e.g. t2",
+        "type" : "string"
+      },
+      "expression" : {
+        "description" : "JavaScript expression or function, e.g. () => document.title",
+        "type" : "string"
+      }
+    },
+    "required" : [ "expression" ],
+    "additionalProperties" : false,
+    "$defs" : { },
+    "definitions" : { }
+  }
+}, {
+  "name" : "browser_network",
+  "description" : "List recent requests and responses for the whole session or one tab, one line per request with an id (URLs have query parameters redacted). Optional filter, e.g. \"xhr\", \"json\", \"failed\" or \"api/\".",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "tab" : {
+        "description" : "Optional tab id from browser_tabs, e.g. t2; page-scoped results omit proxy events that cannot be attributed to one tab",
+        "type" : "string"
+      },
+      "filter" : {
+        "description" : "Optional case-insensitive text matched against url, type, mime, kind, status",
+        "type" : "string"
+      }
+    },
+    "required" : [ ],
+    "additionalProperties" : false,
+    "$defs" : { },
+    "definitions" : { }
+  }
+}, {
+  "name" : "browser_screenshot",
+  "description" : "Take a PNG screenshot of the current Camoufox page or a specified tab. mode: viewport (default, what is on screen), full (whole page) or element (one control, needs target). mark=true draws the numbered controls into the image. A text part explains how image pixels map to viewport CSS pixels for mouse input. Example: {\"mode\": \"viewport\", \"mark\": true}",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "mode" : {
+        "description" : "viewport | full | element",
+        "type" : "string"
+      },
+      "target" : {
+        "description" : "For mode element: control number, aria ref or locator, e.g. 3 or role=button name=\"Suchen\"",
+        "type" : "string"
+      },
+      "tab" : {
+        "description" : "Optional tab id from browser_tabs, e.g. t2",
+        "type" : "string"
+      },
+      "mark" : {
+        "description" : "Draw numbered boxes around the page's controls",
+        "type" : "boolean"
+      }
+    },
+    "required" : [ ],
+    "additionalProperties" : false,
+    "$defs" : { },
+    "definitions" : { }
+  }
+} ]

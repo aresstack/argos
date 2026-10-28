@@ -212,6 +212,8 @@ jobs:
           ./gradlew test --no-daemon --console=plain -PtestCamoufox -PtestProvisionedCamoufox \
             "-Pplaywright4j.bidi.nativeBehavior=${{ matrix.nativeBehavior }}" \
             --tests '*CamoufoxProvisionedSmokeTest'
+          # The next Gradle run replaces build/test-results; keep these for the check and the upload.
+          mkdir -p provisioned-results && cp -r build/test-results/test/. provisioned-results/
 
       - name: Existing Camoufox smoke, network boundary and configuration tests on the installed browser
         shell: bash
@@ -232,7 +234,7 @@ jobs:
           import glob, xml.etree.ElementTree as T
           need = {"CamoufoxProvisionedSmokeTest", "CamoufoxBrowserTest", "CamoufoxNetworkBoundaryTest"}
           seen = {}
-          for f in glob.glob("build/test-results/test/*.xml"):
+          for f in glob.glob("build/test-results/test/*.xml") + glob.glob("provisioned-results/*.xml"):
               r = T.parse(f).getroot()
               name = r.get("name").rsplit(".", 1)[-1]
               print(name, "tests", r.get("tests"), "skipped", r.get("skipped"), "failures", r.get("failures"), "errors", r.get("errors"))
@@ -255,4 +257,5 @@ jobs:
           path: |
             build/reports/tests/test/**
             build/test-results/test/**
+            provisioned-results/**
           retention-days: 14

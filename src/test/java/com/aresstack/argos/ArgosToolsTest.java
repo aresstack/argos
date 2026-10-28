@@ -185,7 +185,8 @@ class ArgosToolsTest {
             CallToolResult result = call(new ArgosBrowsingTools(browser).expert(), "browser_mouse_move",
                     Map.of("x", 10, "y", 10));
             assertTrue(result.isError());
-            assertTrue(((TextContent) result.content().get(0)).text().contains("ARGOS_CAMOUFOX_EXECUTABLE"));
+            // No browser configured and no download allowed in unit tests: the installation error is the tool result.
+            assertTrue(((TextContent) result.content().get(0)).text().contains("Camoufox"));
         }
     }
 

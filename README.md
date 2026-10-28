@@ -46,7 +46,7 @@ build/distributions/argos-package.zip  ← enthält nur argos.jar
 
 ## Lokaler Start
 
-In der vorhandenen Windows-Entwicklungsumgebung erkennt Argos standardmäßig die **Camoufox-Binärdatei und die offizielle Fingerprint-JSON** aus `~/.browser-event-hub/desktop/camoufox.properties`, falls keine Argos-Konfiguration vorliegt. **Browserprofile werden ausdrücklich nicht übernommen.** Argos verwendet ausschließlich `~/.argos/profiles/default`.
+Argos liest Browserpfade ausschließlich aus Umgebungsvariablen oder seiner eigenen Konfiguration `~/.argos/argos.properties` (alternativ über `-Dargos.config`). **Konfigurationsdateien anderer Anwendungen werden nicht gelesen.** Fehlen beide Browserpfade, meldet Argos beim ersten Browseraufruf eine verständliche Konfigurationsfehlermeldung. Argos verwendet ausschließlich eigene Browserprofile unter `~/.argos/profiles/default`.
 
 Eigenständige Konfiguration über `~/.argos/argos.properties`:
 
@@ -57,15 +57,13 @@ security.mode=central-oauth
 public.origin=https://argos.aresstack.de
 oauth.central-issuer=https://argos.aresstack.de
 security.required-scope=argos
-camoufox.executable=G:/camoufox-bidi-smoke-20261025/browser/camoufox.exe
-camoufox.launchOptions=G:/camoufox-bidi-smoke-20261025/cmp/launch.json
 browser.profile=C:/Users/USERNAME/.argos/profiles/default
 browser.headless=false
 ```
 
-Die angegebenen Dateipfade sind Beispiele aus der isolierten Testinstallation und sind nicht Teil des Git-Repositories.
+**Camoufox wird nicht von Hand installiert.** Beim ersten Browserzugriff lädt Argos seine eigene, geprüfte Camoufox-Distribution (Camoufox `156.0.1-beta.36` mit den WebDriver-BiDi-Fixes aus daijro/camoufox#952) nach `~/.argos/browser/`, prüft SHA-256 und Fixes und startet sie mit dem eingebauten Fingerprint-Profil. Es braucht weder Browserpfade noch eine `launch.json`; Argos liest keine Konfigurationsdateien anderer Anwendungen. Einzelheiten, Overrides und Fehlerverhalten: [docs/camoufox-distribution.md](docs/camoufox-distribution.md).
 
-**Im AresStack Webserver haben die Umgebungsvariablen Vorrang vor den Properties.** Pflichtfeld ist `SERVER_PORT`; Argos besitzt **keinen fest einprogrammierten Standardport**. Wie bei Pyloros werden `SERVER_PORT`, `SERVER_HOST` (optional, nur Loopback), `SECURITY_MODE`, `REQUIRED_SCOPE`, `PUBLIC_ORIGIN` und `CENTRAL_OAUTH_ISSUER` ausgewertet. Für den Camoufox-Browser bleiben zusätzlich `ARGOS_CAMOUFOX_EXECUTABLE`, `ARGOS_CAMOUFOX_LAUNCH_OPTIONS`, `ARGOS_PROFILE_DIR` und `ARGOS_HEADLESS` verfügbar.
+**Im AresStack Webserver haben die Umgebungsvariablen Vorrang vor den Properties.** Pflichtfeld ist `SERVER_PORT`; Argos besitzt **keinen fest einprogrammierten Standardport**. Wie bei Pyloros werden `SERVER_PORT`, `SERVER_HOST` (optional, nur Loopback), `SECURITY_MODE`, `REQUIRED_SCOPE`, `PUBLIC_ORIGIN` und `CENTRAL_OAUTH_ISSUER` ausgewertet. Für den Camoufox-Browser sind `ARGOS_PROFILE_DIR` und `ARGOS_HEADLESS` verfügbar; `ARGOS_CAMOUFOX_EXECUTABLE`, `ARGOS_CAMOUFOX_LAUNCH_OPTIONS`, `ARGOS_BROWSER_DIR` und `ARGOS_CAMOUFOX_DISTRIBUTION_URL` sind optionale Overrides (siehe [docs/camoufox-distribution.md](docs/camoufox-distribution.md)) und im Webserver nicht nötig.
 
 Die bereits angelegten Webserver-Variablen für Argos sind:
 
@@ -322,7 +320,7 @@ Gesetzte Firefox-Prefs (gegen Firefox `StaticPrefList.yaml`/`all.js` und Camoufo
 
 ## GitHub Actions und Releases
 
-Der Workflow [Build and Release Argos](.github/workflows/build-release.yml) läuft bei jedem Push auf `main`, bei Pull Requests und manuell über **Actions → Build and Release Argos → Run workflow**. Er baut Playwright4J aus einem **festgepinnten Commit** selbst in Maven Local, führt die Java-Tests aus und erstellt das plattformübergreifende `argos-package.zip`. Anschließend prüft ein separater Windows-Job sowohl den **echten Playwright4J-Treiberstart aus der einzelnen JAR** (`--verify-runtime`) als auch den MCP-Handshake und die Browserwerkzeugliste, ohne dass ein externes `lib/`-Verzeichnis existiert. Die Browser-Funktionstests mit echter Camoufox-Binärdatei bleiben lokal, da der Runner diese nicht mitbringt.
+Der Workflow [Build and Release Argos](.github/workflows/build-release.yml) läuft bei jedem Push auf `main`, bei Pull Requests und manuell über **Actions → Build and Release Argos → Run workflow**. Er baut Playwright4J aus einem **festgepinnten Commit** selbst in Maven Local, führt die Java-Tests aus und erstellt das plattformübergreifende `argos-package.zip`. Anschließend prüft ein separater Windows-Job sowohl den **echten Playwright4J-Treiberstart aus der einzelnen JAR** (`--verify-runtime`) als auch den MCP-Handshake und die Browserwerkzeugliste, ohne dass ein externes `lib/`-Verzeichnis existiert. Echte Camoufox-Tests laufen im Workflow [Camoufox distribution](.github/workflows/camoufox-distribution.yml): Er baut die Browserdistribution, veröffentlicht sie einmalig und lässt Argos sie unter Linux und Windows (je mit und ohne `playwright4j.bidi.nativeBehavior`) selbst herunterladen und starten.
 
 **Ein GitHub Release wird ausschließlich beim Push eines Versionstags veröffentlicht**, und nur wenn Linux- und Windows-Jobs erfolgreich waren. Ein Push auf `main` oder ein manueller Workflow-Lauf veröffentlicht **kein** Release.
 
@@ -333,7 +331,7 @@ git tag v0.1.0
 git push origin v0.1.0
 ```
 
-Im GitHub Release liegen die **direkt ausführbare `argos.jar`** und optional `argos-package.zip` (enthält nur dieselbe JAR). Beide enthalten **keine Camoufox-Binärdatei, Fingerprint-Konfiguration oder Benutzerprofile**; diese werden auf dem Zielrechner gesondert eingerichtet. Der Webserver benötigt nur die einzelne JAR.
+Im GitHub Release liegen die **direkt ausführbare `argos.jar`** und optional `argos-package.zip` (enthält nur dieselbe JAR). Beide enthalten **keine Camoufox-Binärdatei und keine Benutzerprofile**; den Browser lädt Argos beim ersten Bedarf aus dem separaten Release `camoufox-<version>-argos.<n>`, das eingebaute Fingerprint-Profil steckt in der JAR. Der Webserver benötigt nur die einzelne JAR.
 
 ## Tests und Stand
 
@@ -341,7 +339,11 @@ Im GitHub Release liegen die **direkt ausführbare `argos.jar`** und optional `a
 .\gradlew.bat test
 .\gradlew.bat test --tests com.aresstack.argos.CamoufoxBrowserTest -PtestCamoufox=true
 .\gradlew.bat test --tests com.aresstack.argos.CamoufoxNetworkBoundaryTest -PtestCamoufox=true
+# Argos' eigene Distribution: Download, Prüfung und Start mit dem eingebauten Profil (lädt ~1,3 GB)
+.\gradlew.bat test --tests "*CamoufoxProvisionedSmokeTest" -PtestCamoufox -PtestProvisionedCamoufox
 ```
+
+Ohne `ARGOS_CAMOUFOX_EXECUTABLE` verwenden die Camoufox-Tests die von Argos installierte Distribution (vorher einmal `CamoufoxProvisionedSmokeTest` laufen lassen, sonst meldet der erste Test nach 30 s „wird installiert“).
 
 Alle Camoufox-Browsertests auf einmal (auch die Eingabetests `FieldSelectionBrowserTest`, `KeyboardShortcutBrowserTest`, `HumanInputBrowserTest`, die ohne `-PtestHumanBrowser` automatisch `ARGOS_CAMOUFOX_EXECUTABLE` verwenden). `-PtestCamoufox` ohne Wert gilt ebenfalls als eingeschaltet:
 

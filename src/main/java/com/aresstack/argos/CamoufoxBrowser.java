@@ -1,5 +1,7 @@
 package com.aresstack.argos;
 
+import com.aresstack.argos.camoufox.CamoufoxInstaller;
+import com.aresstack.argos.camoufox.CamoufoxLaunch;
 import com.aresstack.argos.convenience.ConvenienceBrowser;
 import com.aresstack.argos.convenience.NavigationGate;
 import com.aresstack.argos.search.ChallengeCheck;
@@ -83,6 +85,11 @@ import java.util.regex.Pattern;
 public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAccess, ConvenienceBrowser, AutoCloseable {
     /** Source documents above this size are not pulled through the protocol for a snapshot. */
     private static final long MAX_SOURCE_BYTES = 8_000_000;
+    /**
+     * How long a tool waits for Argos' own Camoufox installation before it reports the progress instead (the
+     * download continues in the background; the tool budget is 90 s).
+     */
+    private static final java.time.Duration INSTALL_WAIT = java.time.Duration.ofSeconds(30);
     private static final long SAVED_DOCUMENT_WAIT_NANOS = 5_000_000_000L;
     /** Requests whose transfer ended, from context-level protocol events (driver thread); by identity, weak. */
     private final Set<Request> finishedRequests = Collections.newSetFromMap(new WeakHashMap<>());
@@ -339,39 +346,24 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
     private void ensureContext() throws Exception {
         if (context == null) {
             config.requireBrowserConfiguration();
+            // Explicit paths are developer overrides; otherwise Argos' own verified Camoufox and built-in profile.
+            ArgosConfig.BrowserInstallation installation = ArgosConfig.BrowserInstallation.fromEnvironment();
+            Path executable = config.executable() != null ? config.executable()
+                    : CamoufoxInstaller.shared(installation.root(), installation.mirror())
+                            .awaitExecutable(INSTALL_WAIT);
+            CamoufoxLaunch launch = config.launchOptions() != null ? CamoufoxLaunch.fromFile(config.launchOptions())
+                    : CamoufoxLaunch.builtIn(executable, installation.root());
             Files.createDirectories(config.profile());
-            JsonNode launch = mapper.readTree(Files.readString(config.launchOptions()));
-            JsonNode variables = launch.path("env");
-            if (!variables.isObject() || !variables.has("CAMOU_CONFIG_1")) {
-                throw new IllegalArgumentException("Official Camoufox fingerprint file requires env.CAMOU_CONFIG_1");
-            }
             Map<String, String> environment = new HashMap<>(System.getenv());
-            variables.fields().forEachRemaining(entry -> {
-                if (!entry.getKey().startsWith("CAMOU_") && !entry.getKey().startsWith("FONTCONFIG")) {
-                    throw new IllegalArgumentException("Unexpected fingerprint environment key: " + entry.getKey());
-                }
-                if (!entry.getValue().isTextual()) {
-                    throw new IllegalArgumentException("Invalid fingerprint environment value: " + entry.getKey());
-                }
-                environment.put(entry.getKey(), entry.getValue().asText());
-            });
-            fingerprintWindow(variables);
-            Map<String, Object> prefs = new LinkedHashMap<>();
-            JsonNode preferences = launch.has("firefoxUserPrefs") ? launch.get("firefoxUserPrefs")
-                    : launch.path("firefox_user_prefs");
-            preferences.fields().forEachRemaining(entry -> {
-                JsonNode value = entry.getValue();
-                if (value.isBoolean()) prefs.put(entry.getKey(), value.asBoolean());
-                else if (value.isIntegralNumber()) prefs.put(entry.getKey(), value.asInt());
-                else if (value.isTextual()) prefs.put(entry.getKey(), value.asText());
-                else throw new IllegalArgumentException("Unsupported Firefox pref: " + entry.getKey());
-            });
+            environment.putAll(launch.environment());
+            fingerprintWindow(launch.fingerprint());
+            Map<String, Object> prefs = new LinkedHashMap<>(launch.prefs());
             // Playwright's BiDi layer misses history traversals restored from the back-forward cache
             // (page.url() stays stale, goBack never settles). The official launch.json may still override it.
             prefs.putIfAbsent("browser.sessionhistory.max_total_viewers", 0);
             NetworkSettings network = config.network();
             if (network.strictMode()) {
-                network = withLaunchProxy(network, launch.path("proxy"));
+                network = withLaunchProxy(network, launch.proxy());
                 for (String key : prefs.keySet()) {
                     if (FirefoxNetworkPrefs.ownedPrefixes().stream().anyMatch(key::startsWith)) {
                         throw new IllegalArgumentException("launch.json sets " + key + ", but Argos owns the "
@@ -386,12 +378,11 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
                 System.err.println("ARGOS_NETWORK_POLICY=off: Camoufox connects directly and can reach "
                         + "loopback and intranet services.");
             }
-            List<String> args = new ArrayList<>();
-            launch.path("args").forEach(value -> args.add(value.asText()));
+            List<String> args = launch.args();
             BrowserType.LaunchPersistentContextOptions options =
                     new BrowserType.LaunchPersistentContextOptions()
                             .setChannel("moz-firefox")
-                            .setExecutablePath(config.executable())
+                            .setExecutablePath(executable)
                             .setHeadless(config.headless())
                             .setEnv(environment)
                             .setViewportSize(null)
@@ -446,19 +437,11 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
      * The inner window size Camoufox gives the page ({@code window.innerWidth/innerHeight} of the fingerprint, which
      * is split over {@code CAMOU_CONFIG_1..n}). Real input scrolls and moves inside it without asking the page.
      */
-    private void fingerprintWindow(JsonNode variables) {
-        StringBuilder json = new StringBuilder();
-        for (int part = 1; variables.has("CAMOU_CONFIG_" + part); part++) {
-            json.append(variables.get("CAMOU_CONFIG_" + part).asText());
-        }
-        try {
-            JsonNode fingerprint = mapper.readTree(json.toString());
-            double width = fingerprint.path("window.innerWidth").asDouble(0);
-            double height = fingerprint.path("window.innerHeight").asDouble(0);
-            if (width > 0 && height > 0) input.viewport(width, height);
-        } catch (Exception unreadable) {
-            // Without it the viewport is read once from the page when the first click needs it.
-        }
+    private void fingerprintWindow(JsonNode fingerprint) {
+        double width = fingerprint.path("window.innerWidth").asDouble(0);
+        double height = fingerprint.path("window.innerHeight").asDouble(0);
+        // Without it the viewport is read once from the page when the first click needs it.
+        if (width > 0 && height > 0) input.viewport(width, height);
     }
 
     /** Registers a page as tab and records its network traffic. Idempotent. */

@@ -39,7 +39,7 @@ class CamoufoxInstallerTest {
 
         Path executable = installer.installBlocking();
 
-        assertEquals(temporary.resolve("browser").resolve("camoufox-1.0-argos.1-lin.x86_64").resolve("camoufox"),
+        assertEquals(temporary.resolve("browser").resolve("camoufox-1.0-argos.2-lin.x86_64").resolve("camoufox"),
                 executable);
         assertTrue(Files.isRegularFile(executable));
         assertTrue(Files.isDirectory(executable.getParent().resolve("addons").resolve("UBO")));
@@ -102,7 +102,7 @@ class CamoufoxInstallerTest {
     @Test
     void keepsAnOlderVersionUntilTheNewOneIsVerified() throws Exception {
         Path root = temporary.resolve("browser");
-        Path old = root.resolve("camoufox-0.9-argos.1-lin.x86_64");
+        Path old = root.resolve("camoufox-0.9-argos.2-lin.x86_64");
         Files.createDirectories(old);
         Files.writeString(old.resolve("camoufox"), "old");
         CamoufoxDistribution broken = publish(temporary.resolve("mirror"), true, "released");
@@ -130,7 +130,7 @@ class CamoufoxInstallerTest {
             pool.shutdownNow();
         }
         try (Stream<Path> entries = Files.list(root)) {
-            assertEquals(List.of(".install.lock", "camoufox-1.0-argos.1-lin.x86_64"),
+            assertEquals(List.of(".install.lock", "camoufox-1.0-argos.2-lin.x86_64"),
                     entries.map(p -> p.getFileName().toString()).sorted().toList());
         }
     }
@@ -172,7 +172,7 @@ class CamoufoxInstallerTest {
         assertEquals("win.x86_64", CamoufoxDistribution.target("Windows 11", "amd64"));
         assertEquals("lin.x86_64", CamoufoxDistribution.target("Linux", "amd64"));
 
-        CamoufoxDistribution pending = new CamoufoxDistribution("1.0", "argos.1",
+        CamoufoxDistribution pending = new CamoufoxDistribution("1.0", "argos.2",
                 temporary.toUri(), Map.of(TARGET, "PENDING"), Map.of());
         assertThrows(IllegalStateException.class, () -> pending.sha256(TARGET));
         assertThrows(CamoufoxDistribution.UnsupportedPlatformException.class, () -> pending.sha256("mac.arm64"));
@@ -186,7 +186,7 @@ class CamoufoxInstallerTest {
                 FIX_B, "4202f76e04e88059c1e6b9797228f4a04f9ed1d210984d5818f00ccc790df460"), builtIn.fixedEntries());
         assertEquals("https", builtIn.archiveUrl("win.x86_64").getScheme());
         assertTrue(builtIn.archiveUrl("win.x86_64").toString()
-                .endsWith("/camoufox-156.0.1-beta.36-argos.1-win.x86_64.zip"));
+                .endsWith("/camoufox-156.0.1-beta.36-argos.2-win.x86_64.zip"));
         assertEquals(Map.of("win.x86_64", 64, "lin.x86_64", 64), Map.of(
                 "win.x86_64", builtIn.sha256("win.x86_64").length(), "lin.x86_64", builtIn.sha256("lin.x86_64").length()));
     }
@@ -204,7 +204,7 @@ class CamoufoxInstallerTest {
         Files.createDirectories(mirror);
         byte[] fixA = "window fix".getBytes(StandardCharsets.UTF_8);
         byte[] fixB = "visibility fix".getBytes(StandardCharsets.UTF_8);
-        CamoufoxDistribution draft = new CamoufoxDistribution("1.0", "argos.1", mirror.toUri(), Map.of(),
+        CamoufoxDistribution draft = new CamoufoxDistribution("1.0", "argos.2", mirror.toUri(), Map.of(),
                 Map.of(FIX_A, sha(fixA), FIX_B, sha(fixB)));
         java.io.ByteArrayOutputStream omni = new java.io.ByteArrayOutputStream();
         try (ZipOutputStream zip = new ZipOutputStream(omni)) {
@@ -217,11 +217,11 @@ class CamoufoxInstallerTest {
             put(zip, "omni.ja", omni.toByteArray());
             put(zip, "addons/UBO/manifest.json", "{}".getBytes(StandardCharsets.UTF_8));
             if (withManifest) {
-                put(zip, CamoufoxDistribution.MANIFEST, ("{\"release\":\"1.0\",\"revision\":\"argos.1\",\"target\":\""
+                put(zip, CamoufoxDistribution.MANIFEST, ("{\"release\":\"1.0\",\"revision\":\"argos.2\",\"target\":\""
                         + TARGET + "\",\"executables\":[\"camoufox\"]}").getBytes(StandardCharsets.UTF_8));
             }
         }
-        return new CamoufoxDistribution("1.0", "argos.1", mirror.toUri(),
+        return new CamoufoxDistribution("1.0", "argos.2", mirror.toUri(),
                 Map.of(TARGET, sha(Files.readAllBytes(archive))), draft.fixedEntries());
     }
 

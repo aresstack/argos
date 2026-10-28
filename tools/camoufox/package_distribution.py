@@ -27,6 +27,18 @@ def sha256(path):
     return digest.hexdigest()
 
 
+def ascii_name(rel):
+    """Font files with non-ASCII names get an escaped ASCII name: a JVM started under a C/POSIX locale cannot create
+    them, and fontconfig identifies fonts by content, not by file name. Anything else must already be ASCII."""
+    if rel.isascii():
+        return rel
+    if not rel.startswith("fonts/"):
+        sys.exit(f"non-ASCII path outside fonts/: {rel!r}")
+    folder, _, name = rel.rpartition("/")
+    escaped = "".join(c if c.isascii() else f"_u{ord(c):04x}" for c in name)
+    return f"{folder}/{escaped}"
+
+
 def entry(name, executable):
     info = zipfile.ZipInfo(name, FIXED_TIME)
     info.compress_type = zipfile.ZIP_DEFLATED
@@ -61,7 +73,7 @@ def main():
             rel = os.path.relpath(path, root).replace(os.sep, "/")
             if rel in SKIP or os.path.islink(path):
                 continue
-            files.append((rel, path))
+            files.append((ascii_name(rel), path))
     files.sort()
 
     executables = []

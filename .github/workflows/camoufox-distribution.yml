@@ -26,7 +26,7 @@ env:
   # uBlock Origin from addons.mozilla.org (the camoufox launcher's default add-on), pinned version and file.
   UBO_VERSION: '1.75.0'
   UBO_URL: https://addons.mozilla.org/firefox/downloads/file/5034826/ublock_origin-1.75.0.xpi
-  UBO_SHA256: ''
+  UBO_SHA256: 5b74415860456370644bd80f16125e865b0e6c356bb5dfcfb84069967eaa5287
 
 jobs:
   package:
@@ -223,6 +223,24 @@ jobs:
             --tests '*.CamoufoxBrowserTest' --tests '*CamoufoxNetworkBoundaryTest' \
             --tests '*camoufox.CamoufoxInstallerTest' --tests '*camoufox.CamoufoxLaunchTest' \
             --tests '*ArgosConfigTest'
+
+      - name: Browser tests really ran (not skipped)
+        shell: bash
+        run: |
+          PY=$(command -v python3 || command -v python)
+          "$PY" - <<'PY'
+          import glob, xml.etree.ElementTree as T
+          need = {"CamoufoxProvisionedSmokeTest", "CamoufoxBrowserTest", "CamoufoxNetworkBoundaryTest"}
+          seen = {}
+          for f in glob.glob("build/test-results/test/*.xml"):
+              r = T.parse(f).getroot()
+              name = r.get("name").rsplit(".", 1)[-1]
+              print(name, "tests", r.get("tests"), "skipped", r.get("skipped"), "failures", r.get("failures"), "errors", r.get("errors"))
+              seen[name] = int(r.get("tests")) - int(r.get("skipped"))
+          missing = [n for n in need if seen.get(n, 0) == 0]
+          if missing:
+              raise SystemExit(f"browser tests did not run: {missing}")
+          PY
 
       - name: Report leftover browser processes
         if: always()

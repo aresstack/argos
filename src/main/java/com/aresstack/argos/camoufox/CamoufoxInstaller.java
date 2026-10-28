@@ -263,7 +263,13 @@ public final class CamoufoxInstaller {
         Files.createDirectories(tree);
         try (ZipFile zip = new ZipFile(archive.toFile())) {
             for (ZipEntry entry : zip.stream().map(ZipEntry.class::cast).toList()) {
-                Path destination = tree.resolve(entry.getName()).normalize();
+                Path destination;
+                try {
+                    destination = tree.resolve(entry.getName()).normalize();
+                } catch (java.nio.file.InvalidPathException unmappable) {
+                    throw new IOException("archive entry cannot be stored under this JVM's file name encoding: "
+                            + entry.getName(), unmappable);
+                }
                 if (!destination.startsWith(tree)) throw new IOException("archive entry escapes: " + entry.getName());
                 if (entry.isDirectory()) {
                     Files.createDirectories(destination);

@@ -43,7 +43,7 @@ class ArgosConfigTest {
         Path argosConfig = createArgosConfig("server.port=8085" + System.lineSeparator()
                 + "security.mode=none" + System.lineSeparator()
                 + "camoufox.executable=" + propertyPath(executable) + System.lineSeparator()
-                + "camoufox.launchOptions=" + propertyPath(launchOptions) + System.lineSeparator());
+                + "browser.launch-config=" + propertyPath(launchOptions) + System.lineSeparator());
 
         ArgosConfig config = ArgosConfig.fromEnvironment(Map.of(), userHome, argosConfig);
 
@@ -60,17 +60,29 @@ class ArgosConfigTest {
         Path argosConfig = createArgosConfig("server.port=8085" + System.lineSeparator()
                 + "security.mode=none" + System.lineSeparator()
                 + "camoufox.executable=" + propertyPath(configuredExecutable) + System.lineSeparator()
-                + "camoufox.launchOptions=" + propertyPath(configuredLaunchOptions) + System.lineSeparator());
+                + "browser.launch-config=" + propertyPath(configuredLaunchOptions) + System.lineSeparator());
 
         ArgosConfig config = ArgosConfig.fromEnvironment(Map.of(
                 "ARGOS_CAMOUFOX_EXECUTABLE", environmentExecutable.toString(),
-                "ARGOS_CAMOUFOX_LAUNCH_OPTIONS", environmentLaunchOptions.toString(),
+                "BROWSER_LAUNCH_CONFIG", environmentLaunchOptions.toString(),
                 "SERVER_PORT", "8086"
         ), userHome, argosConfig);
 
         assertEquals(environmentExecutable.toAbsolutePath(), config.executable());
         assertEquals(environmentLaunchOptions.toAbsolutePath(), config.launchOptions());
         assertEquals(8086, config.port());
+
+        // Property applies without the variable; the old names are gone and change nothing.
+        ArgosConfig fromProperty = ArgosConfig.fromEnvironment(Map.of(
+                "ARGOS_CAMOUFOX_LAUNCH_OPTIONS", environmentLaunchOptions.toString(),
+                "CAMOUFOX_LAUNCH_OPTIONS", environmentLaunchOptions.toString()), userHome, argosConfig);
+        assertEquals(configuredLaunchOptions.toAbsolutePath(), fromProperty.launchOptions());
+
+        Path plainConfig = createArgosConfig("server.port=8085" + System.lineSeparator()
+                + "security.mode=none" + System.lineSeparator()
+                + "camoufox.launchOptions=" + propertyPath(configuredLaunchOptions) + System.lineSeparator());
+        assertNull(ArgosConfig.fromEnvironment(Map.of(), userHome, plainConfig).launchOptions(),
+                "without BROWSER_LAUNCH_CONFIG Argos uses its built-in profile");
     }
 
     @Test
@@ -80,7 +92,7 @@ class ArgosConfigTest {
         ArgosConfig config = ArgosConfig.fromEnvironment(Map.of(), userHome, argosConfig);
         config.requireBrowserConfiguration(); // no paths: Argos installs and configures its own Camoufox
 
-        ArgosConfig missingLaunch = ArgosConfig.fromEnvironment(Map.of("ARGOS_CAMOUFOX_LAUNCH_OPTIONS",
+        ArgosConfig missingLaunch = ArgosConfig.fromEnvironment(Map.of("BROWSER_LAUNCH_CONFIG",
                 userHome.resolve("absent/launch.json").toString()), userHome, argosConfig);
         IllegalStateException error = assertThrows(IllegalStateException.class,
                 missingLaunch::requireBrowserConfiguration);

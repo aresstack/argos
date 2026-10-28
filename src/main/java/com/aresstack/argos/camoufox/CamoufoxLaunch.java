@@ -23,7 +23,7 @@ import java.util.Map;
 /**
  * What Camoufox is started with: fingerprint environment ({@code CAMOU_CONFIG_1..n}, {@code CAMOU_PREFS_1..n},
  * {@code FONTCONFIG_FILE}), Firefox prefs and arguments. Either from a launch.json the operator names explicitly
- * ({@code ARGOS_CAMOUFOX_LAUNCH_OPTIONS}), or from Argos' built-in profile {@code camoufox/default-launch.json}.
+ * ({@code BROWSER_LAUNCH_CONFIG}), or from Argos' built-in profile {@code camoufox/default-launch.json}.
  *
  * @param environment only the Camoufox keys; the caller adds them to the inherited process environment
  * @param fingerprint the joined {@code CAMOU_CONFIG} object (for the window size real input needs)
@@ -41,7 +41,7 @@ public record CamoufoxLaunch(Map<String, String> environment, JsonNode fingerpri
         try {
             launch = MAPPER.readTree(Files.readString(file));
         } catch (NoSuchFileException missing) {
-            throw new IllegalStateException("ARGOS_CAMOUFOX_LAUNCH_OPTIONS / camoufox.launchOptions names " + file
+            throw new IllegalStateException("BROWSER_LAUNCH_CONFIG / browser.launch-config names " + file
                     + ", which does not exist. Remove the setting to use Argos' built-in Camoufox profile.");
         } catch (IOException invalid) {
             throw new IllegalArgumentException("Camoufox launch options " + file + " are not valid JSON: "
@@ -106,7 +106,7 @@ public record CamoufoxLaunch(Map<String, String> environment, JsonNode fingerpri
             if (!Files.isDirectory(addon)) {
                 throw new IllegalStateException("Argos' built-in Camoufox profile loads the add-on " + name.asText()
                         + ", which this Camoufox does not ship in " + addon.getParent() + ". Use the Argos Camoufox "
-                        + "distribution, or name your own launch.json in ARGOS_CAMOUFOX_LAUNCH_OPTIONS.");
+                        + "distribution, or name your own launch.json in BROWSER_LAUNCH_CONFIG.");
             }
             addons.add(addon.toString());
         }

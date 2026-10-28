@@ -15,7 +15,7 @@ instead of the tools.
 ## One command
 
 Prerequisites are the same as for `-PtestCamoufox=true`: `ARGOS_CAMOUFOX_EXECUTABLE` and
-`ARGOS_CAMOUFOX_LAUNCH_OPTIONS` (environment or `~/.argos/argos.properties`), and Ollama with the models pulled.
+`BROWSER_LAUNCH_CONFIG` (environment or `~/.argos/argos.properties`), and Ollama with the models pulled.
 
 ```powershell
 .\gradlew.bat evalModels

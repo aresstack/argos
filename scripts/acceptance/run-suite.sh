@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Run the full Argos suite against real Camoufox and keep a JSON summary.
 #   scripts/acceptance/run-suite.sh LABEL [extra gradle args...]
-# Needs ARGOS_CAMOUFOX_EXECUTABLE and ARGOS_CAMOUFOX_LAUNCH_OPTIONS (see docs/acceptance.md).
+# Needs ARGOS_CAMOUFOX_EXECUTABLE and BROWSER_LAUNCH_CONFIG (see docs/acceptance.md).
 # Writes build/acceptance/LABEL/{summary.json,test-results/,gradle.log}.
 set -u
 label=${1:?label, e.g. baseline-main or integration-<sha>}; shift

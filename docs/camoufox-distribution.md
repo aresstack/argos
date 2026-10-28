@@ -104,7 +104,7 @@ Surrogatpaar) und ergänzt sie zur geerbten Prozessumgebung. Unter Linux erzeugt
 | Variable / Property | Wirkung |
 |---|---|
 | `ARGOS_CAMOUFOX_EXECUTABLE` / `camoufox.executable` | eigener Camoufox statt der Distribution (muss existieren und `camoufox`/`camoufox.exe` heißen) |
-| `ARGOS_CAMOUFOX_LAUNCH_OPTIONS` / `camoufox.launchOptions` | eigene `launch.json` statt des eingebauten Profils; fehlt oder ist sie ungültig, startet Argos nicht und nennt die Datei |
+| `BROWSER_LAUNCH_CONFIG` / `browser.launch-config` | eigene `launch.json` statt des eingebauten Profils; fehlt oder ist sie ungültig, startet Argos nicht und nennt die Datei |
 | `BROWSER_DIR` / `browser.install-dir` | anderer Installationsordner als `~/.argos/browser` |
 | `ARGOS_CAMOUFOX_DISTRIBUTION_URL` / `camoufox.distributionUrl` | Spiegel der Archive (`https://…/` oder `file:///…/`); die gepinnten Prüfsummen gelten weiter |
 

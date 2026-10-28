@@ -72,7 +72,7 @@ public record CamoufoxDistribution(String release, String revision, URI baseUrl,
         if (sha == null) {
             throw new UnsupportedPlatformException("No Argos Camoufox distribution for " + target
                     + "; supported: " + archiveSha256.keySet()
-                    + ". Set ARGOS_CAMOUFOX_EXECUTABLE (and optionally ARGOS_CAMOUFOX_LAUNCH_OPTIONS) instead.");
+                    + ". Set ARGOS_CAMOUFOX_EXECUTABLE (and optionally BROWSER_LAUNCH_CONFIG) instead.");
         }
         if (!sha.matches("[0-9a-f]{64}")) {
             throw new IllegalStateException("The Argos Camoufox distribution " + name() + " for " + target

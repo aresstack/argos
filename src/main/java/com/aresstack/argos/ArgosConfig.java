@@ -156,7 +156,7 @@ public record ArgosConfig(
 
         String executable = setting(environment, "ARGOS_CAMOUFOX_EXECUTABLE", application, "camoufox.executable",
                 null);
-        String options = setting(environment, "ARGOS_CAMOUFOX_LAUNCH_OPTIONS", application, "camoufox.launchOptions",
+        String options = setting(environment, "BROWSER_LAUNCH_CONFIG", application, "browser.launch-config",
                 null);
         String profile = setting(environment, "ARGOS_PROFILE_DIR", application, "browser.profile",
                 userHome.resolve(".argos").resolve("profiles").resolve("default").toString());
@@ -246,7 +246,7 @@ public record ArgosConfig(
             }
         }
         if (launchOptions != null && !Files.isRegularFile(launchOptions)) {
-            throw new IllegalStateException("ARGOS_CAMOUFOX_LAUNCH_OPTIONS / camoufox.launchOptions names "
+            throw new IllegalStateException("BROWSER_LAUNCH_CONFIG / browser.launch-config names "
                     + launchOptions + ", which does not exist. Remove the setting to use Argos' built-in profile.");
         }
     }

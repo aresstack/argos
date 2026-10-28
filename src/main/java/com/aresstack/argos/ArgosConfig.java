@@ -154,14 +154,12 @@ public record ArgosConfig(
             requireHttpsOrigin("CENTRAL_OAUTH_ISSUER", issuer);
         }
 
-        String executable = setting(environment, "ARGOS_CAMOUFOX_EXECUTABLE", application, "camoufox.executable",
-                null);
-        String options = setting(environment, "ARGOS_CAMOUFOX_LAUNCH_OPTIONS", application, "camoufox.launchOptions",
+        String options = setting(environment, "BROWSER_LAUNCH_CONFIG", application, "browser.launch-config",
                 null);
         String profile = setting(environment, "ARGOS_PROFILE_DIR", application, "browser.profile",
                 userHome.resolve(".argos").resolve("profiles").resolve("default").toString());
         return new ArgosConfig(host, port,
-                executable == null ? null : Path.of(executable).toAbsolutePath(),
+                null, // Argos takes the executable from its managed installation (BROWSER_DIR)
                 options == null ? null : Path.of(options).toAbsolutePath(),
                 Path.of(profile).toAbsolutePath(),
                 Boolean.parseBoolean(setting(environment, "ARGOS_HEADLESS", application, "browser.headless", "false")),
@@ -237,8 +235,7 @@ public record ArgosConfig(
     public void requireBrowserConfiguration() {
         if (executable != null) {
             if (!Files.isRegularFile(executable)) {
-                throw new IllegalStateException("ARGOS_CAMOUFOX_EXECUTABLE / camoufox.executable names " + executable
-                        + ", which does not exist. Remove the setting to let Argos install its own Camoufox.");
+                throw new IllegalStateException("The Camoufox executable " + executable + " does not exist.");
             }
             String browserName = executable.getFileName().toString().toLowerCase(Locale.ROOT);
             if (!browserName.equals("camoufox") && !browserName.equals("camoufox.exe")) {
@@ -246,13 +243,13 @@ public record ArgosConfig(
             }
         }
         if (launchOptions != null && !Files.isRegularFile(launchOptions)) {
-            throw new IllegalStateException("ARGOS_CAMOUFOX_LAUNCH_OPTIONS / camoufox.launchOptions names "
+            throw new IllegalStateException("BROWSER_LAUNCH_CONFIG / browser.launch-config names "
                     + launchOptions + ", which does not exist. Remove the setting to use Argos' built-in profile.");
         }
     }
 
     /**
-     * Where Argos installs its own Camoufox ({@code ARGOS_BROWSER_DIR}, default {@code ~/.argos/browser}) and an
+     * Where Argos installs its own Camoufox ({@code BROWSER_DIR}, default {@code ~/.argos/browser}) and an
      * optional mirror of the distribution archives ({@code ARGOS_CAMOUFOX_DISTRIBUTION_URL}); the pinned SHA-256
      * checksums apply to a mirror as well.
      */
@@ -266,7 +263,7 @@ public record ArgosConfig(
 
         static BrowserInstallation fromEnvironment(Map<String, String> environment, Path userHome,
                                                    Properties application) {
-            String root = setting(environment, "ARGOS_BROWSER_DIR", application, "browser.install-dir",
+            String root = setting(environment, "BROWSER_DIR", application, "browser.install-dir",
                     userHome.resolve(".argos").resolve("browser").toString());
             String mirror = setting(environment, "ARGOS_CAMOUFOX_DISTRIBUTION_URL", application,
                     "camoufox.distributionUrl", null);

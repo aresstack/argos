@@ -47,7 +47,7 @@ class HumanInputBrowserTest {
     @Test @Timeout(value = 180, unit = TimeUnit.SECONDS)
     @SuppressWarnings("unchecked")
     void pageSeesOnlyTrustedHumanInput() {
-        String executable = System.getProperty("argos.testHumanBrowser", "");
+        String executable = HumanBrowserExecutable.resolve();
         Assumptions.assumeFalse(executable.isBlank(), "Opt-in real browser test");
         // Launch a persistent context to reuse Camoufox's initial tab instead of opening an unsupported window.
         Path profile = temporary.resolve("profile");

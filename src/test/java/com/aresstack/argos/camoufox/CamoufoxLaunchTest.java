@@ -102,7 +102,7 @@ class CamoufoxLaunchTest {
         Files.createDirectories(browser);
         IllegalStateException error = assertThrows(IllegalStateException.class, () -> CamoufoxLaunch.builtIn(
                 CamoufoxLaunch.defaultProfile(), browser.resolve("camoufox.exe"), temporary, "Windows 11"));
-        assertTrue(error.getMessage().contains("ARGOS_CAMOUFOX_LAUNCH_OPTIONS"));
+        assertTrue(error.getMessage().contains("BROWSER_LAUNCH_CONFIG"));
     }
 
     @Test

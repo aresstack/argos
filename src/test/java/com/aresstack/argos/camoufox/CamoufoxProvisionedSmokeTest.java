@@ -23,8 +23,8 @@ import java.util.concurrent.TimeUnit;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * Real browser smoke for the self-installed Camoufox: no ARGOS_CAMOUFOX_EXECUTABLE, no launch.json. Downloads the
- * published Argos distribution (about 1.3 GB) into {@code ARGOS_BROWSER_DIR}, so it only runs with
+ * Real browser smoke for the self-installed Camoufox: no browser path, no launch.json. Downloads the
+ * published Argos distribution (about 1.3 GB) into {@code BROWSER_DIR}, so it only runs with
  * {@code -PtestProvisionedCamoufox}.
  */
 class CamoufoxProvisionedSmokeTest {

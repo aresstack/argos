@@ -221,7 +221,7 @@ jobs:
       - name: Install and start Camoufox through Argos (no browser paths, no launch.json)
         shell: bash
         env:
-          ARGOS_BROWSER_DIR: ${{ runner.temp }}/argos-browser
+          BROWSER_DIR: ${{ runner.temp }}/argos-browser
         run: |
           chmod +x gradlew
           ./gradlew test --no-daemon --console=plain -PtestCamoufox -PtestProvisionedCamoufox \
@@ -233,7 +233,7 @@ jobs:
       - name: Existing Camoufox smoke, network boundary and configuration tests on the installed browser
         shell: bash
         env:
-          ARGOS_BROWSER_DIR: ${{ runner.temp }}/argos-browser
+          BROWSER_DIR: ${{ runner.temp }}/argos-browser
         run: |
           ./gradlew test --no-daemon --console=plain -PtestCamoufox \
             "-Pplaywright4j.bidi.nativeBehavior=${{ matrix.nativeBehavior }}" \

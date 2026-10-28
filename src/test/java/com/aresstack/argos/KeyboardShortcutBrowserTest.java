@@ -42,7 +42,7 @@ class KeyboardShortcutBrowserTest {
     @Test @Timeout(value = 180, unit = TimeUnit.SECONDS)
     @SuppressWarnings("unchecked")
     void shortcutsArriveAsTrustedKeysAndEdit() {
-        String executable = System.getProperty("argos.testHumanBrowser", "");
+        String executable = HumanBrowserExecutable.resolve();
         Assumptions.assumeFalse(executable.isBlank(), "Opt-in real browser test");
         Path profile = temporary.resolve("profile");
         try (Playwright playwright = Playwright.create()) {

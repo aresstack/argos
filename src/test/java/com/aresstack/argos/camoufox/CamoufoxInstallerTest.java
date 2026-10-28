@@ -56,6 +56,18 @@ class CamoufoxInstallerTest {
     }
 
     @Test
+    void installsIntoAConfiguredRootWithSpaces() throws Exception {
+        CamoufoxDistribution distribution = publish(temporary.resolve("mirror"), true, "fixed");
+        // BrowserInstallation hands BROWSER_DIR over as this root (ArgosConfigTest covers the resolution).
+        Path root = temporary.resolve("Other Drive").resolve("Argos Browser");
+
+        Path executable = new CamoufoxInstaller(root, distribution, TARGET).installBlocking();
+
+        assertEquals(root.resolve("camoufox-1.0-argos.2-lin.x86_64").resolve("camoufox"), executable);
+        assertTrue(Files.isRegularFile(executable));
+    }
+
+    @Test
     void rejectsAWrongChecksumAndInstallsNothing() throws Exception {
         CamoufoxDistribution published = publish(temporary.resolve("mirror"), true, "fixed");
         CamoufoxDistribution wrong = new CamoufoxDistribution(published.release(), published.revision(),
@@ -166,7 +178,7 @@ class CamoufoxInstallerTest {
     void refusesUnsupportedPlatformsAndUnpublishedArchives() {
         RuntimeException mac = assertThrows(CamoufoxDistribution.UnsupportedPlatformException.class,
                 () -> CamoufoxDistribution.target("Mac OS X", "aarch64"));
-        assertTrue(mac.getMessage().contains("ARGOS_CAMOUFOX_EXECUTABLE"));
+        assertTrue(mac.getMessage().contains("only on Windows x86_64 and Linux x86_64"), mac.getMessage());
         assertThrows(CamoufoxDistribution.UnsupportedPlatformException.class,
                 () -> CamoufoxDistribution.target("Linux", "aarch64"));
         assertEquals("win.x86_64", CamoufoxDistribution.target("Windows 11", "amd64"));

@@ -172,7 +172,8 @@ class ChatRoutedToolsTest {
 
     @Test
     void browsersUnusedForTheIdleTimeAreStopped() throws Exception {
-        ChatRoutedTools routed = new ChatRoutedTools(new ChatProfiles(root), this::fake, 4,
+        ChatRoutedTools routed = new ChatRoutedTools(new ChatProfiles(root), (exchange, request) ->
+                McpCallerResolver.resolve(request.meta(), null, principal, null), this::fake, 4,
                 java.time.Duration.ofMillis(100));
         Map<String, SyncToolSpecification> tools = tools(routed);
         call(tools, "whoami", "conv-A", Map.of());
@@ -183,8 +184,8 @@ class ChatRoutedToolsTest {
 
     @Test
     void chatKeyIsAStableHash() {
-        ChatProfiles.Chat chat = McpCallerResolver.resolve(Map.of("openai/session", "x"), null, null, null);
-        assertEquals(chat, McpCallerResolver.resolve(Map.of("openai/session", " x "), null, null, null));
+        ChatProfiles.Chat chat = McpCallerResolver.resolve(Map.of("openai/session", "x"), null, "p", null);
+        assertEquals(chat, McpCallerResolver.resolve(Map.of("openai/session", " x "), null, "p", null));
         // The key existing ChatGPT profile directories were created with: they must not be orphaned.
         assertEquals("da0ee7af19fd421953bf538a0a58ad75", chat.key());
         assertEquals("chatgpt", chat.source());
@@ -226,6 +227,42 @@ class ChatRoutedToolsTest {
         assertNotEquals(other, chatGpt);
         assertFalse(Path.of(chatGpt.split("\\|")[0]).getParent().getFileName().toString()
                 .startsWith(ChatProfiles.TRANSPORT_PREFIX));
+    }
+
+    @Test
+    void chatGptConversationIdNeverOpensAnotherPrincipalsWorkspace() {
+        Map<String, SyncToolSpecification> tools = tools(routed(4));
+        call(tools, "set", "conv-A", Map.of("value", "login-A"));
+        String owner = text(call(tools, "whoami", "conv-A", Map.of()));
+
+        principal = "sub:issuer\u0000someone-else"; // a valid token of another account, same _meta value
+        CallToolResult foreign = call(tools, "get", "conv-A", Map.of());
+        assertTrue(foreign.isError());
+        assertTrue(text(foreign).contains("another signed-in account"));
+        assertFalse(text(foreign).contains("login-A"));
+        assertTrue(call(tools, "browser_contexts", "conv-A", Map.of()).isError());
+        assertTrue(call(tools, "browser_context_new", "conv-A", Map.of()).isError());
+
+        principal = null;
+        assertTrue(call(tools, "whoami", "conv-A", Map.of()).isError(), "no verified principal, no workspace");
+
+        principal = "sub:issuer\u0000angelo";
+        assertEquals(owner, text(call(tools, "whoami", "conv-A", Map.of())));
+        assertEquals("login-A", text(call(tools, "get", "conv-A", Map.of())));
+    }
+
+    @Test
+    void existingChatGptProfileWithoutOwnerIsClaimedInPlace() throws Exception {
+        // A profile created before owners existed: same directory, same contexts, no owner file.
+        Path old = root.resolve(ChatProfiles.hash("conv-A"));
+        Files.createDirectories(old.resolve("profile"));
+        Files.writeString(old.resolve("contexts.properties"), "contexts=start,context-2\nactive=context-2\n");
+        Map<String, SyncToolSpecification> tools = tools(routed(4));
+        assertEquals(old.resolve("profile") + "|context-2", text(call(tools, "whoami", "conv-A", Map.of())));
+        assertEquals(ChatProfiles.ownerOf("sub:issuer\u0000angelo"), Files.readString(old.resolve("owner")));
+        assertFalse(Files.readString(old.resolve("owner")).contains("angelo"), "only a hash is stored");
+        principal = "sub:issuer\u0000someone-else";
+        assertTrue(call(tools, "whoami", "conv-A", Map.of()).isError());
     }
 
     @Test

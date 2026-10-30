@@ -109,8 +109,9 @@ public final class ChatRoutedTools implements AutoCloseable {
             context = profiles.active(chat);
             profile = profiles.profile(chat);
         } catch (Exception error) {
-            log("refused " + name + ": " + (error instanceof ChatProfiles.MissingChatIdentity
-                    ? "no caller identity" : error.getClass().getSimpleName()));
+            log("refused " + name + ": " + (error instanceof ChatProfiles.MissingChatIdentity ? "no caller identity"
+                    : error instanceof ChatProfiles.ForeignWorkspace ? "workspace of another principal"
+                    : error.getClass().getSimpleName()));
             return ArgosTools.failure(error);
         }
         log(name + " " + describe(chat) + " context=" + context.id());

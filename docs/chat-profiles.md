@@ -22,13 +22,31 @@ alle Werkzeuge einschließlich `browser_context_*` fragen denselben Resolver.
   gelesen hat (`iss` + `sub`, sonst `client_id`; mit `SECURITY_MODE=none` `anonymous`). Er gelangt über den
   Transport-Kontext des SDK (`contextExtractor` → `exchange.transportContext()`) zum Handler, nie über einen Header
   oder ein Argument. Wer eine fremde Session-ID kennt, landet mit einem anderen Principal in einem anderen Arbeitsbereich.
-  Fehlt der Principal, wird der Aufruf abgelehnt.
+  Fehlt der Principal, wird der Aufruf abgelehnt (auch im ChatGPT-Pfad).
+- **Eigentümer jedes Arbeitsbereichs:** `_meta["openai/session"]` ist Client-Input und kein Nachweis, dass ChatGPT
+  aufruft. Deshalb gehört jeder Arbeitsbereich zusätzlich dem verifizierten Principal, der ihn zuerst benutzt hat.
+  Argos legt dafür `<hash>/owner` mit einem Hash des Principals an (nie den Principal selbst). Ein anderer Principal
+  mit derselben Unterhaltungs-ID wird abgelehnt („belongs to another signed-in account“) und sieht weder Cookies
+  noch History noch Profil. Gilt ebenso für `s-`-Arbeitsbereiche.
+- **Migration bestehender ChatGPT-Profile:** Verzeichnis und Hash bleiben unverändert. Profile ohne `owner`-Datei
+  übernimmt beim ersten Aufruf nach dem Update der verifizierte Principal dieses Aufrufs; danach ist der Besitz fest.
+  Ändert sich der Principal eines Kontos (z. B. anderer OAuth-Client oder anderer Issuer), sind seine alten
+  Arbeitsbereiche gesperrt. Freigeben lässt sich ein Arbeitsbereich nur bewusst durch Löschen seiner `owner`-Datei.
+  Hinweis: AnAuthentia setzt `sub` gleich der Client-ID. ChatGPT und Claude über denselben OAuth-Client `angel` sind
+  also derselbe Principal. Getrennt sind sie trotzdem, weil ChatGPT-Arbeitsbereiche nur über die Unterhaltungs-ID und
+  Claude-Arbeitsbereiche nur über die eigene MCP-Session erreichbar sind.
 - **Keine Kollisionen:** ChatGPT-Schlüssel und Session-Schlüssel werden über verschiedene Domänen-Strings gehasht, und
   Session-Verzeichnisse beginnen mit `s-`. ChatGPT und Claude teilen nie ein Profil, auch nicht mit demselben OAuth-Client.
 - Nicht verwendet werden `openai/subject` (das ist der Benutzer, keine Unterhaltung), `clientInfo.name` (vom Client frei
   gewählt; erscheint nur bereinigt im Log) und Tool-Argumente.
 - **Aufräumen:** MCP-Sessions existieren nur im Speicher des laufenden Servers. Beim Start löscht Argos deshalb alle
   `s-`-Verzeichnisse, weil sie kein Client mehr erreichen kann. ChatGPT-Profile bleiben unberührt.
+
+> **Einschränkung für Claude und andere Clients ohne Unterhaltungs-ID:** Ihr Arbeitsbereich ist ein temporärer,
+> sicherer Fallback. Profil, Cookies, Kontexte **und Search History (einschließlich Exporte unter `history/exports`)**
+> leben nur so lange wie die MCP-Session: Nach einem Reconnect beginnt ein neuer Arbeitsbereich, und beim Neustart von
+> Argos werden alle `s-`-Verzeichnisse gelöscht. Eine dauerhafte Search History wie bei ChatGPT gibt es für diese
+> Clients erst, wenn sie eine stabile, verifizierbare Unterhaltungskennung mitschicken.
 
 Ein Client mit nachweislich stabiler Unterhaltungskennung kann später als weitere Quelle vor Schritt 2 eingetragen werden.
 

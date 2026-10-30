@@ -12,7 +12,9 @@ import java.util.Map;
  * unchecked HTTP header:
  * <ol>
  *     <li>{@code _meta["openai/session"]} (ChatGPT): one persistent workspace per conversation. The key is the same
- *     hash as before, so existing ChatGPT profiles keep working.</li>
+ *     hash as before, so existing ChatGPT profiles keep working. {@code _meta} is client input and proves nothing:
+ *     the workspace is additionally owned by the verified principal that first used it (see
+ *     {@link ChatProfiles}), and any other principal is refused.</li>
  *     <li>Otherwise the MCP transport session ({@code Mcp-Session-Id}, issued by this server at {@code initialize})
  *     bound to the authenticated principal: one workspace per transport session. It isolates the connection, not
  *     necessarily the conversation: a client that reconnects gets a new session and therefore a new, empty
@@ -50,9 +52,12 @@ public final class McpCallerResolver {
      * @param client    {@code clientInfo.name} from {@code initialize}; only shown in diagnostics, never a key
      */
     static ChatProfiles.Chat resolve(Map<String, Object> meta, String sessionId, String principal, String client) {
+        boolean verified = principal != null && !principal.isBlank();
         Object conversation = meta == null ? null : meta.get(ChatProfiles.SESSION_META_KEY);
         if (conversation instanceof String session && !session.isBlank()) {
-            return new ChatProfiles.Chat(ChatProfiles.hash(session.strip()), "chatgpt", label(client));
+            if (!verified) throw unverified();
+            return new ChatProfiles.Chat(ChatProfiles.hash(session.strip()), "chatgpt", label(client),
+                    ChatProfiles.ownerOf(principal));
         }
         if (sessionId == null || sessionId.isBlank()) {
             throw new ChatProfiles.MissingChatIdentity("Argos could not identify this caller: the call carries no "
@@ -60,12 +65,14 @@ public final class McpCallerResolver {
                     + "profile per conversation or MCP session and has no shared default profile, so the call "
                     + "was refused. Reconnect the client so that it sends initialize again.");
         }
-        if (principal == null || principal.isBlank()) {
-            throw new ChatProfiles.MissingChatIdentity("Argos could not identify this caller: the MCP session has "
-                    + "no verified principal, so the call was refused.");
-        }
+        if (!verified) throw unverified();
         return new ChatProfiles.Chat(ChatProfiles.transportKey(principal, sessionId.strip()), "mcp-session",
-                label(client));
+                label(client), ChatProfiles.ownerOf(principal));
+    }
+
+    private static ChatProfiles.MissingChatIdentity unverified() {
+        return new ChatProfiles.MissingChatIdentity("Argos could not identify this caller: the call has no "
+                + "verified principal, so it was refused.");
     }
 
     /** {@code clientInfo.name} is client supplied: only a short, harmless form ever reaches a log line. */

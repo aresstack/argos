@@ -45,9 +45,10 @@ public final class ChatProfiles {
 
     /**
      * A workspace as Argos keys it: the hashed directory key plus a short form for logs and answers, where the
-     * identity came from ({@code chatgpt} or {@code mcp-session}) and the client's sanitized name for diagnostics.
+     * identity came from ({@code chatgpt} or {@code mcp-session}), the client's sanitized name for diagnostics and
+     * the hashed verified principal that must own the workspace (see {@link #ownerOf(String)}).
      */
-    public record Chat(String key, String source, String client) {
+    public record Chat(String key, String source, String client, String owner) {
         /** At most this much of the hash appears in logs or answers. */
         public String shortKey() {
             return key.substring(0, 10);
@@ -58,7 +59,8 @@ public final class ChatProfiles {
     public record Context(String id, Path cookies, boolean active) { }
 
     /** The workspace's browser profile directory, handed to Camoufox at start. */
-    public Path profile(Chat chat) throws IOException {
+    public synchronized Path profile(Chat chat) throws IOException {
+        claim(chat);
         Path profile = root.resolve(chat.key()).resolve("profile");
         Files.createDirectories(profile);
         return profile;
@@ -68,6 +70,42 @@ public final class ChatProfiles {
     public static final class MissingChatIdentity extends IllegalStateException {
         MissingChatIdentity(String message) {
             super(message);
+        }
+    }
+
+    /** Thrown when a workspace belongs to another verified principal; the message is safe for the model. */
+    public static final class ForeignWorkspace extends IllegalStateException {
+        ForeignWorkspace(String message) {
+            super(message);
+        }
+    }
+
+    /** What {@code <root>/<key>/owner} holds for a principal: a hash, never the principal itself. */
+    static String ownerOf(String principal) {
+        return digest("argos-workspace-owner\u0000" + principal);
+    }
+
+    /**
+     * Binds the workspace to its verified principal. The first access writes {@code <root>/<key>/owner}; this is
+     * also the migration of profiles created before owners existed (their directory and key stay unchanged, the
+     * first verified principal after the update claims them). Every later access by another principal is refused,
+     * so two principals never share cookies, history or profile, even with the same conversation id.
+     */
+    private void claim(Chat chat) throws IOException {
+        if (chat.owner() == null || chat.owner().isBlank()) {
+            throw new ForeignWorkspace("This call has no verified principal, so Argos refused it.");
+        }
+        Path file = root.resolve(chat.key()).resolve("owner");
+        Files.createDirectories(file.getParent());
+        try {
+            Files.writeString(file, chat.owner(), StandardCharsets.UTF_8, java.nio.file.StandardOpenOption.CREATE_NEW);
+            return;
+        } catch (java.nio.file.FileAlreadyExistsException owned) {
+            // compare below
+        }
+        if (!Files.readString(file, StandardCharsets.UTF_8).strip().equals(chat.owner())) {
+            throw new ForeignWorkspace("This browser workspace belongs to another signed-in account, so Argos "
+                    + "refused the call. Workspaces are never shared between accounts.");
         }
     }
 
@@ -118,6 +156,7 @@ public final class ChatProfiles {
 
     /** The active context; on first access the workspace's start profile is created. */
     public synchronized Context active(Chat chat) throws IOException {
+        claim(chat);
         State state = load(chat);
         if (state.contexts.isEmpty()) {
             state.contexts.add(START_CONTEXT);

@@ -30,8 +30,14 @@ class McpMultiClientIntegrationTest {
     }
 
     private static McpSyncClient client(int port, String name) {
+        return client(port, name, null);
+    }
+
+    private static McpSyncClient client(int port, String name, String token) {
         McpSyncClient client = McpClient.sync(HttpClientStreamableHttpTransport.builder("http://127.0.0.1:" + port)
-                        .endpoint("/").build())
+                        .endpoint("/").customizeRequest(request -> {
+                            if (token != null) request.header("Authorization", "Bearer " + token);
+                        }).build())
                 .clientInfo(new Implementation(name, "1.0")).build();
         client.initialize();
         return client;
@@ -73,6 +79,90 @@ class McpMultiClientIntegrationTest {
                 claudeA.closeGracefully();
                 claudeB.closeGracefully();
                 chatGpt.closeGracefully();
+            }
+        }
+    }
+
+    /** A local issuer: JWKS over HTTP, tokens signed like AnAuthentia's (sub = client id). */
+    private static final class Issuer implements AutoCloseable {
+        final com.sun.net.httpserver.HttpServer server;
+        final String url;
+        final com.aresstack.anauthentia.jwt.JwtAccessTokenIssuer tokens;
+
+        Issuer(com.aresstack.anauthentia.jwt.JwtKeyRing keys) throws java.io.IOException {
+            server = com.sun.net.httpserver.HttpServer.create(new java.net.InetSocketAddress("127.0.0.1", 0), 0);
+            url = "http://127.0.0.1:" + server.getAddress().getPort();
+            byte[] jwks = keys.publicJwksJson().getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            server.createContext("/.well-known/jwks.json", exchange -> {
+                exchange.getResponseHeaders().add("Content-Type", "application/json");
+                exchange.sendResponseHeaders(200, jwks.length);
+                exchange.getResponseBody().write(jwks);
+                exchange.close();
+            });
+            server.start();
+            tokens = new com.aresstack.anauthentia.jwt.JwtAccessTokenIssuer(url, url + "/", keys);
+        }
+
+        String token(String clientId, String scope) {
+            java.time.Instant now = java.time.Instant.now();
+            return tokens.generate(clientId, scope, now, now.plusSeconds(600));
+        }
+
+        @Override
+        public void close() {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void signedTokensBindWorkspacesToTheirPrincipalEndToEnd() throws Exception {
+        try (Issuer issuer = new Issuer(com.aresstack.anauthentia.jwt.JwtKeyRing.generate("k1"));
+             Issuer forger = new Issuer(com.aresstack.anauthentia.jwt.JwtKeyRing.generate("k1"))) {
+            ArgosConfig config = new ArgosConfig("127.0.0.1", 0, null, null, root.resolve("unused"), true,
+                    null, "central-oauth", issuer.url, "argos");
+            try (ChatRoutedTools routed = new ChatRoutedTools(new ChatProfiles(root), this::fake, 4);
+                 ArgosApplication.RunningServer running = ArgosApplication.serve(config,
+                         routed.specifications(fake(root.resolve("template")).tools(), true))) {
+                String angel = issuer.token("angel", "argos");
+                McpSyncClient claude = client(running.port(), "claude-ai", angel);
+                McpSyncClient chatGpt = client(running.port(), "openai-mcp", angel);
+                McpSyncClient other = client(running.port(), "claude-ai", issuer.token("other-client", "argos"));
+                try {
+                    String claudeWorkspace = whoami(claude, null);
+                    assertTrue(Path.of(claudeWorkspace).getParent().getFileName().toString()
+                            .startsWith(ChatProfiles.TRANSPORT_PREFIX));
+                    String conversation = whoami(chatGpt, Map.of(ChatProfiles.SESSION_META_KEY, "conv-A"));
+                    assertNotEquals(claudeWorkspace, conversation, "same OAuth client, still separate workspaces");
+
+                    // Another verified principal that sends the same conversation id is refused.
+                    CallToolResult foreign = other.callTool(new CallToolRequest("whoami", Map.of(),
+                            Map.of(ChatProfiles.SESSION_META_KEY, "conv-A")));
+                    assertEquals(Boolean.TRUE, foreign.isError());
+                    assertTrue(((TextContent) foreign.content().get(0)).text().contains("another signed-in account"));
+                    assertNotEquals(claudeWorkspace, whoami(other, null));
+                } finally {
+                    claude.closeGracefully();
+                    chatGpt.closeGracefully();
+                    other.closeGracefully();
+                }
+
+                java.net.http.HttpClient http = java.net.http.HttpClient.newHttpClient();
+                String initialize = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":"
+                        + "{\"protocolVersion\":\"2025-06-18\",\"capabilities\":{},"
+                        + "\"clientInfo\":{\"name\":\"claude-ai\",\"version\":\"1\"}}}";
+                java.util.List<String> rejected = new java.util.ArrayList<>(java.util.Arrays.asList(null,
+                        "not-a-jwt", forger.token("angel", "argos"), issuer.token("angel", "other-scope")));
+                for (String token : rejected) {
+                    java.net.http.HttpRequest.Builder request = java.net.http.HttpRequest.newBuilder(
+                                    java.net.URI.create("http://127.0.0.1:" + running.port() + "/"))
+                            .header("Content-Type", "application/json")
+                            .header("Accept", "application/json, text/event-stream")
+                            .POST(java.net.http.HttpRequest.BodyPublishers.ofString(initialize));
+                    if (token != null) request.header("Authorization", "Bearer " + token);
+                    assertEquals(401, http.send(request.build(),
+                            java.net.http.HttpResponse.BodyHandlers.ofString()).statusCode(), String.valueOf(token));
+                }
+                assertThrows(RuntimeException.class, () -> client(running.port(), "claude-ai", "not-a-jwt"));
             }
         }
     }

@@ -31,7 +31,9 @@ bricht den Start mit einer Meldung ab, die die Variable nennt. Jede Variable sch
 keine Variable, die die HTML-Archivierung automatisch einschaltet. `ARGOS_NETWORK_BODIES` steuert weiterhin nur die
 Diagnose von `browser_network*` und hat keinen Einfluss auf die Search History.
 
-Die Search History setzt `ARGOS_PROFILE_ISOLATION=chat` voraus (Standard). Mit `single` gibt es keinen verlässlichen
+Die Search History setzt `ARGOS_PROFILE_ISOLATION=chat` voraus (Standard). Sie gehört zum Arbeitsbereich des Aufrufers:
+bei ChatGPT zur Unterhaltung, bei anderen MCP-Clients (z. B. Claude) zur MCP-Session, die mit einer neuen Verbindung
+neu beginnt (siehe [chat-profiles.md](chat-profiles.md)). Mit `single` gibt es keinen verlässlichen
 Chat-Schlüssel. Argos meldet dann beim Start `Search History is disabled: ...`, zeichnet nichts auf und legt **keinen**
 globalen Index an.
 

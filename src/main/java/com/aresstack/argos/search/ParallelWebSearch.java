@@ -173,7 +173,7 @@ public final class ParallelWebSearch implements ConvenienceSession.Search {
             List<TabSearchPages> tabs = new ArrayList<>();
             for (int i = 0; i < engines.size(); i++) {
                 SearchEngine engine = engines.get(i);
-                TabSearchPages pages = new TabSearchPages(loaded.get(i), deadline);
+                TabSearchPages pages = new TabSearchPages(engine, loaded.get(i), deadline);
                 tabs.add(pages);
                 runs.add(workers.submit(() -> evaluate(engine, query, pages)));
             }
@@ -184,7 +184,7 @@ public final class ParallelWebSearch implements ConvenienceSession.Search {
                     long wait = Math.max(1, deadline - System.currentTimeMillis());
                     results.add(runs.get(i).get(wait, TimeUnit.MILLISECONDS));
                 } catch (TimeoutException late) {
-                    results.add(grace(engines.get(i), runs.get(i), tabs.get(i)));
+                    results.add(grace(engines.get(i), query, runs.get(i), tabs.get(i)));
                 } catch (Exception failed) {
                     results.add(new EngineRun(engines.get(i).id(), EngineStatus.NAVIGATION_FAILED, tab, List.of(),
                             null, WebSearchService.safeMessage(failed)));
@@ -218,7 +218,8 @@ public final class ParallelWebSearch implements ConvenienceSession.Search {
             return new EngineRun(engine.id(), EngineStatus.CHALLENGE, first.tab(), List.of(), null,
                     "access limited recently; try again in about " + first.retryAfterSeconds() + " s");
         }
-        WebSearchService service = new WebSearchService(pages, settingsFor(engine));
+        WebSearchService service = new WebSearchService(pages, settingsFor(engine),
+                attempt -> pages.steps.add(attempt.host() + " " + attempt.outcome()));
         WebSearchService.Report report;
         try {
             report = service.search(query);
@@ -255,20 +256,56 @@ public final class ParallelWebSearch implements ConvenienceSession.Search {
 
     /**
      * An engine that ran out of time while its typed query was being answered (the result page still loading or
-     * being read) gets a short grace to finish: the search was done, only the page came late. An engine that had
-     * not typed yet stays TIMEOUT. The detail names the steps the engine got through, without URLs.
+     * being read) gets a short grace to finish: the search was done, only the page came late. If it is still not
+     * done then, it is stopped (no further browser step of it starts) and its tab is read once as it is: the result
+     * page may well be there while the engine's job still waits for the page to settle, or was slowed down by the
+     * other engines' typing on the one browser. Results found on that page count; nothing is typed or loaded again.
+     * An engine that had not typed yet, or whose tab shows no results, stays TIMEOUT. The detail names the steps the
+     * engine got through, without URLs.
      */
-    private EngineRun grace(SearchEngine engine, Future<EngineRun> run, TabSearchPages pages) {
+    private EngineRun grace(SearchEngine engine, String query, Future<EngineRun> run, TabSearchPages pages) {
         if (pages.typed) {
             try {
                 return run.get(GRACE_MILLIS, TimeUnit.MILLISECONDS);
             } catch (Exception stillLate) {
-                // falls through to TIMEOUT
+                // the tab is read below
             }
         }
+        pages.abandoned = true;
+        // What the engine got through until now; a stopped job's own failures afterwards are no step of the search.
+        String steps = String.join(", ", pages.steps);
         run.cancel(true);
+        if (pages.typed) {
+            List<EngineHit> late = harvest(engine, query, pages);
+            if (!late.isEmpty()) {
+                return new EngineRun(engine.id(), EngineStatus.OK, pages.tab, late, null,
+                        "results read from the loaded page after the time limit");
+            }
+        }
         return new EngineRun(engine.id(), EngineStatus.TIMEOUT, pages.tab, List.of(), null,
-                "no answer in time after: " + String.join(", ", pages.steps));
+                "no answer in time after: " + steps);
+    }
+
+    /**
+     * The results the engine's tab shows now, for the endpoint whose search field was used last; read only (one
+     * serialized DOM), never a click or navigation. Empty when the tab is gone, shows another page or no results.
+     */
+    private List<EngineHit> harvest(SearchEngine engine, String query, TabSearchPages pages) {
+        SearchEngine.Endpoint endpoint = pages.endpoint;
+        if (endpoint == null || pages.tab.isEmpty()) return List.of();
+        try {
+            TabLoad load = browser.readTab(pages.tab);
+            if (load.outcome() != TabLoadOutcome.OK || load.capture() == null) return List.of();
+            PageCapture capture = load.capture();
+            List<EngineHit> hits = new ArrayList<>();
+            new WebSearchService(pages, settingsFor(engine))
+                    .resultsOn(new SearchPageBrowser.LoadedPage(capture.url(), capture.title(), capture.status(),
+                            capture.html()), query, engine, endpoint)
+                    .forEach(hit -> hits.add(new EngineHit(hit.rank(), hit.title(), hit.url(), hit.snippet())));
+            return hits;
+        } catch (RuntimeException unreadable) {
+            return List.of();
+        }
     }
 
     /** The engine's verdict: a challenge or consent wall wins, then an explicit "no results", else not understood. */
@@ -289,6 +326,7 @@ public final class ParallelWebSearch implements ConvenienceSession.Search {
      * Enter starts runs under the navigation gate too.
      */
     private final class TabSearchPages implements SearchPageBrowser {
+        final SearchEngine engine;
         final TabLoad first;
         private final long deadline;
         private boolean firstUsed;
@@ -299,10 +337,15 @@ public final class ParallelWebSearch implements ConvenienceSession.Search {
         final List<String> steps = new java.util.concurrent.CopyOnWriteArrayList<>();
         /** The page the tab showed last, start page or result page. */
         volatile PageCapture lastCapture;
+        /** The endpoint whose start page the tab opened last: the one a result page in the tab answers. */
+        volatile SearchEngine.Endpoint endpoint;
+        /** Set when the engine ran out of time: no further browser step of its job starts. */
+        volatile boolean abandoned;
         String lastError = "";
         boolean timedOut;
 
-        TabSearchPages(TabLoad first, long deadline) {
+        TabSearchPages(SearchEngine engine, TabLoad first, long deadline) {
+            this.engine = engine;
             this.first = first;
             this.deadline = deadline;
             this.tab = first.tab();
@@ -310,6 +353,7 @@ public final class ParallelWebSearch implements ConvenienceSession.Search {
 
         @Override
         public LoadedPage open(String url) throws Exception {
+            checkActive();
             TabLoad load;
             if (!firstUsed && url.equals(first.requestedUrl())) {
                 firstUsed = true;
@@ -325,21 +369,25 @@ public final class ParallelWebSearch implements ConvenienceSession.Search {
                 if (!load.tab().isEmpty()) tab = load.tab();
             }
             steps.add("start page " + DomainNames.hostOf(url) + " " + load.outcome());
+            endpoint = engine.endpoints().stream().filter(candidate -> candidate.homeUrl().equals(url)).findFirst()
+                    .orElse(null);
             return page(load);
         }
 
         @Override
         public LoadedPage current() throws Exception {
+            checkActive();
             return page(browser.readTab(tab));
         }
 
         @Override
         public boolean click(String cssSelector) {
-            return !tab.isEmpty() && browser.clickInTab(cssSelector, tab);
+            return !abandoned && !tab.isEmpty() && browser.clickInTab(cssSelector, tab);
         }
 
         @Override
         public boolean submitQuery(List<String> searchBoxSelectors, String query) throws Exception {
+            checkActive();
             if (tab.isEmpty()) return false;
             String domain = RegistrableDomain.of(lastCapture == null ? first.requestedUrl() : lastCapture.url());
             NavigationGate.Lease lease;
@@ -364,6 +412,10 @@ public final class ParallelWebSearch implements ConvenienceSession.Search {
                 lease.release(load == null || load.capture() == null ? 0 : load.capture().status(),
                         load == null ? 0 : load.retryAfterSeconds(), load != null && load.challenge());
             }
+        }
+
+        private void checkActive() {
+            if (abandoned) throw new IllegalStateException("the engine ran out of time");
         }
 
         private LoadedPage page(TabLoad load) throws Exception {

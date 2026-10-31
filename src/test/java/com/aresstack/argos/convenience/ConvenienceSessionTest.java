@@ -585,6 +585,65 @@ class ConvenienceSessionTest {
         assertNoUrls(answer);
     }
 
+    /**
+     * Issue #77: DuckDuckGo's HTML endpoint answers with a page that cannot be read, its Lite endpoint (its own
+     * retry, in the same tab) then has its results in the tab well before the search budget plus grace ends, but
+     * the page keeps the job waiting. The results in the tab count; Lite is neither typed into nor loaded again.
+     */
+    @Test void resultsAlreadyInTheTabAreNotATimeout() throws Exception {
+        startPages(0, 0, 0);
+        sites.page(DDG, 200, "<html><head><title>DuckDuckGo</title></head><body><p>Einen Moment</p></body></html>",
+                        0, Map.of())
+                .fixture("https://lite.duckduckgo.com/lite/", "duckduckgo-lite-home.html", 0)
+                .fixture("https://lite.duckduckgo.com/lite/?q=", "duckduckgo-lite.html", 300)
+                .fixture(BING, "bing.html", 0).fixture(GOOGLE, "google.html", 0);
+        LocalConvenienceBrowser browser = new LocalConvenienceBrowser(sites);
+        browser.settlesAfter.put("lite.duckduckgo.com", 20_000L);
+        ConvenienceSession session = new ConvenienceSession(browser, coordinator, UrlPolicy.off(),
+                new ParallelWebSearch(browser, coordinator, SearchEngine.byIds("duckduckgo,bing,google"), 10, false,
+                        10_000, 2_500), null);
+
+        long start = System.nanoTime();
+        Map<String, Object> answer = session.search("camoufox");
+        long millis = (System.nanoTime() - start) / 1_000_000;
+
+        List<Map<String, Object>> engines = list(answer, "engines");
+        assertEquals("OK", engines.get(0).get("status"), engines.toString());
+        assertTrue((Integer) engines.get(0).get("resultCount") > 0, engines.toString());
+        assertEquals("OK", engines.get(1).get("status"));
+        assertEquals("OK", engines.get(2).get("status"));
+        assertEquals("COMPLETE", answer.get("status"));
+        assertTrue(list(answer, "results").stream().anyMatch(result -> ((List<?>) result.get("sources")).stream()
+                .anyMatch(source -> "duckduckgo".equals(((Map<?, ?>) source).get("engine")))));
+        assertEquals(List.of("/lite/", "/lite/"),
+                sites.hits("lite.duckduckgo.com").stream().map(LocalSites.Hit::path).toList(),
+                "the Lite start page and its one result page, nothing again");
+        String ddgTab = (String) engines.get(0).get("tabId");
+        assertEquals(2, browser.submitted.stream().filter(line -> line.startsWith(ddgTab + " ")).count(),
+                "typed once into HTML, once into Lite: " + browser.submitted);
+        assertTrue(millis < 10_000, "bounded by budget and grace, took " + millis + " ms");
+        assertNoUrls(answer);
+    }
+
+    @Test void aTimeoutNamesWhyAnEndpointWasLeftForItsRetry() throws Exception {
+        startPages(0, 0, 0);
+        sites.page(DDG, 200, "<html><head><title>DuckDuckGo</title></head><body><p>Einen Moment</p></body></html>",
+                        0, Map.of())
+                .fixture("https://lite.duckduckgo.com/lite/", "duckduckgo-lite-home.html", 0)
+                .fixture("https://lite.duckduckgo.com/lite/?q=", "duckduckgo-lite.html", 9_000)
+                .fixture(BING, "bing.html", 0).fixture(GOOGLE, "google.html", 0);
+        LocalConvenienceBrowser browser = new LocalConvenienceBrowser(sites);
+        ConvenienceSession session = new ConvenienceSession(browser, coordinator, UrlPolicy.off(),
+                new ParallelWebSearch(browser, coordinator, SearchEngine.byIds("duckduckgo,bing,google"), 10, false,
+                        10_000, 2_500), null);
+
+        Map<String, Object> ddg = list(session.search("camoufox"), "engines").get(0);
+
+        assertEquals("TIMEOUT", ddg.get("status"));
+        assertEquals("no answer in time after: start page html.duckduckgo.com OK, typing, result page read, "
+                + "html.duckduckgo.com EXTRACTION_FAILED, start page lite.duckduckgo.com OK, typing", ddg.get("detail"));
+    }
+
     // ---- helpers --------------------------------------------------------------------------------------------------
 
     /** The engines' regular start pages, with their real search fields. */

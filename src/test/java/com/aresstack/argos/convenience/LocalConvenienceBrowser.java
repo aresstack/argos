@@ -38,6 +38,11 @@ final class LocalConvenienceBrowser implements ConvenienceBrowser {
     final List<String> clicked = new ArrayList<>();
     /** "tab | selector | typed text" per search typed into a field. */
     final List<String> submitted = new ArrayList<>();
+    /**
+     * Per host: how long a result page keeps the search waiting after its document is in the tab (readable), as a
+     * real page does while its load event or late subresources are outstanding.
+     */
+    final Map<String, Long> settlesAfter = new java.util.concurrent.ConcurrentHashMap<>();
 
     LocalConvenienceBrowser(LocalSites sites) {
         this.sites = sites;
@@ -168,6 +173,15 @@ final class LocalConvenienceBrowser implements ConvenienceBrowser {
                     NavigationGate.OPEN.tryAcquire(RegistrableDomain.of(url)), 10_000);
             synchronized (this) {
                 if (load.outcome() == TabLoadOutcome.OK) tabs.get(tab).push(load);
+            }
+            long settle = settlesAfter.getOrDefault(URI.create(url).getHost(), 0L);
+            if (settle > 0) {
+                try {
+                    Thread.sleep(settle);
+                } catch (InterruptedException stopped) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException("stopped while the result page settled");
+                }
             }
             return load;
         }

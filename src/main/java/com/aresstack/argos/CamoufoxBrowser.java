@@ -1366,12 +1366,90 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
         return onBrowser(() -> {
             activePage();
             String tab = BrowserTabs.normalize(tabId);
-            Page page = tabs.get(tab);
-            PageCapture capture = capture(page);
-            MainDocument main = document(page).mainDocument;
-            return new TabLoad(tab, capture.url(), TabLoadOutcome.OK, capture, main == null ? null : main.contentType(),
-                    0, ChallengeCheck.isChallenge(capture.html(), capture.url(), capture.text()), "");
+            return read(tab, tabs.get(tab), false);
         });
+    }
+
+    /** {@code navigated}: the page was just navigated, so its status and Retry-After count. */
+    private TabLoad read(String tab, Page page, boolean navigated) {
+        MainDocument main = document(page).mainDocument;
+        int status = navigated && main != null ? main.status() : 0;
+        PageCapture capture = status > 0 ? capture(page, status) : capture(page);
+        return new TabLoad(tab, capture.url(), TabLoadOutcome.OK, capture, main == null ? null : main.contentType(),
+                navigated ? retryAfterSeconds(page) : 0,
+                ChallengeCheck.isChallenge(capture.html(), capture.url(), capture.text()), "");
+    }
+
+    /**
+     * {@link #submitSearchWithTrustedInput} in a given tab (the convenience profile's engines), read afterwards; null
+     * when none of the selectors matches. The tab is not brought to the front: BiDi input goes to its browsing
+     * context while the visible tab stays as it is (Juggler's focus emulation keeps every tab focused and visible
+     * for the page). Only the input holds the browser thread; the result page loads in short waits that let the other
+     * engines' tabs type and load meanwhile. The caller holds the domain slot.
+     */
+    @Override
+    public TabLoad submitSearchInTab(String tabId, List<String> searchBoxSelectors, String query) {
+        String tab = BrowserTabs.normalize(tabId);
+        Submitted submitted = onBrowser(() -> {
+            activePage();
+            return typeAndEnter(tabs.get(tab), searchBoxSelectors, query);
+        });
+        if (submitted == null) return null;
+        Page p = submitted.page();
+        TabDocument doc = submitted.document();
+        boolean navigated = awaitInSlices(p, 1_500, () -> doc.navigations > submitted.navigations());
+        if (navigated) {
+            awaitInSlices(p, 15_000, () -> {
+                MainDocument main = doc.mainDocument;
+                return main != null && main != submitted.before() && (main.status() < 300 || main.status() >= 400)
+                        && main.finished;
+            });
+        }
+        awaitLoadInSlices(p, 5_000);
+        return onBrowser(() -> read(tab, p, navigated));
+    }
+
+    /** The input part of a search: the field typed into and Enter pressed; what the navigation waits compare. */
+    private record Submitted(Page page, TabDocument document, int navigations, MainDocument before) {
+    }
+
+    private static final int SLICE_MS = 100;
+
+    /**
+     * Waits up to {@code millis} for {@code condition} in short browser-thread turns, so other work interleaves.
+     * Waits on the tab's own page, never on the current one.
+     */
+    private boolean awaitInSlices(Page p, long millis, java.util.function.BooleanSupplier condition) {
+        long until = System.currentTimeMillis() + millis;
+        do {
+            boolean met = onBrowser(() -> {
+                try {
+                    // Waiting on a page lets Playwright dispatch the protocol events that update the tab documents.
+                    p.waitForCondition(condition, new Page.WaitForConditionOptions().setTimeout(SLICE_MS));
+                    return true;
+                } catch (PlaywrightException notYet) {
+                    return false;
+                }
+            });
+            if (met) return true;
+        } while (System.currentTimeMillis() < until);
+        return false;
+    }
+
+    /** {@link #settleLoad} in short turns of the browser thread. */
+    private void awaitLoadInSlices(Page p, long millis) {
+        long until = System.currentTimeMillis() + millis;
+        do {
+            boolean loaded = onBrowser(() -> {
+                try {
+                    p.waitForLoadState(LoadState.LOAD, new Page.WaitForLoadStateOptions().setTimeout(SLICE_MS));
+                    return true;
+                } catch (PlaywrightException notYet) {
+                    return false;
+                }
+            });
+            if (loaded) return;
+        } while (System.currentTimeMillis() < until);
     }
 
     /** Goes back one history entry in a tab and reads it; null without history. The caller holds the domain slot. */
@@ -2770,6 +2848,49 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
             settleLoad(p);
             return true;
         });
+    }
+
+    /**
+     * Searches like a person on the current tab's search page: a real click into the first present field among
+     * {@code searchBoxSelectors}, its content replaced by typing the query key by key, then a real Enter key, all
+     * WebDriver BiDi input ({@link RealInput}); never {@code fill}, {@code requestSubmit()} or a dispatched event.
+     * Waits for the result page the engine navigates to. False when no selector matches; throws when a field
+     * matched but could not take the input.
+     */
+    public boolean submitSearchWithTrustedInput(List<String> searchBoxSelectors, String query) {
+        return onBrowser(() -> submitSearch(activePage(), searchBoxSelectors, query));
+    }
+
+    private boolean submitSearch(Page p, List<String> searchBoxSelectors, String query) {
+        Submitted submitted = typeAndEnter(p, searchBoxSelectors, query);
+        if (submitted == null) return false;
+        awaitNavigationAfterInput(p, submitted.document(), submitted.navigations(), submitted.before());
+        settleLoad(p);
+        return true;
+    }
+
+    /** Types into the first usable field and presses Enter; null when no selector matches. */
+    private Submitted typeAndEnter(Page p, List<String> searchBoxSelectors, String query) {
+        RuntimeException refused = null;
+        for (String selector : searchBoxSelectors) {
+            Locator box = p.locator(selector).first();
+            if (box.count() == 0) continue;
+            TabDocument tab = document(p);
+            int navigations = tab.navigations;
+            MainDocument before = tab.mainDocument;
+            try {
+                input.replaceText(p, box, query);
+            } catch (RuntimeException notUsable) {
+                refused = notUsable; // a hidden or covered match; an alternative locator may be the visible field
+                continue;
+            }
+            // The keys go to the field that now holds the focus.
+            input.press(p, null, "Enter", 1);
+            leaveSavedDocument(p);
+            return new Submitted(p, tab, navigations, before);
+        }
+        if (refused != null) throw refused;
+        return null;
     }
 
     /**

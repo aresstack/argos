@@ -63,7 +63,7 @@ public final class ArgosUnderTest implements AutoCloseable {
     public Session startSession(EvalProfile profile, boolean live) throws Exception {
         browser.clear();
         SearchSettings search = live ? SearchSettings.fromEnvironment()
-                : new SearchSettings(List.of(SearchEngine.custom(world.searchTemplate())), 10, Duration.ofMinutes(10));
+                : new SearchSettings(List.of(SearchEngine.custom(world.searchHome())), 10, Duration.ofMinutes(10));
         WebSession web = new WebSession(browser, urlPolicy, new BrowserWebSearch(browser, search), partCharacters,
                 WebSession.DEFAULT_MAX_LINKS);
         List<SyncToolSpecification> tools = new ArrayList<>(new ArgosTools(browser, web,

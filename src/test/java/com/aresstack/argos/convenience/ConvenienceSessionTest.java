@@ -22,7 +22,8 @@ import static org.junit.jupiter.api.Assertions.*;
 /** Section 14 of the convenience specification, against controlled local servers (no real browser). */
 class ConvenienceSessionTest {
     private static final ObjectMapper JSON = new ObjectMapper();
-    private static final String DDG = "https://html.duckduckgo.com/html/";
+    // Result pages; the engines' start pages are served by startPages().
+    private static final String DDG = "https://html.duckduckgo.com/html/?q=";
     private static final String BING = "https://www.bing.com/search";
     private static final String GOOGLE = "https://www.google.com/search";
 
@@ -39,8 +40,10 @@ class ConvenienceSessionTest {
     // ---- web_search ---------------------------------------------------------------------------------------------
 
     @Test void allEnginesSearchInParallelEachInItsOwnTab() throws Exception {
-        sites.fixture(DDG, "duckduckgo-html.html", 600).fixture(BING, "bing.html", 600).fixture(GOOGLE, "google.html", 600);
-        ConvenienceSession session = searching(new LocalConvenienceBrowser(sites), 20_000, null);
+        startPages(600, 600, 600);
+        sites.fixture(DDG, "duckduckgo-html.html", 0).fixture(BING, "bing.html", 0).fixture(GOOGLE, "google.html", 0);
+        LocalConvenienceBrowser browser = new LocalConvenienceBrowser(sites);
+        ConvenienceSession session = searching(browser, 20_000, null);
 
         long start = System.nanoTime();
         Map<String, Object> answer = session.search("camoufox");
@@ -48,10 +51,16 @@ class ConvenienceSessionTest {
 
         List<LocalSites.Hit> ddg = sites.hits("html.duckduckgo.com"), bing = sites.hits("www.bing.com"),
                 google = sites.hits("www.google.com");
-        assertEquals(1, ddg.size());
-        assertEquals(1, bing.size());
-        assertEquals(1, google.size());
-        // The three engine requests overlap in time; sequentially they would need 1.8 s.
+        // Each engine: its start page, then the result page its search field asked for.
+        assertEquals(List.of("/html/", "/html/"), ddg.stream().map(LocalSites.Hit::path).toList());
+        assertEquals(List.of("/", "/search"), bing.stream().map(LocalSites.Hit::path).toList());
+        assertEquals(List.of("/", "/search"), google.stream().map(LocalSites.Hit::path).toList());
+        List<String> tabs = browser.submitted.stream().map(line -> line.substring(0, line.indexOf(' '))).toList();
+        assertEquals(3, tabs.stream().distinct().count(), "each engine typed into in its own tab: " + browser.submitted);
+        assertEquals(java.util.Set.of("input[name=q] | camoufox", "#sb_form_q | camoufox", "textarea[name=q] | camoufox"),
+                browser.submitted.stream().map(line -> line.substring(line.indexOf("| ") + 2))
+                        .collect(java.util.stream.Collectors.toSet()));
+        // The three start page requests overlap in time; sequentially they would need 1.8 s.
         assertTrue(ddg.get(0).overlaps(bing.get(0)) && bing.get(0).overlaps(google.get(0))
                 && ddg.get(0).overlaps(google.get(0)), sites.hits.toString());
         assertTrue(millis < 1_500, "took " + millis + " ms");
@@ -73,7 +82,8 @@ class ConvenienceSessionTest {
     }
 
     @Test void aSlowEngineTimesOutWithoutHoldingBackTheOthers() throws Exception {
-        sites.fixture(DDG, "duckduckgo-html.html", 0).fixture(BING, "bing.html", 0).fixture(GOOGLE, "google.html", 8_000);
+        startPages(0, 0, 8_000);
+        sites.fixture(DDG, "duckduckgo-html.html", 0).fixture(BING, "bing.html", 0).fixture(GOOGLE, "google.html", 0);
         ConvenienceSession session = searching(new LocalConvenienceBrowser(sites), 2_000, null);
 
         long start = System.nanoTime();
@@ -90,6 +100,7 @@ class ConvenienceSessionTest {
     }
 
     @Test void noResultsExtractionFailureAndConsentAreDistinctWithAFallbackPage() throws Exception {
+        startPages(0, 0, 0);
         sites.fixture(DDG, "no-results.html", 0).fixture(BING, "unknown-layout.html", 0)
                 .fixture(GOOGLE, "consent-accept-only.html", 0);
         LocalConvenienceBrowser browser = new LocalConvenienceBrowser(sites);
@@ -144,6 +155,7 @@ class ConvenienceSessionTest {
     }
 
     @Test void oneHistoryEventPerSearchForAllEngines() throws Exception {
+        startPages(0, 0, 0);
         sites.fixture(DDG, "duckduckgo-html.html", 0).fixture(BING, "bing.html", 0).fixture(GOOGLE, "google.html", 0);
         RecordingHistory history = new RecordingHistory();
         ConvenienceSession session = searching(new LocalConvenienceBrowser(sites), 10_000, history);
@@ -153,7 +165,7 @@ class ConvenienceSessionTest {
         assertEquals(1, history.searches.size());
         assertEquals("duckduckgo OK, bing OK, google OK", history.searches.get(0).get(1));
         assertTrue(history.pages.isEmpty(), "result pages of the engines are no page reads");
-        assertEquals(3, sites.hits.size(), "no extra requests for the history");
+        assertEquals(6, sites.hits.size(), "start page and result page per engine, no extra requests for the history");
     }
 
     // ---- opening pages ------------------------------------------------------------------------------------------
@@ -389,7 +401,64 @@ class ConvenienceSessionTest {
         assertTrue(sites.hits.isEmpty());
     }
 
+    @Test void aStartPageWithoutSearchFieldIsAnInputFailureWithoutAnyDirectUrl() throws Exception {
+        startPages(0, 0, 0);
+        sites.page("https://www.bing.com/", "<html><head><title>Bing</title></head><body><p>Wartung</p></body></html>");
+        sites.fixture(DDG, "duckduckgo-html.html", 0).fixture(BING, "bing.html", 0).fixture(GOOGLE, "google.html", 0);
+        ConvenienceSession session = searching(new LocalConvenienceBrowser(sites), 10_000, null);
+
+        Map<String, Object> answer = session.search("camoufox");
+
+        List<Map<String, Object>> engines = list(answer, "engines");
+        assertEquals("OK", engines.get(0).get("status"));
+        assertEquals("INPUT_FAILED", engines.get(1).get("status"));
+        assertTrue(engines.get(1).containsKey("fallbackPage"), "the start page as it was shown");
+        assertEquals("OK", engines.get(2).get("status"));
+        assertEquals(List.of("/"), sites.hits("www.bing.com").stream().map(LocalSites.Hit::path).toList(),
+                "no result URL is opened in place of the search field");
+        assertEquals("PARTIAL", answer.get("status"));
+    }
+
+    @Test void anEngineThatAlreadyTypedGetsAShortGraceForItsResultPage() throws Exception {
+        startPages(0, 0, 0);
+        sites.fixture(DDG, "duckduckgo-html.html", 0).fixture(BING, "bing.html", 0).fixture(GOOGLE, "google.html", 2_500);
+        LocalConvenienceBrowser browser = new LocalConvenienceBrowser(sites);
+        ConvenienceSession session = new ConvenienceSession(browser, coordinator, UrlPolicy.off(),
+                new ParallelWebSearch(browser, coordinator, SearchEngine.byIds("duckduckgo,bing,google"), 10, false,
+                        10_000, 1_000)::search, null);
+
+        Map<String, Object> answer = session.search("camoufox");
+
+        List<Map<String, Object>> engines = list(answer, "engines");
+        assertEquals("OK", engines.get(2).get("status"), engines.toString());
+        assertEquals(3, engines.get(2).get("resultCount"));
+        assertEquals("COMPLETE", answer.get("status"));
+    }
+
+    @Test void aTimeoutNamesTheStepsTheEngineGotThrough() throws Exception {
+        startPages(0, 0, 0);
+        sites.fixture(DDG, "duckduckgo-html.html", 0).fixture(BING, "bing.html", 0).fixture(GOOGLE, "google.html", 9_000);
+        LocalConvenienceBrowser browser = new LocalConvenienceBrowser(sites);
+        ConvenienceSession session = new ConvenienceSession(browser, coordinator, UrlPolicy.off(),
+                new ParallelWebSearch(browser, coordinator, SearchEngine.byIds("duckduckgo,bing,google"), 10, false,
+                        10_000, 1_000)::search, null);
+
+        Map<String, Object> answer = session.search("camoufox");
+
+        Map<String, Object> google = list(answer, "engines").get(2);
+        assertEquals("TIMEOUT", google.get("status"));
+        assertEquals("no answer in time after: start page www.google.com OK, typing", google.get("detail"));
+        assertNoUrls(answer);
+    }
+
     // ---- helpers --------------------------------------------------------------------------------------------------
+
+    /** The engines' regular start pages, with their real search fields. */
+    private void startPages(long ddgDelay, long bingDelay, long googleDelay) {
+        sites.fixture("https://html.duckduckgo.com/html/", "duckduckgo-html-home.html", ddgDelay)
+                .fixture("https://www.bing.com/", "bing-home.html", bingDelay)
+                .fixture("https://www.google.com/", "google-home.html", googleDelay);
+    }
 
     private ConvenienceSession searching(LocalConvenienceBrowser browser, long engineTimeout, RecordingHistory history) {
         ParallelWebSearch search = new ParallelWebSearch(browser, coordinator,

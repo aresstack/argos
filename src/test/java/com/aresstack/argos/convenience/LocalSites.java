@@ -17,7 +17,9 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Controlled local web servers for the convenience tests: every public URL (https://www.bing.com/search?q=x) is
- * served from 127.0.0.1 under /{host}/{path}. Each page has a status, body, delay and headers; the server logs
+ * served from 127.0.0.1 under /{host}/{path}. A page registered with a query ({@code https://html.duckduckgo.com/html/?q=})
+ * answers the requests with a query, the same path without one the requests without (an engine's start page and its
+ * result page). Each page has a status, body, delay and headers; the server logs
  * the interval of every request (to prove overlap or serialization) and the highest number of requests in flight.
  */
 final class LocalSites implements AutoCloseable {
@@ -46,7 +48,8 @@ final class LocalSites implements AutoCloseable {
             int slash = raw.indexOf('/', 1);
             String host = slash < 0 ? raw.substring(1) : raw.substring(1, slash);
             String path = slash < 0 ? "/" : raw.substring(slash);
-            Page page = pages.getOrDefault(host + path,
+            Page page = exchange.getRequestURI().getRawQuery() == null ? null : pages.get(host + path + "?");
+            if (page == null) page = pages.getOrDefault(host + path,
                     new Page(404, "<html><head><title>Not found</title></head><body>404</body></html>", 0, Map.of()));
             try {
                 if (page.delayMillis() > 0) Thread.sleep(page.delayMillis());
@@ -68,11 +71,11 @@ final class LocalSites implements AutoCloseable {
         server.start();
     }
 
-    /** Serves {@code url}'s host and path (the query is ignored). */
+    /** Serves {@code url}'s host and path; any query of {@code url} only marks it as the page for queried requests. */
     LocalSites page(String url, int status, String body, long delayMillis, Map<String, String> headers) {
         URI uri = URI.create(url);
-        pages.put(uri.getHost() + (uri.getRawPath() == null || uri.getRawPath().isEmpty() ? "/" : uri.getRawPath()),
-                new Page(status, body, delayMillis, headers));
+        pages.put(uri.getHost() + (uri.getRawPath() == null || uri.getRawPath().isEmpty() ? "/" : uri.getRawPath())
+                + (uri.getRawQuery() == null ? "" : "?"), new Page(status, body, delayMillis, headers));
         return this;
     }
 

@@ -151,6 +151,91 @@ class ConvenienceBrowserTest {
         }
     }
 
+    /**
+     * #72: the window's own blank start tab is used by the first load instead of standing empty next to the pages;
+     * of a parallel fan-out exactly one load gets it, a used tab is never navigated again, and the last tab emptied
+     * on close is free again under a new id.
+     */
+    @Test @Timeout(value = 240, unit = TimeUnit.SECONDS)
+    void theUnusedStartTabIsLoadedFirstAndOnlyOnce() throws Exception {
+        Assumptions.assumeTrue(Boolean.getBoolean("argos.testCamoufox"), "Opt-in real browser test");
+        ArgosConfig local = ArgosConfig.fromEnvironment();
+        local.requireBrowserConfiguration();
+        HttpServer site = site(Collections.synchronizedList(new ArrayList<>()), null);
+        try (CamoufoxBrowser browser = browser(local)) {
+            int port = site.getAddress().getPort();
+            String a = "http://localhost:" + port + "/slow-a";
+            String b = "http://127.0.0.1:" + port + "/slow-b";
+            String c = "http://localhost:" + port + "/slow-c";
+            DomainCoordinator coordinator = new DomainCoordinator(4, System::currentTimeMillis);
+            List<Map<String, Object>> fresh = browser.tabs();
+            assertEquals(1, fresh.size(), "a fresh window has its start tab: " + fresh);
+            String start = (String) fresh.get(0).get("tab");
+
+            List<TabLoad> loads = browser.loadTabs(List.of(
+                    new TabLoadRequest(null, a, RegistrableDomain.of(a)),
+                    new TabLoadRequest(null, b, RegistrableDomain.of(b)),
+                    new TabLoadRequest(null, c, RegistrableDomain.of(c))), coordinator, 4, 30_000);
+            for (TabLoad load : loads) assertEquals(TabLoadOutcome.OK, load.outcome(), load.toString());
+            List<String> ids = loads.stream().map(TabLoad::tab).toList();
+            assertEquals(3, ids.stream().distinct().count(), "one tab each: " + ids);
+            assertEquals(start, ids.get(0), "the start tab took the first page: " + ids);
+            assertEquals(3, browser.tabs().size(), "three pages, no empty New Tab: " + browser.tabs());
+            assertEquals(start, browser.tabs().stream().filter(tab -> Boolean.TRUE.equals(tab.get("current")))
+                    .findFirst().orElseThrow().get("tab"), "no tab switch");
+
+            // Every tab is in use now: the next page gets a tab of its own, the others keep their pages.
+            String next = "http://127.0.0.1:" + port + "/next";
+            TabLoad another = browser.loadTabs(List.of(new TabLoadRequest(null, next, RegistrableDomain.of(next))),
+                    coordinator, 1, 30_000).get(0);
+            assertEquals(TabLoadOutcome.OK, another.outcome(), another.toString());
+            assertFalse(ids.contains(another.tab()), another.tab() + " is new");
+            assertEquals("localhost/slow-a", browser.readTab(start).capture().title());
+
+            for (String id : List.of(ids.get(1), ids.get(2), another.tab())) browser.closeTabQuietly(id);
+            browser.closeTabQuietly(start); // the last tab is emptied, not closed
+            assertFalse(browser.hasOpenTab(start), "its id went with the closed page");
+            assertEquals(1, browser.tabs().size());
+            TabLoad again = browser.loadTabs(List.of(new TabLoadRequest(null, a, RegistrableDomain.of(a))),
+                    coordinator, 1, 30_000).get(0);
+            assertEquals(TabLoadOutcome.OK, again.outcome(), again.toString());
+            assertNotEquals(start, again.tab());
+            assertEquals(1, browser.tabs().size(), "the emptied tab was used: " + browser.tabs());
+            assertTrue(coordinator.activeDomains().isEmpty(), "every slot is released");
+        } finally {
+            site.stop(0);
+        }
+    }
+
+    /** #72: web_open_url on a fresh window navigates its start tab; a second URL does not overwrite the first. */
+    @Test @Timeout(value = 240, unit = TimeUnit.SECONDS)
+    void webOpenUrlUsesTheStartTabThenNewTabs() throws Exception {
+        Assumptions.assumeTrue(Boolean.getBoolean("argos.testCamoufox"), "Opt-in real browser test");
+        ArgosConfig local = ArgosConfig.fromEnvironment();
+        local.requireBrowserConfiguration();
+        HttpServer site = site(Collections.synchronizedList(new ArrayList<>()), null);
+        try (CamoufoxBrowser browser = browser(local)) {
+            int port = site.getAddress().getPort();
+            String a = "http://localhost:" + port + "/slow-a";
+            String b = "http://127.0.0.1:" + port + "/slow-b";
+            ConvenienceSession session = new ConvenienceSession(browser,
+                    new DomainCoordinator(4, System::currentTimeMillis), UrlPolicy.from(TestNetworks.LOOPBACK),
+                    query -> List.of(), null);
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> first = (List<Map<String, Object>>) session.openUrl(a).get("opened");
+            assertEquals(1, first.size(), first.toString());
+            assertEquals(1, browser.tabs().size(), "no second, empty tab: " + browser.tabs());
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> second = (List<Map<String, Object>>) session.openUrl(b).get("opened");
+            assertEquals(1, second.size(), second.toString());
+            assertNotEquals(first.get(0).get("tabId"), second.get(0).get("tabId"));
+            assertEquals(2, browser.tabs().size());
+            assertEquals("localhost/slow-a", session.readTab((String) first.get(0).get("tabId"), 1).get("title"));
+        } finally {
+            site.stop(0);
+        }
+    }
+
     private CamoufoxBrowser browser(ArgosConfig local) {
         return new CamoufoxBrowser(new ArgosConfig("127.0.0.1", 0, local.executable(), local.launchOptions(),
                 temporary.resolve("profile"), true).withNetwork(TestNetworks.LOOPBACK));

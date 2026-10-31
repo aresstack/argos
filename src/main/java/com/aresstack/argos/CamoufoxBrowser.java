@@ -105,6 +105,8 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
     private BrowserTabs tabs = new BrowserTabs();
     /** The persistent profile's own context ("start") and its tabs while another user context is active. */
     private BrowserContext startContext;
+    /** Blank tabs a load may use before it opens a new one (the start tab, an emptied last tab). */
+    private final FreeTabs freeTabs = new FreeTabs();
     private final BrowserTabs startTabs = tabs;
     /** Additional WebDriver BiDi user contexts in this browser, by context id. */
     private final Map<String, UserContext> userContexts = new java.util.LinkedHashMap<>();
@@ -360,6 +362,7 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
 
     /** Forgets the whole browser session: tabs, user contexts, transport and proxy. The profile stays on disk. */
     private void forgetSession() {
+        freeTabs.clear();
         context = null;
         startContext = null;
         forgetUserContexts();
@@ -397,9 +400,12 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
         Optional<Page> current = tabs.current();
         if (current.isPresent()) return current.get();
         ensureContext();
-        Page first = context.pages().stream().filter(p -> !p.isClosed()).findFirst()
-                .orElseGet(context::newPage);
-        return tabs.select(adopt(first));
+        Optional<Page> open = context.pages().stream().filter(p -> !p.isClosed()).findFirst();
+        Page first = open.orElseGet(context::newPage);
+        String id = adopt(first);
+        // A tab opened only to have a current one is as unused as the start tab.
+        if (open.isEmpty()) freeTabs.offer(first, document(first).navigations);
+        return tabs.select(id);
     }
 
     /** Resolve an explicit tab without changing which tab is current. */
@@ -478,6 +484,9 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
                 throw error;
             }
             probeUnicode();
+            // The window's own "New Tab" is used by the first load instead of standing next to it empty (#72).
+            context.pages().stream().filter(p -> !p.isClosed() && "about:blank".equals(p.url()))
+                    .forEach(p -> freeTabs.offer(p, document(p).navigations));
             // Tabs opened by websites (target=_blank, window.open) are adopted like our own.
             observe(context);
         }
@@ -548,6 +557,7 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
         // Protocol-level BiDi network events only; nothing is injected into the page.
         network.attach(page);
         page.onClose(closed -> {
+            freeTabs.withdraw(closed);
             tabs.forget(closed);
             controlSnapshots.remove(closed);
             documents.remove(closed);
@@ -1061,6 +1071,8 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
         NavigationGate.Lease lease;
         Page page;
         String tab;
+        /** The page is a free blank tab the job took instead of opening one; it is never closed on failure. */
+        boolean reused;
         int status;
         MainDocument previousDocument;
         MainDocument previousDownload;
@@ -1182,7 +1194,11 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
         try {
             Page page;
             if (job.request.tab() == null) {
-                page = context.newPage();
+                // An unused blank tab first (at most one job gets it: claims run on this thread), else a new one.
+                // Neither is brought to the front: which tab the user watches stays the user's choice.
+                Optional<Page> free = freeTabs.claim(context, p -> document(p).navigations);
+                job.reused = free.isPresent();
+                page = free.orElseGet(context::newPage);
                 job.tab = adopt(page);
             } else {
                 job.tab = BrowserTabs.normalize(job.request.tab());
@@ -1316,13 +1332,18 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
     }
 
     /**
-     * A failed new tab is closed, which stops its navigation (the context's last tab goes to about:blank); an
-     * existing tab keeps whatever it shows, so a failed link never throws away the agent's page.
+     * A failed new tab is closed, which stops its navigation (the context's last tab goes to about:blank); a reused
+     * start tab goes back to about:blank instead of being closed; an existing tab keeps whatever it shows, so a failed
+     * link never throws away the agent's page.
      */
     private void abandon(LoadJob job) {
         if (job.page == null) return;
         try {
-            if (job.request.tab() == null && tabs.size() > 1) {
+            if (job.reused) {
+                // The user's start tab stays; stopping the navigation is enough. It belongs to the job's caller
+                // now (an engine keeps its tab), so it is not offered to other loads again.
+                job.page.navigate("about:blank");
+            } else if (job.request.tab() == null && tabs.size() > 1) {
                 job.page.close();
                 tabs.forget(job.page);
             } else if (job.request.tab() == null) {
@@ -1430,6 +1451,9 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
             if (page == null) return null;
             if (tabs.size() <= 1) {
                 page.navigate("about:blank");
+                // The closed tab's id is gone as if the tab were; the empty tab is free for the next load.
+                tabs.reissue(page);
+                freeTabs.offer(page, document(page).navigations);
             } else {
                 page.close();
                 tabs.forget(page);

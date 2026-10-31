@@ -123,6 +123,104 @@ class CamoufoxWebSearchTest {
         }
     }
 
+    /**
+     * A start page that also reports what the page saw of focus and visibility: at load and at the first key, and
+     * every blur or visibility change, all in hidden fields the browser itself submits with the form.
+     */
+    private static final String OBSERVED_HOME = """
+            <html><head><title>Local search</title></head><body>
+            <form action="/search"><input type="search" name="q" autocomplete="off">
+            <input type="hidden" name="keys" value=""><input type="hidden" name="enter" value="">
+            <input type="hidden" name="atload" value=""><input type="hidden" name="atkey" value="">
+            <input type="hidden" name="changes" value="0"></form>
+            <script>
+              const form = document.querySelector('form');
+              const state = () => document.hasFocus() + '/' + document.visibilityState + '/' + document.hidden;
+              form.atload.value = state();
+              const changed = () => form.changes.value = String(Number(form.changes.value) + 1);
+              document.addEventListener('visibilitychange', changed);
+              window.addEventListener('blur', changed);
+              form.q.addEventListener('keydown', e => {
+                if (!form.atkey.value) form.atkey.value = state();
+                if (e.key === 'Enter') form.enter.value = String(e.isTrusted);
+                else form.keys.value += e.isTrusted ? 't' : 'u';
+              });
+            </script></body></html>""";
+
+    /**
+     * Three engines in three background tabs while another tab stays in front: the input goes into each engine's
+     * own tab without any tab switch, every key and Enter is trusted, and every engine gets its own query.
+     */
+    @Test @Timeout(value = 200, unit = TimeUnit.SECONDS)
+    void typesIntoThreeBackgroundTabsWhileTheFrontTabStays() throws Exception {
+        Assumptions.assumeTrue(Boolean.getBoolean("argos.testCamoufox"), "Opt-in real browser smoke");
+        ArgosConfig local = ArgosConfig.fromEnvironment();
+        local.requireBrowserConfiguration();
+        List<String> searches = java.util.Collections.synchronizedList(new java.util.ArrayList<>());
+        List<String> frontEvents = java.util.Collections.synchronizedList(new java.util.ArrayList<>());
+        List<HttpServer> servers = new java.util.ArrayList<>();
+        try {
+            for (int i = 0; i < 3; i++) {
+                HttpServer site = HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0);
+                String engine = "engine" + i;
+                site.createContext("/", exchange -> respond(exchange, 200, exchange.getRequestURI().getPath().equals("/")
+                        ? OBSERVED_HOME : "<html><body>404</body></html>"));
+                site.createContext("/search", exchange -> {
+                    searches.add(engine + " " + exchange.getRequestURI().getRawQuery());
+                    respond(exchange, 200, SerpFixtures.html("generic-cards.html"));
+                });
+                site.start();
+                servers.add(site);
+            }
+            HttpServer front = HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0);
+            front.createContext("/event", exchange -> {
+                frontEvents.add(exchange.getRequestURI().getRawQuery());
+                respond(exchange, 200, "");
+            });
+            front.createContext("/", exchange -> respond(exchange, 200, """
+                    <html><head><title>Front</title></head><body><p>front tab</p><script>
+                      const report = type => fetch('/event?' + type + '=' + document.visibilityState, {keepalive: true});
+                      document.addEventListener('visibilitychange', () => report('visibilitychange'));
+                      window.addEventListener('blur', () => report('blur'));
+                    </script></body></html>"""));
+            front.start();
+            servers.add(front);
+            try (CamoufoxBrowser browser = new CamoufoxBrowser(new ArgosConfig("127.0.0.1", 0, local.executable(),
+                    local.launchOptions(), temporary.resolve("profile"), true)
+                    .withNetwork(com.aresstack.argos.TestNetworks.LOOPBACK))) {
+                browser.loadHtml("http://127.0.0.1:" + front.getAddress().getPort() + "/");
+                List<SearchEngine> engines = new java.util.ArrayList<>();
+                for (int i = 0; i < 3; i++) {
+                    engines.add(SearchEngine.custom("http://" + (i % 2 == 0 ? "localhost" : "127.0.0.1") + ":"
+                            + servers.get(i).getAddress().getPort() + "/"));
+                }
+                ParallelWebSearch search = new ParallelWebSearch(browser,
+                        new com.aresstack.argos.convenience.DomainCoordinator(4, System::currentTimeMillis),
+                        engines, 10, false, 20_000);
+
+                List<ParallelWebSearch.EngineRun> runs = search.search("solar");
+
+                assertEquals(List.of("OK", "OK", "OK"), runs.stream().map(run -> run.status().name()).toList(),
+                        runs.toString());
+                assertEquals(3, runs.stream().map(ParallelWebSearch.EngineRun::tab).distinct().count());
+                assertEquals(3, searches.size(), searches.toString());
+                for (int i = 0; i < 3; i++) {
+                    String engine = "engine" + i;
+                    String line = searches.stream().filter(entry -> entry.startsWith(engine + " ")).findFirst()
+                            .orElseThrow(() -> new AssertionError(engine + " got no search: " + searches));
+                    System.out.println("Background tab " + line);
+                    // Each tab got exactly its own query, typed with trusted keys only, submitted by a trusted Enter.
+                    assertTrue(line.matches(engine + " q=solar&keys=t{5,}&enter=true&atload=[^&]*&atkey=[^&]*&changes=0"),
+                            line);
+                }
+                assertTrue(frontEvents.isEmpty(), "the front tab never lost focus or visibility: " + frontEvents);
+                assertEquals("Front", browser.currentHtml().title(), "the current tab is still the front tab");
+            }
+        } finally {
+            servers.forEach(site -> site.stop(0));
+        }
+    }
+
     private static void respond(HttpExchange exchange, int status, String body) throws IOException {
         byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
         exchange.getResponseHeaders().add("Content-Type", "text/html; charset=utf-8");

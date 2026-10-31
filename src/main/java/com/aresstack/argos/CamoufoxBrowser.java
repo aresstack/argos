@@ -1315,8 +1315,9 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
 
     /**
      * {@link #submitSearchWithTrustedInput} in a given tab (the convenience profile's engines), read afterwards; null
-     * when none of the selectors matches. The tab is brought to the front first, as a person switches to it before
-     * typing. Only the input holds the browser thread; the result page loads in short waits that let the other
+     * when none of the selectors matches. The tab is not brought to the front: BiDi input goes to its browsing
+     * context while the visible tab stays as it is (Juggler's focus emulation keeps every tab focused and visible
+     * for the page). Only the input holds the browser thread; the result page loads in short waits that let the other
      * engines' tabs type and load meanwhile. The caller holds the domain slot.
      */
     @Override
@@ -1324,16 +1325,14 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
         String tab = BrowserTabs.normalize(tabId);
         Submitted submitted = onBrowser(() -> {
             activePage();
-            Page page = tabs.get(tab);
-            page.bringToFront();
-            return typeAndEnter(page, searchBoxSelectors, query);
+            return typeAndEnter(tabs.get(tab), searchBoxSelectors, query);
         });
         if (submitted == null) return null;
         Page p = submitted.page();
         TabDocument doc = submitted.document();
-        boolean navigated = awaitInSlices(1_500, () -> doc.navigations > submitted.navigations());
+        boolean navigated = awaitInSlices(p, 1_500, () -> doc.navigations > submitted.navigations());
         if (navigated) {
-            awaitInSlices(15_000, () -> {
+            awaitInSlices(p, 15_000, () -> {
                 MainDocument main = doc.mainDocument;
                 return main != null && main != submitted.before() && (main.status() < 300 || main.status() >= 400)
                         && main.finished;
@@ -1349,15 +1348,17 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
 
     private static final int SLICE_MS = 100;
 
-    /** Waits up to {@code millis} for {@code condition} in short browser-thread turns, so other work interleaves. */
-    private boolean awaitInSlices(long millis, java.util.function.BooleanSupplier condition) {
+    /**
+     * Waits up to {@code millis} for {@code condition} in short browser-thread turns, so other work interleaves.
+     * Waits on the tab's own page, never on the current one.
+     */
+    private boolean awaitInSlices(Page p, long millis, java.util.function.BooleanSupplier condition) {
         long until = System.currentTimeMillis() + millis;
         do {
             boolean met = onBrowser(() -> {
-                Page any = activePage();
                 try {
                     // Waiting on a page lets Playwright dispatch the protocol events that update the tab documents.
-                    any.waitForCondition(condition, new Page.WaitForConditionOptions().setTimeout(SLICE_MS));
+                    p.waitForCondition(condition, new Page.WaitForConditionOptions().setTimeout(SLICE_MS));
                     return true;
                 } catch (PlaywrightException notYet) {
                     return false;

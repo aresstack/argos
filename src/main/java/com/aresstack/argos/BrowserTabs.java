@@ -38,6 +38,20 @@ final class BrowserTabs {
         });
     }
 
+    /**
+     * Gives an adopted page a new id (adopting it if unknown), so whoever still holds its old id cannot mistake the
+     * tab for theirs. The current tab stays current under its new id.
+     */
+    String reissue(Page page) {
+        Optional<String> known = idOf(page);
+        if (known.isEmpty()) return adopt(page);
+        String id = "t" + nextId++;
+        tabs.remove(known.get());
+        tabs.put(id, page);
+        if (known.get().equals(current)) current = id;
+        return id;
+    }
+
     /** Forgets every tab, after the browser was restarted. Ids keep counting up. */
     void clear() {
         tabs.clear();

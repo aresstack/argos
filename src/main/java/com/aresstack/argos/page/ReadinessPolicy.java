@@ -34,7 +34,7 @@ public record ReadinessPolicy(String waitUntil, int timeoutMillis, int pollMilli
     public ReadinessPolicy {
         waitUntil = waitUntil == null ? "domcontentloaded" : waitUntil.trim().toLowerCase(Locale.ROOT);
         if (!List.of("commit", "domcontentloaded", "load").contains(waitUntil)) {
-            throw new IllegalArgumentException("ARGOS_READY_WAIT_UNTIL must be commit, domcontentloaded or load");
+            throw new IllegalArgumentException("READY_WAIT_UNTIL must be commit, domcontentloaded or load");
         }
         timeoutMillis = clamp(timeoutMillis, 0, 60_000);
         pollMillis = clamp(pollMillis, 50, 2_000);
@@ -79,31 +79,31 @@ public record ReadinessPolicy(String waitUntil, int timeoutMillis, int pollMilli
     }
 
     /**
-     * Reads {@code ARGOS_PAGE_READINESS} (fast | balanced | thorough) and optional
-     * per-condition overrides {@code ARGOS_READY_*}.
+     * Reads {@code PAGE_READINESS} (fast | balanced | thorough) and optional
+     * per-condition overrides {@code READY_*}.
      */
     public static ReadinessPolicy from(UnaryOperator<String> setting) {
-        String preset = setting.apply("ARGOS_PAGE_READINESS");
+        String preset = setting.apply("PAGE_READINESS");
         ReadinessPolicy base = switch (preset == null ? "balanced" : preset.trim().toLowerCase(Locale.ROOT)) {
             case "balanced" -> balanced();
             case "fast" -> fast();
             case "thorough" -> thorough();
             default -> throw new IllegalArgumentException(
-                    "ARGOS_PAGE_READINESS must be fast, balanced or thorough: " + preset);
+                    "PAGE_READINESS must be fast, balanced or thorough: " + preset);
         };
-        String selectors = setting.apply("ARGOS_READY_LOADING_SELECTORS");
+        String selectors = setting.apply("READY_LOADING_SELECTORS");
         List<String> loading = selectors == null ? base.loadingSelectors()
                 : "none".equalsIgnoreCase(selectors.trim()) ? List.of()
                 : List.of(selectors.split("\\s*\\|\\s*")).stream().filter(s -> !s.isBlank()).toList();
-        String waitUntil = setting.apply("ARGOS_READY_WAIT_UNTIL");
+        String waitUntil = setting.apply("READY_WAIT_UNTIL");
         return new ReadinessPolicy(
                 waitUntil == null ? base.waitUntil() : waitUntil,
-                integer(setting, "ARGOS_READY_TIMEOUT_MS", base.timeoutMillis()),
-                integer(setting, "ARGOS_READY_POLL_MS", base.pollMillis()),
-                integer(setting, "ARGOS_READY_DOM_STABLE_MS", base.domStableMillis()),
-                integer(setting, "ARGOS_READY_NETWORK_QUIET_MS", base.networkQuietMillis()),
-                integer(setting, "ARGOS_READY_MAX_INFLIGHT", base.maxInflightRequests()),
-                integer(setting, "ARGOS_READY_MIN_TEXT", base.minTextCharacters()),
+                integer(setting, "READY_TIMEOUT_MS", base.timeoutMillis()),
+                integer(setting, "READY_POLL_MS", base.pollMillis()),
+                integer(setting, "READY_DOM_STABLE_MS", base.domStableMillis()),
+                integer(setting, "READY_NETWORK_QUIET_MS", base.networkQuietMillis()),
+                integer(setting, "READY_MAX_INFLIGHT", base.maxInflightRequests()),
+                integer(setting, "READY_MIN_TEXT", base.minTextCharacters()),
                 loading);
     }
 

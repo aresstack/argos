@@ -1,12 +1,14 @@
 package com.aresstack.argos.search;
 
+import com.aresstack.argos.EnvironmentVariables;
+
 import java.time.Duration;
 import java.util.List;
 
 /**
- * Runtime settings of web_search. Environment: {@code ARGOS_SEARCH_ENGINES} (comma-separated order,
- * default {@code duckduckgo,bing,google}), {@code ARGOS_SEARCH_MAX_RESULTS} (default 10, max 30) and
- * {@code ARGOS_SEARCH_CONSENT_ACCEPT} (default false).
+ * Runtime settings of web_search. Environment: {@code SEARCH_ENGINES} (comma-separated order,
+ * default {@code duckduckgo,bing,google}), {@code SEARCH_MAX_RESULTS} (default 10, max 30) and
+ * {@code SEARCH_CONSENT_ACCEPT} (default false).
  *
  * @param challengeLock     how long an engine family that showed a CAPTCHA is skipped
  * @param acceptAllConsent  explicit opt-in to click "accept all" when a banner offers nothing else;
@@ -31,18 +33,18 @@ public record SearchSettings(List<SearchEngine> engines, int maxResults, Duratio
     }
 
     public static SearchSettings fromEnvironment() {
-        String engines = System.getenv("ARGOS_SEARCH_ENGINES");
-        String max = System.getenv("ARGOS_SEARCH_MAX_RESULTS");
+        String engines = EnvironmentVariables.system().get("SEARCH_ENGINES");
+        String max = EnvironmentVariables.system().get("SEARCH_MAX_RESULTS");
         int maxResults = 10;
         if (max != null && !max.isBlank()) {
             try {
                 maxResults = Integer.parseInt(max.trim());
             } catch (NumberFormatException invalid) {
-                throw new IllegalArgumentException("ARGOS_SEARCH_MAX_RESULTS must be an integer: " + max);
+                throw new IllegalArgumentException("SEARCH_MAX_RESULTS must be an integer: " + max);
             }
         }
         return new SearchSettings(SearchEngine.byIds(engines == null || engines.isBlank() ? DEFAULT_ENGINES : engines),
                 maxResults, Duration.ofMinutes(10),
-                Boolean.parseBoolean(System.getenv().getOrDefault("ARGOS_SEARCH_CONSENT_ACCEPT", "false").trim()));
+                Boolean.parseBoolean(EnvironmentVariables.system().getOrDefault("SEARCH_CONSENT_ACCEPT", "false").trim()));
     }
 }

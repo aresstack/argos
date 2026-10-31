@@ -11,7 +11,8 @@ import java.util.function.Function;
 
 /**
  * Evaluation settings. Each name is read as system property {@code argos.eval.<name>} (Gradle:
- * {@code -Peval.<name>=...}) or environment variable {@code ARGOS_EVAL_<NAME>} (dashes become underscores).
+ * {@code -Peval.<name>=...}) or environment variable {@code EVAL_<NAME>} (dashes become underscores;
+ * the former {@code ARGOS_EVAL_<NAME>} still works as a deprecated alias).
  *
  * <p>What runs: {@code runs} lists {@code model@profile} pairs. Without it, every {@code model} is combined
  * with every {@code profile} (both comma-separated, profile default compact). Without any model, the Phase 7
@@ -126,7 +127,10 @@ public record EvalSettings(String api, String baseUrl, String apiKey, List<Targe
     private static String lookup(String name) {
         String property = System.getProperty("argos.eval." + name);
         if (property != null && !property.isBlank()) return property.trim();
-        String environment = System.getenv("ARGOS_EVAL_" + name.toUpperCase(Locale.ROOT).replace('-', '_'));
+        String variable = "EVAL_" + name.toUpperCase(Locale.ROOT).replace('-', '_');
+        String environment = System.getenv(variable);
+        // Deprecated alias of the former ARGOS_ prefix; the new name wins.
+        if (environment == null || environment.isBlank()) environment = System.getenv("ARGOS_" + variable);
         return environment == null || environment.isBlank() ? null : environment.trim();
     }
 

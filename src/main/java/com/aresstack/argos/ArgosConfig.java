@@ -73,29 +73,29 @@ public record ArgosConfig(
         public static ProfileIsolation fromEnvironment() throws IOException {
             Properties application = readProperties(Path.of(System.getProperty("argos.config",
                     Path.of(System.getProperty("user.home"), ".argos", "argos.properties").toString())));
-            String mode = setting("ARGOS_PROFILE_ISOLATION", application, "browser.profile-isolation", "chat")
+            String mode = setting("PROFILE_ISOLATION", application, "browser.profile-isolation", "chat")
                     .toLowerCase(Locale.ROOT);
             if (!mode.equals("chat") && !mode.equals("single")) {
-                throw new IllegalArgumentException("ARGOS_PROFILE_ISOLATION must be 'chat' or 'single': " + mode);
+                throw new IllegalArgumentException("PROFILE_ISOLATION must be 'chat' or 'single': " + mode);
             }
-            String root = setting("ARGOS_CHAT_PROFILES_DIR", application, "browser.chat-profiles",
+            String root = setting("CHAT_PROFILES_DIR", application, "browser.chat-profiles",
                     Path.of(System.getProperty("user.home"), ".argos", "profiles", "chats").toString());
-            String max = setting("ARGOS_MAX_BROWSERS", application, "browser.max-browsers", "2");
+            String max = setting("MAX_BROWSERS", application, "browser.max-browsers", "2");
             int maxBrowsers;
             try {
                 maxBrowsers = Integer.parseInt(max);
             } catch (NumberFormatException invalid) {
-                throw new IllegalArgumentException("ARGOS_MAX_BROWSERS must be an integer: " + max, invalid);
+                throw new IllegalArgumentException("MAX_BROWSERS must be an integer: " + max, invalid);
             }
-            if (maxBrowsers < 1) throw new IllegalArgumentException("ARGOS_MAX_BROWSERS must be at least 1.");
-            String idle = setting("ARGOS_BROWSER_IDLE_MINUTES", application, "browser.idle-minutes", "10");
+            if (maxBrowsers < 1) throw new IllegalArgumentException("MAX_BROWSERS must be at least 1.");
+            String idle = setting("BROWSER_IDLE_MINUTES", application, "browser.idle-minutes", "10");
             int idleMinutes;
             try {
                 idleMinutes = Integer.parseInt(idle);
             } catch (NumberFormatException invalid) {
-                throw new IllegalArgumentException("ARGOS_BROWSER_IDLE_MINUTES must be an integer: " + idle, invalid);
+                throw new IllegalArgumentException("BROWSER_IDLE_MINUTES must be an integer: " + idle, invalid);
             }
-            if (idleMinutes < 0) throw new IllegalArgumentException("ARGOS_BROWSER_IDLE_MINUTES must not be negative.");
+            if (idleMinutes < 0) throw new IllegalArgumentException("BROWSER_IDLE_MINUTES must not be negative.");
             return new ProfileIsolation(mode.equals("chat"), Path.of(root).toAbsolutePath(), maxBrowsers,
                     idleMinutes);
         }
@@ -107,7 +107,7 @@ public record ArgosConfig(
         Path configPath = configuredPath == null
                 ? userHome.resolve(".argos").resolve("argos.properties")
                 : Path.of(configuredPath);
-        return fromEnvironment(System.getenv(), userHome, configPath);
+        return fromEnvironment(EnvironmentVariables.system(), userHome, configPath);
     }
 
     static ArgosConfig fromEnvironment(Map<String, String> environment, Path userHome, Path configPath)
@@ -117,7 +117,7 @@ public record ArgosConfig(
         if (setting(environment, "ARGOS_ALLOW_PRIVATE_NETWORKS", application, "browser.allow-private-networks", null) != null) {
             // One security logic for all tools: the proxy's NetworkPolicy. No second, looser switch.
             throw new IllegalArgumentException("ARGOS_ALLOW_PRIVATE_NETWORKS was replaced by the network boundary: "
-                    + "admit intranet targets with ARGOS_INTRANET_ALLOW, or debug with ARGOS_NETWORK_POLICY=off.");
+                    + "admit intranet targets with INTRANET_ALLOW, or debug with NETWORK_POLICY=off.");
         }
         String portText = setting(environment, "SERVER_PORT", application, "server.port", null);
         if (portText == null) {
@@ -157,24 +157,24 @@ public record ArgosConfig(
 
         String options = setting(environment, "BROWSER_LAUNCH_CONFIG", application, "browser.launch-config",
                 null);
-        String profile = setting(environment, "ARGOS_PROFILE_DIR", application, "browser.profile",
+        String profile = setting(environment, "BROWSER_PROFILE_DIR", application, "browser.profile",
                 userHome.resolve(".argos").resolve("profiles").resolve("default").toString());
         return new ArgosConfig(host, port,
                 null, // Argos takes the executable from its managed installation (BROWSER_DIR)
                 options == null ? null : Path.of(options).toAbsolutePath(),
                 Path.of(profile).toAbsolutePath(),
-                Boolean.parseBoolean(setting(environment, "ARGOS_HEADLESS", application, "browser.headless", "false")),
+                Boolean.parseBoolean(setting(environment, "BROWSER_HEADLESS", application, "browser.headless", "false")),
                 publicOrigin, securityMode, issuer, requiredScope,
-                ToolProfile.parse(setting(environment, "ARGOS_TOOL_PROFILE", application, "tools.profile", null)),
+                ToolProfile.parse(setting(environment, "TOOL_PROFILE", application, "tools.profile", null)),
                 ReadinessPolicy.from(name -> setting(environment, name, application, propertyKey(name), null)),
                 // Every browser connection passes Argos' local proxy and its policy (analysis 5.4).
                 NetworkSettings.parse(
-                        setting(environment, "ARGOS_NETWORK_POLICY", application, "network.policy", null),
-                        setting(environment, "ARGOS_INTRANET_ALLOW", application, "network.intranet-allow", null),
-                        setting(environment, "ARGOS_UPSTREAM_PROXY", application, "network.upstream-proxy", null),
-                        setting(environment, "ARGOS_UPSTREAM_DNS", application, "network.upstream-dns", null)),
+                        setting(environment, "NETWORK_POLICY", application, "network.policy", null),
+                        setting(environment, "INTRANET_ALLOW", application, "network.intranet-allow", null),
+                        setting(environment, "UPSTREAM_PROXY", application, "network.upstream-proxy", null),
+                        setting(environment, "UPSTREAM_DNS", application, "network.upstream-dns", null)),
                 // Opt-in: eagerly keeps (masked) document/XHR/fetch bodies for browser_network_detail.
-                Boolean.parseBoolean(setting(environment, "ARGOS_NETWORK_BODIES", application, "network.bodies", "false")));
+                Boolean.parseBoolean(setting(environment, "NETWORK_BODIES", application, "network.bodies", "false")));
     }
 
     private static Properties readProperties(Path path) throws IOException {
@@ -188,7 +188,7 @@ public record ArgosConfig(
     }
 
     private static String setting(String environmentVariable, Properties properties, String key, String fallback) {
-        return setting(System.getenv(), environmentVariable, properties, key, fallback);
+        return setting(EnvironmentVariables.system(), environmentVariable, properties, key, fallback);
     }
 
     private static String setting(Map<String, String> environment, String environmentVariable,
@@ -199,9 +199,9 @@ public record ArgosConfig(
         return property != null && !property.isBlank() ? property.trim() : fallback;
     }
 
-    /** ARGOS_READY_DOM_STABLE_MS → ready.dom.stable.ms in argos.properties. */
+    /** READY_DOM_STABLE_MS → ready.dom.stable.ms in argos.properties. */
     private static String propertyKey(String environment) {
-        return environment.replaceFirst("^ARGOS_", "").toLowerCase(Locale.ROOT).replace('_', '.');
+        return environment.toLowerCase(Locale.ROOT).replace('_', '.');
     }
 
     private static String normalizeOrigin(String value) {
@@ -251,7 +251,7 @@ public record ArgosConfig(
 
     /**
      * Where Argos installs its own Camoufox ({@code BROWSER_DIR}, default {@code ~/.argos/browser}) and an
-     * optional mirror of the distribution archives ({@code ARGOS_CAMOUFOX_DISTRIBUTION_URL}); the pinned SHA-256
+     * optional mirror of the distribution archives ({@code CAMOUFOX_DISTRIBUTION_URL}); the pinned SHA-256
      * checksums apply to a mirror as well.
      */
     public record BrowserInstallation(Path root, URI mirror) {
@@ -259,14 +259,14 @@ public record ArgosConfig(
             Path userHome = Path.of(System.getProperty("user.home"));
             Properties application = readProperties(Path.of(System.getProperty("argos.config",
                     userHome.resolve(".argos").resolve("argos.properties").toString())));
-            return fromEnvironment(System.getenv(), userHome, application);
+            return fromEnvironment(EnvironmentVariables.system(), userHome, application);
         }
 
         static BrowserInstallation fromEnvironment(Map<String, String> environment, Path userHome,
                                                    Properties application) {
             String root = setting(environment, "BROWSER_DIR", application, "browser.install-dir",
                     userHome.resolve(".argos").resolve("browser").toString());
-            String mirror = setting(environment, "ARGOS_CAMOUFOX_DISTRIBUTION_URL", application,
+            String mirror = setting(environment, "CAMOUFOX_DISTRIBUTION_URL", application,
                     "camoufox.distributionUrl", null);
             return new BrowserInstallation(Path.of(root).toAbsolutePath(), mirror == null ? null : URI.create(mirror));
         }

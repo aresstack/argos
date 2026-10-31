@@ -105,12 +105,12 @@ public final class ArgosApplication {
         return workspace(config, null, null);
     }
 
-    static final String SINGLE_PROFILE_HISTORY = "Search History is disabled: ARGOS_PROFILE_ISOLATION=single has no "
-            + "reliable chat key, and Argos keeps no global history. Start Argos with ARGOS_PROFILE_ISOLATION=chat "
+    static final String SINGLE_PROFILE_HISTORY = "Search History is disabled: PROFILE_ISOLATION=single has no "
+            + "reliable chat key, and Argos keeps no global history. Start Argos with PROFILE_ISOLATION=chat "
             + "(the default) to use search_history, search_history_export, search_history_capture_settings and "
             + "browser_archive_html.";
     static final String HISTORY_SWITCHED_OFF = "Search History is switched off on this Argos server "
-            + "(ARGOS_SEARCH_HISTORY=false).";
+            + "(SEARCH_HISTORY_ENABLED=false).";
 
     /**
      * @param historyDirectory this chat's Search History, or null without one; then search_history and

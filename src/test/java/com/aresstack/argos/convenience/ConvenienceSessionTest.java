@@ -102,7 +102,7 @@ class ConvenienceSessionTest {
         assertFalse(engines.get(0).containsKey("fallbackPage"), "an explicit empty result needs no fallback");
         assertEquals("EXTRACTION_FAILED", engines.get(1).get("status"));
         assertEquals("CONSENT_REQUIRED", engines.get(2).get("status"));
-        assertTrue(browser.clicked.isEmpty(), "no consent click without ARGOS_SEARCH_CONSENT_ACCEPT");
+        assertTrue(browser.clicked.isEmpty(), "no consent click without SEARCH_CONSENT_ACCEPT");
         @SuppressWarnings("unchecked")
         Map<String, Object> fallback = (Map<String, Object>) engines.get(1).get("fallbackPage");
         assertFalse(String.valueOf(fallback.get("text")).isBlank());

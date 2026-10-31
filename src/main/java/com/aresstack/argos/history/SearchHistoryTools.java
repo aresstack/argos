@@ -61,8 +61,8 @@ public final class SearchHistoryTools {
     }
 
     /**
-     * The same tools for a server without Search History (ARGOS_PROFILE_ISOLATION=single or
-     * ARGOS_SEARCH_HISTORY=false), so clients such as ChatGPT always see a stable tool list; every call answers with
+     * The same tools for a server without Search History (PROFILE_ISOLATION=single or
+     * SEARCH_HISTORY_ENABLED=false), so clients such as ChatGPT always see a stable tool list; every call answers with
      * {@code reason} as an error and touches no data.
      */
     public static SearchHistoryTools disabled(String reason) {

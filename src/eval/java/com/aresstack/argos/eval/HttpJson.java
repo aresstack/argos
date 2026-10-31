@@ -36,7 +36,7 @@ final class HttpJson {
             response = client.send(request.build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
         } catch (java.net.http.HttpTimeoutException timedOut) {
             throw new ChatModel.ModelException("Model request to " + url + " timed out after " + timeout.toSeconds()
-                    + " s (raise ARGOS_EVAL_REQUEST_TIMEOUT_S for slow local models)", timedOut);
+                    + " s (raise EVAL_REQUEST_TIMEOUT_S for slow local models)", timedOut);
         } catch (java.io.IOException unreachable) {
             throw new ChatModel.ModelException("Model endpoint " + url + " is not reachable: "
                     + unreachable.getClass().getSimpleName()

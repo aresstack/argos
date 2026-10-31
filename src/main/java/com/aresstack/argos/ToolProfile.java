@@ -23,7 +23,7 @@ public enum ToolProfile {
             return valueOf(value.trim().toUpperCase(Locale.ROOT));
         } catch (IllegalArgumentException unknown) {
             throw new IllegalArgumentException(
-                    "ARGOS_TOOL_PROFILE must be 'developer', 'convenience', 'expert', 'compact' or 'legacy': " + value);
+                    "TOOL_PROFILE must be 'developer', 'convenience', 'expert', 'compact' or 'legacy': " + value);
         }
     }
 

@@ -60,11 +60,11 @@ public final class Socks5Proxy implements AutoCloseable {
         this.server = new ServerSocket(0, 128, InetAddress.getByName("127.0.0.1"));
         protectedLoopbackPorts.add(server.getLocalPort());
         if (settings.policy().admitsLoopback()) {
-            System.err.println("ARGOS_INTRANET_ALLOW admits loopback: pages can reach local services, including "
+            System.err.println("INTRANET_ALLOW admits loopback: pages can reach local services, including "
                     + "the browser's own automation ports. Use this only for tests against local fixtures.");
         }
         if (settings.upstream() != null && settings.upstreamDns() == NetworkSettings.UpstreamDns.REMOTE) {
-            System.err.println("ARGOS_UPSTREAM_DNS=remote: the upstream proxy resolves again, so the policy "
+            System.err.println("UPSTREAM_DNS=remote: the upstream proxy resolves again, so the policy "
                     + "cannot see where it connects (DNS rebinding at the upstream is possible).");
         }
         this.acceptor = Thread.ofPlatform().daemon().name("argos-network-proxy").start(this::acceptLoop);

@@ -12,7 +12,7 @@ Entscheidung dahinter und die gemessenen Grenzen des Single-Thread-Executors.
 | `browser_open_many` | `urls` (1–10), optional `maxCharactersPerPage` (200–20000, Standard 4000) | `parallelTabs`, `elapsedMs`, `succeeded`, `results[]` mit einem Eintrag pro URL in Anfragereihenfolge |
 
 Die Werkzeuge werden **nicht** in die neun bisherigen `browser_*`-Werkzeuge aufgenommen. `ArgosApplication`
-veröffentlicht sie nur bei `ARGOS_TOOL_PROFILE=expert`. Die endgültige Einordnung übernimmt die Profil-
+veröffentlicht sie nur bei `TOOL_PROFILE=expert`. Die endgültige Einordnung übernimmt die Profil-
 Integration (`DocumentAndBatchTools.all()` liefert die drei Spezifikationen).
 
 Status pro Batch-Eintrag: `SUCCESS`, `DUPLICATE`, `INVALID_REQUEST`, `NOT_FOUND` (404/410), `BLOCKED`
@@ -75,9 +75,9 @@ Alle Pfade dieses Arbeitspakets verwenden dieselbe `com.aresstack.argos.web.UrlP
 
 Standardmäßig werden Ziele abgewiesen, die zu Loopback, RFC 1918, Link-Local (auch `169.254.169.254`),
 IPv6-ULA, CGNAT oder anderen nicht öffentlichen Bereichen auflösen. **Freigegebene Intranet-Ziele** werden
-ausdrücklich erlaubt mit `ARGOS_INTRANET_ALLOW` (Syntax siehe README, Abschnitt Netzwerkgrenze).
+ausdrücklich erlaubt mit `INTRANET_ALLOW` (Syntax siehe README, Abschnitt Netzwerkgrenze).
 `ARGOS_ALLOW_PRIVATE_NETWORKS` gibt es nicht mehr; Argos bricht den Start mit einem Hinweis ab, wenn es
-gesetzt ist. `ARGOS_NETWORK_POLICY=off` schaltet Proxy und Vorab-Check gemeinsam ab (nur Fehlersuche).
+gesetzt ist. `NETWORK_POLICY=off` schaltet Proxy und Vorab-Check gemeinsam ab (nur Fehlersuche).
 
 **Das ist keine Sicherheitsgrenze.** Ein Redirect-Hop wird erst geprüft, wenn der Browser ihn bereits
 anfordert; Subrequests der Seite und die DNS-Auflösung des Browsers sieht die Prüfung gar nicht. Der Check
@@ -89,7 +89,7 @@ die Richtlinie an der Verbindungsgrenze: lokaler SOCKS5-Proxy mit `NetworkPolicy
 SOCKS5-Grenze. Sie gilt ohne Ausnahme für alle Profile und Werkzeuge, also auch für `legacy` und
 `browser_navigate`, einschließlich Redirects und Subrequests. Einen Legacy-Bypass gibt es nicht. Private und
 Loopback-Ziele sind damit auch über die Legacy-Werkzeuge gesperrt. Das ist eine bewusste
-Verhaltensänderung. Freigaben laufen nur über `ARGOS_INTRANET_ALLOW`. `ARGOS_NETWORK_POLICY=off` ist ein
+Verhaltensänderung. Freigaben laufen nur über `INTRANET_ALLOW`. `NETWORK_POLICY=off` ist ein
 bewusstes Debug-Opt-out und kein Standard. Die Signaturen und die Navigations-API der neun Legacy-Werkzeuge
 bleiben unverändert, und sie bekommen keine eigene kopierte URL-Prüfung.
 

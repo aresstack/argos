@@ -81,7 +81,9 @@ Die Launch-Konfiguration (Fingerprint, Prefs, Startoptionen) ist immer vorhanden
 
 Einzelheiten, Overrides und Fehlerverhalten: [docs/camoufox-distribution.md](docs/camoufox-distribution.md).
 
-**Im AresStack Webserver haben die Umgebungsvariablen Vorrang vor den Properties.** Pflichtfeld ist `SERVER_PORT`; Argos besitzt **keinen fest einprogrammierten Standardport**. Wie bei Pyloros werden `SERVER_PORT`, `SERVER_HOST` (optional, nur Loopback), `SECURITY_MODE`, `REQUIRED_SCOPE`, `PUBLIC_ORIGIN` und `CENTRAL_OAUTH_ISSUER` ausgewertet. Für den Camoufox-Browser sind `ARGOS_PROFILE_DIR` und `ARGOS_HEADLESS` verfügbar; `BROWSER_LAUNCH_CONFIG`, `BROWSER_DIR` und `ARGOS_CAMOUFOX_DISTRIBUTION_URL` sind optionale Overrides (siehe [docs/camoufox-distribution.md](docs/camoufox-distribution.md)) und im Webserver nicht nötig.
+**Im AresStack Webserver haben die Umgebungsvariablen Vorrang vor den Properties.** Pflichtfeld ist `SERVER_PORT`; Argos besitzt **keinen fest einprogrammierten Standardport**. Wie bei Pyloros werden `SERVER_PORT`, `SERVER_HOST` (optional, nur Loopback), `SECURITY_MODE`, `REQUIRED_SCOPE`, `PUBLIC_ORIGIN` und `CENTRAL_OAUTH_ISSUER` ausgewertet. Für den Camoufox-Browser sind `BROWSER_PROFILE_DIR` und `BROWSER_HEADLESS` verfügbar; `BROWSER_LAUNCH_CONFIG`, `BROWSER_DIR` und `CAMOUFOX_DISTRIBUTION_URL` sind optionale Overrides (siehe [docs/camoufox-distribution.md](docs/camoufox-distribution.md)) und im Webserver nicht nötig.
+
+**Umstellung von `ARGOS_*`:** Alle Konfigurationsvariablen tragen kein `ARGOS_`-Präfix mehr (z. B. `TOOL_PROFILE`, `PROFILE_ISOLATION`, `CHAT_PROFILES_DIR`, `MAX_BROWSERS`, `BROWSER_IDLE_MINUTES`, `SEARCH_ENGINES`). Sprechender benannt wurden `ARGOS_PROFILE_DIR` → `BROWSER_PROFILE_DIR`, `ARGOS_HEADLESS` → `BROWSER_HEADLESS`, `ARGOS_RESEARCH` → `RESEARCH_ENABLED` und `ARGOS_SEARCH_HISTORY` → `SEARCH_HISTORY_ENABLED`. Übergangsweise liest Argos die alten Namen weiter als veraltete Aliase: Der neue Name hat Vorrang, und jeder gefundene Alias (auch ein abweichender Doppelwert) wird beim Start nur mit seinem Namen, nie mit dem Wert, gemeldet. Die Liste steht in `EnvironmentVariables`; die Aliase entfallen erst in einem eigenen Breaking Change.
 
 Die bereits angelegten Webserver-Variablen für Argos sind:
 
@@ -195,11 +197,11 @@ Jede Maus- und Tastatureingabe geht als vertrauenswürdiges Ereignis über WebDr
 
 | Variable | Property | Werte | Standard |
 | --- | --- | --- | --- |
-| `ARGOS_HUMAN_INPUT` | `input.human` | `off` (gerade Wege, feste kurze Pausen), `natural`, `careful` (langsamer) | `natural` |
-| `ARGOS_HUMAN_SPEED` | `input.speed` | Tempo-Faktor 0.25–4 | `1` |
-| `ARGOS_HUMAN_TYPO_RATE` | `input.typoRate` | Tippfehler je Buchstabe 0–0.2 | `0` |
-| `ARGOS_HUMAN_SEED` | `input.seed` | feste Zufallszahl für reproduzierbare Eingaben | zufällig |
-| `ARGOS_INPUT_UNICODE` | `input.unicode` | `strict`: Text mit Zeichen, die Playwright nicht als echte Taste sendet, wird vor dem Fokussieren abgelehnt (fail closed); `transliterate`: bewusste Ausnahme, ändert den Text (ä → ae, ß → ss, „“ → "); `insert`: nur Debug-/Kompatibilitätsmodus, Playwright-Fallback über ein Seitenskript (für die Seite sichtbar) | `strict` |
+| `HUMAN_INPUT` | `input.human` | `off` (gerade Wege, feste kurze Pausen), `natural`, `careful` (langsamer) | `natural` |
+| `HUMAN_SPEED` | `input.speed` | Tempo-Faktor 0.25–4 | `1` |
+| `HUMAN_TYPO_RATE` | `input.typoRate` | Tippfehler je Buchstabe 0–0.2 | `0` |
+| `HUMAN_SEED` | `input.seed` | feste Zufallszahl für reproduzierbare Eingaben | zufällig |
+| `INPUT_UNICODE` | `input.unicode` | `strict`: Text mit Zeichen, die Playwright nicht als echte Taste sendet, wird vor dem Fokussieren abgelehnt (fail closed); `transliterate`: bewusste Ausnahme, ändert den Text (ä → ae, ß → ss, „“ → "); `insert`: nur Debug-/Kompatibilitätsmodus, Playwright-Fallback über ein Seitenskript (für die Seite sichtbar) | `strict` |
 
 Ob Playwright Unicode-Tasten als echte Tasten sendet, prüft Argos einmal beim Browserstart auf einem leeren Tab. Sobald Playwright4J sie über `performActions` unterstützt ([playwright4j#36](https://github.com/aresstack/playwright4j/issues/36)), nutzt Argos sie automatisch.
 
@@ -228,19 +230,19 @@ Die bisherigen Schlüssel `url`, `title` und `text` bleiben erhalten; neu sind `
 
 | Variable / Property | Bedeutung | Standard (`balanced`) |
 | --- | --- | --- |
-| `ARGOS_PAGE_READINESS` / `page.readiness` | Voreinstellung `fast` (bisheriges Verhalten: nur `DOMContentLoaded`), `balanced` (nur Netzwerkruhe), `thorough` (`load`, Netzwerkruhe 1 s, DOM stabil 1,5 s, Text, keine Ladeindikatoren, 15 s) | `balanced` |
-| `ARGOS_READY_WAIT_UNTIL` / `ready.wait.until` | `commit`, `domcontentloaded`, `load` | `domcontentloaded` |
-| `ARGOS_READY_TIMEOUT_MS` / `ready.timeout.ms` | Maximale Wartezeit nach dem Ladeereignis, `0` schaltet ab | `8000` |
-| `ARGOS_READY_DOM_STABLE_MS` / `ready.dom.stable.ms` | Dauer ohne DOM-Änderung, `0` schaltet ab | `0` (aus) |
-| `ARGOS_READY_NETWORK_QUIET_MS` / `ready.network.quiet.ms` | Dauer ohne Request-Start/-Ende, `0` schaltet ab | `750` |
-| `ARGOS_READY_MAX_INFLIGHT` / `ready.max.inflight` | Offene Requests, die als ruhig gelten (Long-Polling, Beacons) | `2` |
-| `ARGOS_READY_MIN_TEXT` / `ready.min.text` | Mindestlänge des sichtbaren Texts, `0` schaltet ab | `0` (aus) |
-| `ARGOS_READY_LOADING_SELECTORS` / `ready.loading.selectors` | Ladeindikatoren, getrennt durch `\|`; `none` schaltet ab | aus; `thorough`: `[aria-busy='true']`, `[role='progressbar']`, `.spinner`, `.loader`, `.skeleton` u. a. |
-| `ARGOS_READY_POLL_MS` / `ready.poll.ms` | Abtastintervall | `250` |
+| `PAGE_READINESS` / `page.readiness` | Voreinstellung `fast` (bisheriges Verhalten: nur `DOMContentLoaded`), `balanced` (nur Netzwerkruhe), `thorough` (`load`, Netzwerkruhe 1 s, DOM stabil 1,5 s, Text, keine Ladeindikatoren, 15 s) | `balanced` |
+| `READY_WAIT_UNTIL` / `ready.wait.until` | `commit`, `domcontentloaded`, `load` | `domcontentloaded` |
+| `READY_TIMEOUT_MS` / `ready.timeout.ms` | Maximale Wartezeit nach dem Ladeereignis, `0` schaltet ab | `8000` |
+| `READY_DOM_STABLE_MS` / `ready.dom.stable.ms` | Dauer ohne DOM-Änderung, `0` schaltet ab | `0` (aus) |
+| `READY_NETWORK_QUIET_MS` / `ready.network.quiet.ms` | Dauer ohne Request-Start/-Ende, `0` schaltet ab | `750` |
+| `READY_MAX_INFLIGHT` / `ready.max.inflight` | Offene Requests, die als ruhig gelten (Long-Polling, Beacons) | `2` |
+| `READY_MIN_TEXT` / `ready.min.text` | Mindestlänge des sichtbaren Texts, `0` schaltet ab | `0` (aus) |
+| `READY_LOADING_SELECTORS` / `ready.loading.selectors` | Ladeindikatoren, getrennt durch `\|`; `none` schaltet ab | aus; `thorough`: `[aria-busy='true']`, `[role='progressbar']`, `.spinner`, `.loader`, `.skeleton` u. a. |
+| `READY_POLL_MS` / `ready.poll.ms` | Abtastintervall | `250` |
 
 `browser_wait` verwendet dieselben Bedingungen (bei `fast` die von `balanced`) mit eigenem `timeoutMs` (500–60 000, Standard 10 000).
 
-Mit `ARGOS_TOOL_PROFILE=expert` kommen `browser_download`, `browser_document`, `browser_open_many` und die `browser_pages_*`-Werkzeuge hinzu. `browser_open_many` nutzt Hintergrund-Tabs; `browser_pages_navigate` arbeitet auf vorhandenen, identifizierten Tabs und isoliert Ergebnisse pro Seite. Details und Parallelitätsgrenzen stehen in [`docs/batch-and-documents.md`](docs/batch-and-documents.md).
+Mit `TOOL_PROFILE=expert` kommen `browser_download`, `browser_document`, `browser_open_many` und die `browser_pages_*`-Werkzeuge hinzu. `browser_open_many` nutzt Hintergrund-Tabs; `browser_pages_navigate` arbeitet auf vorhandenen, identifizierten Tabs und isoliert Ergebnisse pro Seite. Details und Parallelitätsgrenzen stehen in [`docs/batch-and-documents.md`](docs/batch-and-documents.md).
 
 `browser_network` entfernt Query-Parameter und Benutzerinformationen aus den protokollierten URLs. Bis zu 200 Ereignisse bleiben im Speicher. `browser_evaluate` kann Webseiten verändern und ist deshalb nur für ausdrücklich autorisierte Nutzer über das gesicherte MCP-Plugin bestimmt.
 
@@ -248,7 +250,7 @@ Mit `ARGOS_TOOL_PROFILE=expert` kommen `browser_download`, `browser_document`, `
 
 ### Netzwerkanalyse im Profil `expert`
 
-Mit `ARGOS_TOOL_PROFILE=expert` (Property `tools.profile`) veröffentlicht Argos zusätzlich:
+Mit `TOOL_PROFILE=expert` (Property `tools.profile`) veröffentlicht Argos zusätzlich:
 
 | Tool | Zweck |
 | --- | --- |
@@ -265,11 +267,11 @@ Ohne Angabe gilt das bisherige Profil (`legacy`) mit genau den neun Werkzeugen o
 
 **Schutz des Browser-Threads:** Bodies werden nur nach vollständig abgeschlossenem Download geholt, nie bei 204/304/Weiterleitungen, HEAD oder abgebrochenen Requests und nie, wenn `Content-Length` über 2 MB liegt. Automatisches Laden (`browser_network_json`, eager Capture) hat pro Browser-Aufruf ein Budget von höchstens 5 Bodies und 2 Sekunden; der Rest folgt beim nächsten Aufruf. Dauert ein einzelner Abruf länger als 3 Sekunden, wird das automatische Laden bis `browser_network_clear` ausgesetzt; `browser_network_detail` mit `body=true` bleibt als ausdrücklicher Einzelabruf möglich. Ein einzelner `Response.body()`-Aufruf lässt sich in Playwright nicht abbrechen; er betrifft aber nur bereits im Browser gesammelte Daten.
 
-`ARGOS_NETWORK_BODIES=true` (Property `network.bodies`) speichert Text-Bodies von Dokument-, XHR- und Fetch-Antworten bereits beim Laden, damit sie auch nach einer weiteren Navigation noch abrufbar sind. Standard ist `false`; dann werden Bodies nur auf Anfrage geladen, solange der Browser sie noch vorhält. Diese Diagnoseeinstellung ist unabhängig von der dauerhaften Erfassung der Search History (`ARGOS_SEARCH_HISTORY_CAPTURE_*`, siehe [docs/search-history.md](docs/search-history.md)). `browser_evaluate` kann Webseiten verändern und ist deshalb nur für ausdrücklich autorisierte Nutzer über das gesicherte MCP-Plugin bestimmt.
+`NETWORK_BODIES=true` (Property `network.bodies`) speichert Text-Bodies von Dokument-, XHR- und Fetch-Antworten bereits beim Laden, damit sie auch nach einer weiteren Navigation noch abrufbar sind. Standard ist `false`; dann werden Bodies nur auf Anfrage geladen, solange der Browser sie noch vorhält. Diese Diagnoseeinstellung ist unabhängig von der dauerhaften Erfassung der Search History (`ARGOS_SEARCH_HISTORY_CAPTURE_*`, siehe [docs/search-history.md](docs/search-history.md)). `browser_evaluate` kann Webseiten verändern und ist deshalb nur für ausdrücklich autorisierte Nutzer über das gesicherte MCP-Plugin bestimmt.
 
 ### Werkzeugprofile
 
-Welche Werkzeuge Argos veröffentlicht, bestimmt `ARGOS_TOOL_PROFILE` (Property `tools.profile`):
+Welche Werkzeuge Argos veröffentlicht, bestimmt `TOOL_PROFILE` (Property `tools.profile`):
 
 | Profil | Werkzeuge | Gedacht für |
 | --- | --- | --- |
@@ -279,9 +281,9 @@ Welche Werkzeuge Argos veröffentlicht, bestimmt `ARGOS_TOOL_PROFILE` (Property 
 | `convenience` | `web_search`, `web_select_results`, `web_select_links`, `web_follow_link`, `web_read_tab`, `web_back`, `web_open_url`, `web_get_url`, `web_close_tabs`, `web_screenshot` (plus Search History) | Recherche mit ChatGPT: alle Suchmaschinen parallel, Seiten in eigenen Tabs, Navigation nur über IDs, JSON-Antworten |
 | `developer` (Standard) | alle `convenience`-Werkzeuge plus `web_evaluate`, `web_inspect`, `web_extract`, `web_network`, `web_network_detail`, `web_network_json`, `web_network_har`, `web_network_clear` | technische Analyse von Webseiten auf denselben Tab-IDs |
 
-Ohne `ARGOS_TOOL_PROFILE` (oder leer) gilt `developer`; `convenience` bleibt mit `ARGOS_TOOL_PROFILE=convenience` wählbar. `legacy`, `compact` und `expert` sind dadurch unverändert (Namen, Schemata, Verhalten; geprüft gegen Snapshots von develop in `ProfileSnapshotTest`). Details zum Convenience-Profil: [docs/convenience-profile.md](docs/convenience-profile.md).
+Ohne `TOOL_PROFILE` (oder leer) gilt `developer`; `convenience` bleibt mit `TOOL_PROFILE=convenience` wählbar. `legacy`, `compact` und `expert` sind dadurch unverändert (Namen, Schemata, Verhalten; geprüft gegen Snapshots von develop in `ProfileSnapshotTest`). Details zum Convenience-Profil: [docs/convenience-profile.md](docs/convenience-profile.md).
 
-Mit `ARGOS_RESEARCH=true` kommen in den Profilen `legacy`, `compact` und `expert` `web_research` und `web_research_stop` hinzu (nicht in `convenience`). `web_open`/`web_read` lesen Feeds, XML, JSON und Text wie `browser_snapshot` aus dem Antwort-Body und melden Binärdokumente mit Hinweis auf die Dokumentwerkzeuge. Antwortet der Server für das Hauptdokument mit Status 400 oder höher, steht in `web_open`, `web_follow`, `web_read` und `web_back` nach `TITLE` die Zeile `HTTP error: 500 Internal Server Error — the requested content may not be available on this page.` (Standard-Reason-Phrase nach RFC 9110, bei unbekanntem Code nur die Zahl): Kleine Modelle lasen „TITLE: 500 Internal Server Error" samt Servertext sonst als Inhalt und blieben an der Adresse hängen, statt den nächsten Treffer zu öffnen (Phase 7, `broken-link`). Mehr geschieht nicht: keine automatische Navigation, keine Bewertung des Inhalts. Der Status stammt aus der Navigationsantwort, die Argos ohnehin für Dokumenttyp und Bereitschaft aus den Protokollereignissen liest; ohne bekannte Antwort entfällt die Zeile (etwa wenn die Seite ihre Adresse nach dem Laden per Skript geändert hat; `web_back` lädt das Dokument neu, weil Argos den Back-Forward-Cache abschaltet, und kennt den Status). Es wird dafür kein Seitenskript ausgeführt.
+Mit `RESEARCH_ENABLED=true` kommen in den Profilen `legacy`, `compact` und `expert` `web_research` und `web_research_stop` hinzu (nicht in `convenience`). `web_open`/`web_read` lesen Feeds, XML, JSON und Text wie `browser_snapshot` aus dem Antwort-Body und melden Binärdokumente mit Hinweis auf die Dokumentwerkzeuge. Antwortet der Server für das Hauptdokument mit Status 400 oder höher, steht in `web_open`, `web_follow`, `web_read` und `web_back` nach `TITLE` die Zeile `HTTP error: 500 Internal Server Error — the requested content may not be available on this page.` (Standard-Reason-Phrase nach RFC 9110, bei unbekanntem Code nur die Zahl): Kleine Modelle lasen „TITLE: 500 Internal Server Error" samt Servertext sonst als Inhalt und blieben an der Adresse hängen, statt den nächsten Treffer zu öffnen (Phase 7, `broken-link`). Mehr geschieht nicht: keine automatische Navigation, keine Bewertung des Inhalts. Der Status stammt aus der Navigationsantwort, die Argos ohnehin für Dokumenttyp und Bereitschaft aus den Protokollereignissen liest; ohne bekannte Antwort entfällt die Zeile (etwa wenn die Seite ihre Adresse nach dem Laden per Skript geändert hat; `web_back` lädt das Dokument neu, weil Argos den Back-Forward-Cache abschaltet, und kennt den Status). Es wird dafür kein Seitenskript ausgeführt.
 
 Die `web_*`-Werkzeuge haben höchstens einen Parameter, Beispiele in der Beschreibung und antworten mit kurzem Klartext statt JSON:
 
@@ -301,15 +303,15 @@ web_back                               → vorherige Seite
 web_search query="…"                   → result-1: Titel — URL (öffnen mit web_follow link_id="result-1")
 ```
 
-Pro `web_open`/`web_read`/`web_find`/`web_back` liest Argos einmal `page.content()` in Playwrights isolierter Utility-Welt; Titel, Text und Links werden in Java (jsoup) daraus gewonnen. Nur eine Seite, die noch „Loading…"/„wird geladen" zeigt, während ihre eigenen Anfragen laufen (Single-Page-App), wird nach deren Ende ein zweites Mal gelesen (höchstens 8 s später); beobachtet werden dafür allein Protokollereignisse. `web_links` und `web_follow` lesen die Seite nicht erneut, solange der Browser dieselbe Adresse zeigt. So bleibt die Zahl der Protokoll-Evaluierungen minimal (jede trägt `userActivation`, siehe playwright4j #37); Locator-Aktionen, Screenshots und Viewport-Emulation werden nicht verwendet. Es wird kein für die Seite sichtbares Skript eingeschleust. `web_*` prüft jede Ziel-URL vor der Navigation und die finale URL danach mit derselben `NetworkPolicy`, die der Proxy durchsetzt (siehe [Netzwerkgrenze](#netzwerkgrenze-ssrf-schutz)); eine auf einem gesperrten Ziel gelandete Seite wird verworfen und der Tab auf `about:blank` gesetzt. Diese Prüfung liefert nur verständliche Fehlermeldungen; die Sperre selbst (Weiterleitungen, Unterressourcen, DNS-Rebinding) liegt im Proxy und gilt für alle Profile, auch für `legacy` und `browser_navigate`. Lokale Testziele werden mit `ARGOS_INTRANET_ALLOW` freigegeben.
+Pro `web_open`/`web_read`/`web_find`/`web_back` liest Argos einmal `page.content()` in Playwrights isolierter Utility-Welt; Titel, Text und Links werden in Java (jsoup) daraus gewonnen. Nur eine Seite, die noch „Loading…"/„wird geladen" zeigt, während ihre eigenen Anfragen laufen (Single-Page-App), wird nach deren Ende ein zweites Mal gelesen (höchstens 8 s später); beobachtet werden dafür allein Protokollereignisse. `web_links` und `web_follow` lesen die Seite nicht erneut, solange der Browser dieselbe Adresse zeigt. So bleibt die Zahl der Protokoll-Evaluierungen minimal (jede trägt `userActivation`, siehe playwright4j #37); Locator-Aktionen, Screenshots und Viewport-Emulation werden nicht verwendet. Es wird kein für die Seite sichtbares Skript eingeschleust. `web_*` prüft jede Ziel-URL vor der Navigation und die finale URL danach mit derselben `NetworkPolicy`, die der Proxy durchsetzt (siehe [Netzwerkgrenze](#netzwerkgrenze-ssrf-schutz)); eine auf einem gesperrten Ziel gelandete Seite wird verworfen und der Tab auf `about:blank` gesetzt. Diese Prüfung liefert nur verständliche Fehlermeldungen; die Sperre selbst (Weiterleitungen, Unterressourcen, DNS-Rebinding) liegt im Proxy und gilt für alle Profile, auch für `legacy` und `browser_navigate`. Lokale Testziele werden mit `INTRANET_ALLOW` freigegeben.
 
 Die `web_*`-Werkzeuge folgen dem Browser: `web_read` und `web_links` lesen auch eine Seite, die ein anderes Werkzeug geöffnet hat, im Profil `expert` `browser_navigate`, ein Klick oder ein Tab-Wechsel, in jedem Profil die zuletzt von `web_research` geladene Seite; die Link-IDs gehören dann zu dieser Seite, wofür `web_links` sie einmal neu liest. Alle Werkzeuge arbeiten auf demselben aktuellen Tab. Nur die Ergebnisseite der Suchmaschine nach `web_search` wird nicht übernommen (erkannt an Schema, Host und Pfad), auch nicht nach einer Suche ohne Treffer oder einer an einer Consent-/Challenge-Seite gescheiterten: Dort ist zuerst ein Treffer mit `web_follow` zu öffnen. Ein leerer Tab ist nichts zu lesen und meldet „No page is open yet" (nach einer `web_search` mit Treffern „No page is open since the last web_search"); ein Dokument ohne `http(s)`-Adresse (`blob:`, `srcdoc`) wird ebenso gemeldet, ohne den Tab zu verändern.
 
-`web_search` liest Suchergebnisseiten ausschließlich über `page.content()` (isolierte Playwright-Welt) und analysiert sie in der JVM; Consent-Banner werden per echter Mausbewegung über WebDriver BiDi angeklickt. Konfiguration: `ARGOS_SEARCH_ENGINES` (Reihenfolge, Standard `duckduckgo,bing,google`; im Profil `convenience` die Menge der parallel befragten Suchmaschinen, keine Fallback-Reihenfolge) und `ARGOS_SEARCH_MAX_RESULTS` (Standard 10). Consent-Banner werden nur abgelehnt (oder auf „nur notwendige“ gesetzt); „Alle akzeptieren“ nur mit `ARGOS_SEARCH_CONSENT_ACCEPT=true`. Details: [docs/web-search.md](docs/web-search.md).
+`web_search` liest Suchergebnisseiten ausschließlich über `page.content()` (isolierte Playwright-Welt) und analysiert sie in der JVM; Consent-Banner werden per echter Mausbewegung über WebDriver BiDi angeklickt. Konfiguration: `SEARCH_ENGINES` (Reihenfolge, Standard `duckduckgo,bing,google`; im Profil `convenience` die Menge der parallel befragten Suchmaschinen, keine Fallback-Reihenfolge) und `SEARCH_MAX_RESULTS` (Standard 10). Consent-Banner werden nur abgelehnt (oder auf „nur notwendige“ gesetzt); „Alle akzeptieren“ nur mit `SEARCH_CONSENT_ACCEPT=true`. Details: [docs/web-search.md](docs/web-search.md).
 
-Optional (`ARGOS_RESEARCH=true`, Standard aus) kommen `web_research(question)` und `web_research_stop()` hinzu: eine begrenzte, deterministische Recherche nach dem Vorbild des AskAI-`ResearchLoop` (Suche → relevante Seiten lesen → relevanten Links folgen → nummerierte Quellen mit Zitat), ohne KI-Modell und ohne Seiten-Skripte. Details: [docs/research.md](docs/research.md).
+Optional (`RESEARCH_ENABLED=true`, Standard aus) kommen `web_research(question)` und `web_research_stop()` hinzu: eine begrenzte, deterministische Recherche nach dem Vorbild des AskAI-`ResearchLoop` (Suche → relevante Seiten lesen → relevanten Links folgen → nummerierte Quellen mit Zitat), ohne KI-Modell und ohne Seiten-Skripte. Details: [docs/research.md](docs/research.md).
 
-Search History (Standard an, nur mit `ARGOS_PROFILE_ISOLATION=chat`): Argos speichert je Arbeitsbereich (ChatGPT-Unterhaltung, dauerhaft; bei Clients ohne Unterhaltungs-ID wie Claude nur für die Lebensdauer der MCP-Session und der Serverinstanz, siehe [docs/chat-profiles.md](docs/chat-profiles.md)) alle Suchen, Treffer und gelesenen Seiten dauerhaft unter `~/.argos/profiles/chats/<hash>/history/`, durchsuchbar per Lucene (`search_history`) und exportierbar als TXT, JSONL oder Single-File-HTML-ZIP (`search_history_export`). Details und Stealth-Hinweis: [docs/search-history.md](docs/search-history.md).
+Search History (Standard an, nur mit `PROFILE_ISOLATION=chat`): Argos speichert je Arbeitsbereich (ChatGPT-Unterhaltung, dauerhaft; bei Clients ohne Unterhaltungs-ID wie Claude nur für die Lebensdauer der MCP-Session und der Serverinstanz, siehe [docs/chat-profiles.md](docs/chat-profiles.md)) alle Suchen, Treffer und gelesenen Seiten dauerhaft unter `~/.argos/profiles/chats/<hash>/history/`, durchsuchbar per Lucene (`search_history`) und exportierbar als TXT, JSONL oder Single-File-HTML-ZIP (`search_history_export`). Details und Stealth-Hinweis: [docs/search-history.md](docs/search-history.md).
 
 Modellvergleich (Phase 7): `gradlew evalModels` lässt lokale Ollama-Modelle (Standard: `gemma4:e2b` und `gpt-oss:20b`) Argos über MCP gegen eine lokale Fixture-Welt bedienen und schreibt einen JSON- und Markdown-Bericht. Details: [docs/model-evaluation.md](docs/model-evaluation.md).
 
@@ -325,10 +327,10 @@ HTTPS bleibt ein unveränderter Tunnel: **kein MITM**, TLS, Header und Fingerpri
 
 | Variable | Property | Wirkung |
 | --- | --- | --- |
-| `ARGOS_NETWORK_POLICY` | `network.policy` | `strict` (Standard) oder `off` (kein Proxy, direkte Verbindungen; nur zur Fehlersuche) |
-| `ARGOS_INTRANET_ALLOW` | `network.intranet-allow` | Kommagetrennte Ausnahmen, gleiche Syntax wie für die `web_*`-Werkzeuge: `wiki.firma.local`, `*.firma.local`, `10.20.0.0/16`, `192.168.1.5`, zusätzlich `wiki.firma.local@10.20.0.0/16` |
-| `ARGOS_UPSTREAM_PROXY` | `network.upstream-proxy` | Optionaler vorgeschalteter Proxy, `socks5://[user:pass@]host:port` oder `http://[user:pass@]host:port` (HTTP CONNECT) |
-| `ARGOS_UPSTREAM_DNS` | `network.upstream-dns` | `local` (Standard): Argos gibt dem Upstream die geprüfte IP; `remote`: der Upstream löst den Namen selbst auf (geo-konsistentes DNS, die Richtlinie sieht dann nur Argos' eigene Auflösung) |
+| `NETWORK_POLICY` | `network.policy` | `strict` (Standard) oder `off` (kein Proxy, direkte Verbindungen; nur zur Fehlersuche) |
+| `INTRANET_ALLOW` | `network.intranet-allow` | Kommagetrennte Ausnahmen, gleiche Syntax wie für die `web_*`-Werkzeuge: `wiki.firma.local`, `*.firma.local`, `10.20.0.0/16`, `192.168.1.5`, zusätzlich `wiki.firma.local@10.20.0.0/16` |
+| `UPSTREAM_PROXY` | `network.upstream-proxy` | Optionaler vorgeschalteter Proxy, `socks5://[user:pass@]host:port` oder `http://[user:pass@]host:port` (HTTP CONNECT) |
+| `UPSTREAM_DNS` | `network.upstream-dns` | `local` (Standard): Argos gibt dem Upstream die geprüfte IP; `remote`: der Upstream löst den Namen selbst auf (geo-konsistentes DNS, die Richtlinie sieht dann nur Argos' eigene Auflösung) |
 
 `NetworkPolicy` ist die einzige Sicherheitslogik für alle Werkzeugprofile. Frühe Prüfungen vor einer Navigation (`checkUrl`/`checkHost`) verwenden dieselben Regeln, sind aber nur für verständliche Fehlermeldungen da: Sie lösen DNS unabhängig vom Browser auf. Durchgesetzt wird ausschließlich im Proxy (`resolve`, danach Verbindung nur zu den geprüften Adressen).
 
@@ -377,6 +379,6 @@ Der zweite Befehl verwendet eine **separate temporäre Headless-Camoufox-Instanz
 
 Streamable-HTTP-MCP wurde zusätzlich mit `initialize`, `notifications/initialized`, `tools/list` und `tools/call(browser_status)` über HTTP geprüft. Das eigenständige Windows-Smoketestskript `scripts/smoke-standalone.ps1 -WithCamoufox` kopiert **nur `argos.jar`** in ein temporäres Verzeichnis und prüft zusätzlich einen echten Camoufox-Start, Navigation und Interaktion über MCP.
 
-**Bekanntes externes Problem:** In Playwright4J/Core 1.62 kann ein persistenter Firefox-BiDi-Start unter Windows zwei sichtbare Fenster erzeugen, obwohl nur eines unter `context.pages()` auftaucht: [playwright4j#34](https://github.com/aresstack/playwright4j/issues/34). Argos implementiert keinen unsicheren Fensterschließ-Hack. Bei `ARGOS_HEADLESS=true` ist die Oberfläche nicht sichtbar. Die Korrektur soll aus Playwright4J übernommen werden.
+**Bekanntes externes Problem:** In Playwright4J/Core 1.62 kann ein persistenter Firefox-BiDi-Start unter Windows zwei sichtbare Fenster erzeugen, obwohl nur eines unter `context.pages()` auftaucht: [playwright4j#34](https://github.com/aresstack/playwright4j/issues/34). Argos implementiert keinen unsicheren Fensterschließ-Hack. Bei `BROWSER_HEADLESS=true` ist die Oberfläche nicht sichtbar. Die Korrektur soll aus Playwright4J übernommen werden.
 
 Noch **nicht erledigt**: öffentliche HTTPS/OAuth-Veröffentlichung über den Webserver, Installation als ChatGPT-Plugin sowie Freigabe eines Releases.

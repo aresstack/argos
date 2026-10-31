@@ -625,6 +625,33 @@ class ConvenienceSessionTest {
         assertNoUrls(answer);
     }
 
+    /** The one read of a late engine's tab is bounded too: a busy browser does not hold back the finished engines. */
+    @Test void aBusyBrowserDoesNotHoldTheSearchBeyondItsBudget() throws Exception {
+        startPages(0, 0, 0);
+        sites.page(DDG, 200, "<html><head><title>DuckDuckGo</title></head><body><p>Einen Moment</p></body></html>",
+                        0, Map.of())
+                .fixture("https://lite.duckduckgo.com/lite/", "duckduckgo-lite-home.html", 0)
+                .fixture("https://lite.duckduckgo.com/lite/?q=", "duckduckgo-lite.html", 0)
+                .fixture(BING, "bing.html", 0).fixture(GOOGLE, "google.html", 0);
+        LocalConvenienceBrowser browser = new LocalConvenienceBrowser(sites);
+        browser.settlesAfter.put("lite.duckduckgo.com", 20_000L);
+        browser.busyAfterResult.add("lite.duckduckgo.com");
+        ConvenienceSession session = new ConvenienceSession(browser, coordinator, UrlPolicy.off(),
+                new ParallelWebSearch(browser, coordinator, SearchEngine.byIds("duckduckgo,bing,google"), 10, false,
+                        10_000, 2_500), null);
+
+        long start = System.nanoTime();
+        Map<String, Object> answer = session.search("camoufox");
+        long millis = (System.nanoTime() - start) / 1_000_000;
+
+        List<Map<String, Object>> engines = list(answer, "engines");
+        assertEquals("TIMEOUT", engines.get(0).get("status"), engines.toString());
+        assertEquals("OK", engines.get(1).get("status"));
+        assertEquals("OK", engines.get(2).get("status"));
+        assertEquals("PARTIAL", answer.get("status"));
+        assertTrue(millis < 15_000, "budget, grace and the bounded read, not the busy browser: " + millis + " ms");
+    }
+
     @Test void aTimeoutNamesWhyAnEndpointWasLeftForItsRetry() throws Exception {
         startPages(0, 0, 0);
         sites.page(DDG, 200, "<html><head><title>DuckDuckGo</title></head><body><p>Einen Moment</p></body></html>",

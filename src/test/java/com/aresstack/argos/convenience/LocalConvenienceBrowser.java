@@ -43,6 +43,9 @@ final class LocalConvenienceBrowser implements ConvenienceBrowser {
      * real page does while its load event or late subresources are outstanding.
      */
     final Map<String, Long> settlesAfter = new java.util.concurrent.ConcurrentHashMap<>();
+    /** Hosts whose result page leaves the browser busy: later reads of the tab block for 30 s. */
+    final java.util.Set<String> busyAfterResult = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    private final java.util.Set<String> busyTabs = java.util.concurrent.ConcurrentHashMap.newKeySet();
 
     LocalConvenienceBrowser(LocalSites sites) {
         this.sites = sites;
@@ -128,7 +131,19 @@ final class LocalConvenienceBrowser implements ConvenienceBrowser {
     }
 
     @Override
-    public synchronized TabLoad readTab(String tab) {
+    public TabLoad readTab(String tab) {
+        if (busyTabs.contains(tab)) {
+            try {
+                Thread.sleep(30_000);
+            } catch (InterruptedException stopped) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("stopped while the browser was busy");
+            }
+        }
+        return shown(tab);
+    }
+
+    private synchronized TabLoad shown(String tab) {
         Deque<TabLoad> history = tabs.get(tab);
         if (history == null || history.isEmpty()) throw new IllegalArgumentException("Unknown tab " + tab);
         return history.peek();
@@ -174,6 +189,7 @@ final class LocalConvenienceBrowser implements ConvenienceBrowser {
             synchronized (this) {
                 if (load.outcome() == TabLoadOutcome.OK) tabs.get(tab).push(load);
             }
+            if (busyAfterResult.contains(URI.create(url).getHost())) busyTabs.add(tab);
             long settle = settlesAfter.getOrDefault(URI.create(url).getHost(), 0L);
             if (settle > 0) {
                 try {

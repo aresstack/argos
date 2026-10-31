@@ -253,6 +253,11 @@ public final class ParallelWebSearch implements ConvenienceSession.Search {
 
     /** How much longer an engine that already typed its query may take after the deadline. */
     static final long GRACE_MILLIS = 5_000;
+    /**
+     * How long the one read of a late engine's tab may take. The browser may still be busy with a step the stopped
+     * job started (they run under their own, longer timeouts); the search does not wait for that.
+     */
+    static final long HARVEST_MILLIS = 3_000;
 
     /**
      * An engine that ran out of time while its typed query was being answered (the result page still loading or
@@ -276,7 +281,7 @@ public final class ParallelWebSearch implements ConvenienceSession.Search {
         String steps = String.join(", ", pages.steps);
         run.cancel(true);
         if (pages.typed) {
-            List<EngineHit> late = harvest(engine, query, pages);
+            List<EngineHit> late = harvestInTime(engine, query, pages);
             if (!late.isEmpty()) {
                 return new EngineRun(engine.id(), EngineStatus.OK, pages.tab, late, null,
                         "results read from the loaded page after the time limit");
@@ -284,6 +289,22 @@ public final class ParallelWebSearch implements ConvenienceSession.Search {
         }
         return new EngineRun(engine.id(), EngineStatus.TIMEOUT, pages.tab, List.of(), null,
                 "no answer in time after: " + steps);
+    }
+
+    /** {@link #harvest}, given up after {@link #HARVEST_MILLIS}; the read itself is left to finish on its own. */
+    private List<EngineHit> harvestInTime(SearchEngine engine, String query, TabSearchPages pages) {
+        java.util.concurrent.FutureTask<List<EngineHit>> read =
+                new java.util.concurrent.FutureTask<>(() -> harvest(engine, query, pages));
+        Thread.ofVirtual().name("argos-search-harvest").start(read);
+        try {
+            return read.get(HARVEST_MILLIS, TimeUnit.MILLISECONDS);
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            return List.of();
+        } catch (Exception tooLate) {
+            read.cancel(true);
+            return List.of();
+        }
     }
 
     /**

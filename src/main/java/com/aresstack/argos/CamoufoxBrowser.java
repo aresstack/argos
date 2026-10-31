@@ -1405,16 +1405,22 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
      * {@link #submitSearchWithTrustedInput} in a given tab (the convenience profile's engines), read afterwards; null
      * when none of the selectors matches. The tab is not brought to the front: BiDi input goes to its browsing
      * context while the visible tab stays as it is (Juggler's focus emulation keeps every tab focused and visible
-     * for the page). Only the input holds the browser thread; the result page loads in short waits that let the other
+     * for the page). Every input step (one key, one pointer move, one measurement) is a turn of its own on the
+     * browser thread, and the human pauses between them are spent off it ({@link #inTurns}): engines searched side
+     * by side type into their tabs at the same time. The result page loads in short waits that let the other
      * engines' tabs type and load meanwhile. The caller holds the domain slot.
      */
     @Override
     public TabLoad submitSearchInTab(String tabId, List<String> searchBoxSelectors, String query) {
         String tab = BrowserTabs.normalize(tabId);
-        Submitted submitted = onBrowser(() -> {
-            activePage();
-            return typeAndEnter(tabs.get(tab), searchBoxSelectors, query);
-        });
+        Submitted submitted;
+        try {
+            submitted = typeAndEnterInTurns(tab, searchBoxSelectors, query);
+        } catch (PlaywrightException failed) {
+            // Unwrapped by inTurns for RealInput; masked as onBrowser does for every other failure.
+            throw new IllegalStateException("Camoufox operation failed: " + masker.text(String.valueOf(
+                    failed.getMessage())), failed);
+        }
         if (submitted == null) return null;
         Page p = submitted.page();
         TabDocument doc = submitted.document();
@@ -2896,6 +2902,194 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
         awaitNavigationAfterInput(p, submitted.document(), submitted.navigations(), submitted.before());
         settleLoad(p);
         return true;
+    }
+
+    /**
+     * {@link #typeAndEnter} with each input step in its own turn of the browser thread ({@link #inTurns}), so that
+     * typing into one tab never holds up the input of another.
+     */
+    private Submitted typeAndEnterInTurns(String tab, List<String> searchBoxSelectors, String query) {
+        RealInput.KeyChord enter = input.chord("Enter");
+        Page p = onBrowser(() -> {
+            activePage();
+            return tabs.get(tab);
+        });
+        InputDevice device = inTurns(p);
+        RuntimeException refused = null;
+        for (String selector : searchBoxSelectors) {
+            Locator box = onBrowser(() -> {
+                Locator first = p.locator(selector).first();
+                return first.count() == 0 ? null : first;
+            });
+            if (box == null) continue;
+            Submitted before = onBrowser(() -> {
+                TabDocument doc = document(p);
+                return new Submitted(p, doc, doc.navigations, doc.mainDocument);
+            });
+            try {
+                input.replaceText(device, p, box, query);
+            } catch (BrowserClosed | BrowserStalled | Interrupted gone) {
+                throw gone;
+            } catch (RuntimeException notUsable) {
+                refused = notUsable; // a hidden or covered match; an alternative locator may be the visible field
+                continue;
+            }
+            // The keys go to the field that now holds the focus.
+            input.press(device, enter, 1);
+            onBrowser(() -> {
+                leaveSavedDocument(p);
+                return null;
+            });
+            return before;
+        }
+        if (refused != null) throw refused;
+        return null;
+    }
+
+    /** The input of a tab given up while it was typed into: its job was stopped, nothing more is typed. */
+    static final class Interrupted extends IllegalStateException {
+        Interrupted(InterruptedException cause) {
+            super("Input stopped: the task was cancelled", cause);
+        }
+    }
+
+    /**
+     * Real input to one tab in many short turns of the browser thread instead of one long one: every key, pointer
+     * move and page measurement is its own {@link #onBrowser} call, and the human pauses between them are slept by
+     * the calling thread. Other tabs' input and loads run in those pauses. The device's clock counts only the
+     * planned pauses: a turn that waited behind another tab's step shifts the following keys, it never shortens a
+     * pause to catch up, so no keys are fired back to back. Playwright's own exceptions reach {@link RealInput}
+     * unwrapped (it recognizes refused keys and pointer samples outside the viewport by them). A flow stopped between
+     * a key or button going down and up (the engine ran out of time) releases what it holds first, so the tab is not
+     * left with Control or the mouse button held down.
+     */
+    private InputDevice inTurns(Page page) {
+        InputDevice direct = InputDevice.of(page);
+        return new InputDevice() {
+            private long clock;
+            private final Set<String> heldKeys = new java.util.LinkedHashSet<>();
+            private final Set<MouseButton> heldButtons = java.util.EnumSet.noneOf(MouseButton.class);
+
+            /** Lets go of every held key (last first) and button in one turn, whatever the interrupt flag says. */
+            private void releaseHeld() {
+                if (heldKeys.isEmpty() && heldButtons.isEmpty()) return;
+                List<String> keys = new ArrayList<>(heldKeys);
+                Collections.reverse(keys);
+                List<MouseButton> buttons = List.copyOf(heldButtons);
+                heldKeys.clear();
+                heldButtons.clear();
+                boolean interrupted = Thread.interrupted();
+                try {
+                    onBrowser(() -> {
+                        for (String key : keys) {
+                            try {
+                                direct.keyUp(key);
+                            } catch (RuntimeException ignored) {
+                                // keep releasing the others
+                            }
+                        }
+                        for (MouseButton button : buttons) {
+                            try {
+                                direct.up(button);
+                            } catch (RuntimeException ignored) {
+                                // keep releasing the others
+                            }
+                        }
+                        return null;
+                    });
+                } catch (RuntimeException unreleased) {
+                    // The browser is gone or busy; nothing more can be done for this tab.
+                } finally {
+                    if (interrupted) Thread.currentThread().interrupt();
+                }
+            }
+
+            private Interrupted stopped(InterruptedException cause) {
+                releaseHeld();
+                return new Interrupted(cause);
+            }
+
+            private <T> T turn(java.util.function.Supplier<T> step) {
+                try {
+                    return onBrowser(step::get);
+                } catch (BrowserClosed | BrowserStalled gone) {
+                    throw gone;
+                } catch (IllegalStateException failed) {
+                    if (Thread.currentThread().isInterrupted() && failed.getCause() instanceof InterruptedException i) {
+                        throw stopped(i);
+                    }
+                    if (failed.getClass() == IllegalStateException.class
+                            && failed.getCause() instanceof PlaywrightException playwright) throw playwright;
+                    throw failed;
+                }
+            }
+
+            private void turn(Runnable step) {
+                turn(() -> {
+                    step.run();
+                    return null;
+                });
+            }
+
+            @Override public void move(double x, double y) {
+                turn(() -> direct.move(x, y));
+            }
+
+            @Override public void down(MouseButton button) {
+                // Held from before the turn: an interrupt while it runs may leave it pressed.
+                heldButtons.add(button);
+                turn(() -> direct.down(button));
+            }
+
+            @Override public void up(MouseButton button) {
+                turn(() -> direct.up(button));
+                heldButtons.remove(button);
+            }
+
+            @Override public void wheel(double deltaX, double deltaY) {
+                turn(() -> direct.wheel(deltaX, deltaY));
+            }
+
+            @Override public void keyDown(String key) {
+                heldKeys.add(key);
+                try {
+                    turn(() -> direct.keyDown(key));
+                } catch (Interrupted stopped) {
+                    throw stopped;
+                } catch (RuntimeException refused) {
+                    heldKeys.remove(key); // not pressed (a key Playwright does not know, say)
+                    throw refused;
+                }
+            }
+
+            @Override public void keyUp(String key) {
+                turn(() -> direct.keyUp(key));
+                heldKeys.remove(key);
+            }
+
+            @Override public void insertText(String text) {
+                turn(() -> direct.insertText(text));
+            }
+
+            @Override public void sleep(long millis) {
+                if (millis <= 0) return;
+                try {
+                    Thread.sleep(millis);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    throw stopped(interrupted);
+                }
+                clock += millis;
+            }
+
+            @Override public long now() {
+                return clock;
+            }
+
+            @Override public <T> T read(java.util.function.Supplier<T> query) {
+                return turn(query);
+            }
+        };
     }
 
     /** Types into the first usable field and presses Enter; null when no selector matches. */

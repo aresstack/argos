@@ -85,15 +85,18 @@ final class RealInput {
     private final HumanInputSettings settings;
     private final HumanMotion motion;
     private final HumanTyping typing;
-    /** Where the pointer of each tab was left: BiDi keeps one input state per browsing context. */
-    private final Map<Page, HumanMotion.Point> pointers = new WeakHashMap<>();
+    /**
+     * Where the pointer of each tab was left: BiDi keeps one input state per browsing context. Synchronized: tabs
+     * may be typed into side by side ({@link InputDevice#read}).
+     */
+    private final Map<Page, HumanMotion.Point> pointers = java.util.Collections.synchronizedMap(new WeakHashMap<>());
     private HumanMotion.Box viewport;
     /** Whether and how Playwright sends characters outside the US layout as real keys; probed at browser start. */
-    private UnicodeKeys unicodeKeys = UnicodeKeys.UNKNOWN;
+    private volatile UnicodeKeys unicodeKeys = UnicodeKeys.UNKNOWN;
 
     RealInput(HumanInputSettings settings) {
         this.settings = settings;
-        RandomGenerator random = settings.random();
+        RandomGenerator random = new SharedRandom(settings.random());
         this.motion = new HumanMotion(random, settings);
         this.typing = new HumanTyping(random, settings);
         if (settings.unicode() == HumanInputSettings.UnicodePolicy.INSERT) {
@@ -152,20 +155,19 @@ final class RealInput {
     void click(Page page, Locator target) {
         ElementHandle element = target.elementHandle(new Locator.ElementHandleOptions().setTimeout(ACTION_TIMEOUT_MS));
         try {
-            click(page, element);
+            click(page, InputDevice.of(page), element);
         } finally {
             element.dispose();
         }
     }
 
-    private void click(Page page, ElementHandle element) {
-        InputDevice device = InputDevice.of(page);
+    private void click(Page page, InputDevice device, ElementHandle element) {
         pointAt(page, device, element);
         press(device, MouseButton.LEFT);
     }
 
     private HumanMotion.Point pointAt(Page page, InputDevice device, ElementHandle element) {
-        HumanMotion.Box box = stableBox(page, element);
+        HumanMotion.Box box = stableBox(device, element);
         HumanMotion.Point point = reachablePoint(page, device, element, box);
         moveTo(page, device, point, Math.min(box.width(), box.height()));
         return point;
@@ -280,11 +282,11 @@ final class RealInput {
     }
 
     /** The element's box once it stops moving (animations, late layout), measured a few frames apart. */
-    private static HumanMotion.Box stableBox(Page page, ElementHandle element) {
-        HumanMotion.Box box = box(visibleBox(element));
+    private static HumanMotion.Box stableBox(InputDevice device, ElementHandle element) {
+        HumanMotion.Box box = box(visibleBox(device, element));
         for (int attempt = 0; attempt < 10; attempt++) {
-            page.waitForTimeout(50);
-            HumanMotion.Box again = box(visibleBox(element));
+            device.sleep(50);
+            HumanMotion.Box again = box(visibleBox(device, element));
             if (again.equals(box)) return box;
             box = again;
         }
@@ -300,7 +302,7 @@ final class RealInput {
             HumanMotion.Point point = attempt < 3 ? motion.clickPoint(box) : rounded(box.center());
             HumanMotion.Point reached = scrollTo(page, device, element, point.x() - box.x(), point.y() - box.y());
             if (reached != null) return reached;
-            box = box(visibleBox(element));
+            box = box(visibleBox(device, element));
         }
         throw new IllegalStateException("Element is covered by another element (for example a cookie banner) "
                 + "or cannot be scrolled into view");
@@ -313,15 +315,15 @@ final class RealInput {
      */
     private HumanMotion.Point scrollTo(Page page, InputDevice device, ElementHandle element,
                                        double offsetX, double offsetY) {
-        HumanMotion.Box view = viewport(page);
+        HumanMotion.Box view = viewport(device, page);
         HumanMotion.Point last = null;
         boolean overContainer = false;
         for (int burst = 0; burst < MAX_WHEEL_BURSTS; burst++) {
-            BoundingBox box = visibleBox(element);
+            BoundingBox box = visibleBox(device, element);
             HumanMotion.Point point = new HumanMotion.Point(Math.round(box.x + offsetX), Math.round(box.y + offsetY));
             boolean insideX = point.x() >= MARGIN && point.x() <= view.width() - MARGIN;
             boolean insideY = point.y() >= MARGIN && point.y() <= view.height() - MARGIN;
-            if (insideX && insideY) return hits(page, element, point) ? point : null;
+            if (insideX && insideY) return hits(device, page, element, point) ? point : null;
             if (point.equals(last)) {
                 if (overContainer) return null;
                 overContainer = true;
@@ -347,8 +349,8 @@ final class RealInput {
     }
 
     /** Whether a click at {@code point} reaches the element: a transient, read-only main-world evaluation. */
-    private static boolean hits(Page page, ElementHandle element, HumanMotion.Point point) {
-        return Boolean.TRUE.equals(page.evaluate(HITS, List.of(element, point.x(), point.y())));
+    private static boolean hits(InputDevice device, Page page, ElementHandle element, HumanMotion.Point point) {
+        return Boolean.TRUE.equals(device.read(() -> page.evaluate(HITS, List.of(element, point.x(), point.y()))));
     }
 
     /**
@@ -380,9 +382,13 @@ final class RealInput {
      * size rejected valid screenshot coordinates and stopped wheel scrolling short of the real lower edge.
      */
     private HumanMotion.Box viewport(Page page) {
+        return viewport(InputDevice.of(page), page);
+    }
+
+    private HumanMotion.Box viewport(InputDevice device, Page page) {
         Object size;
         try {
-            size = page.evaluate("() => [innerWidth, innerHeight]");
+            size = device.read(() -> page.evaluate("() => [innerWidth, innerHeight]"));
         } catch (PlaywrightException unreadable) {
             size = null;
         }
@@ -400,14 +406,14 @@ final class RealInput {
      * hand coming from the address bar would, and travels on from there; it never appears out of nowhere.
      */
     private void enter(Page page, InputDevice device, HumanMotion.Point target) {
-        HumanMotion.Point start = motion.entryPoint(target, viewport(page));
+        HumanMotion.Point start = motion.entryPoint(target, viewport(device, page));
         device.move(start.x(), start.y());
         pointers.put(page, start);
     }
 
     private void moveTo(Page page, InputDevice device, HumanMotion.Point point, double targetSize) {
         if (!pointers.containsKey(page)) enter(page, device, point);
-        List<HumanMotion.Step> steps = motion.path(pointers.get(page), point, targetSize, viewport(page));
+        List<HumanMotion.Step> steps = motion.path(pointers.get(page), point, targetSize, viewport(device, page));
         long start = device.now();
         for (int i = 0; i < steps.size(); i++) {
             HumanMotion.Step step = steps.get(i);
@@ -422,8 +428,8 @@ final class RealInput {
         pointers.put(page, point);
     }
 
-    private static BoundingBox visibleBox(ElementHandle element) {
-        BoundingBox box = element.boundingBox();
+    private static BoundingBox visibleBox(InputDevice device, ElementHandle element) {
+        BoundingBox box = device.read(element::boundingBox);
         if (box == null || box.width <= 0 || box.height <= 0) {
             throw new IllegalStateException("Element is not visible on the page");
         }
@@ -440,29 +446,40 @@ final class RealInput {
      * Ctrl+A is only pressed once the field holds the focus; otherwise it would select the whole page.
      */
     void replaceText(Page page, Locator target, String text) {
-        text = lineEnds(text);
-        rejectUntypeable(text);
-        ElementHandle element = target.elementHandle(new Locator.ElementHandleOptions().setTimeout(ACTION_TIMEOUT_MS));
+        replaceText(InputDevice.of(page), page, target, text);
+    }
+
+    /**
+     * {@link #replaceText(Page, Locator, String)} through {@code device}: also every measurement of the page goes
+     * through {@link InputDevice#read}, so a device that runs each step in its own turn of the browser thread lets
+     * other tabs type in the pauses between keys.
+     */
+    void replaceText(InputDevice device, Page page, Locator target, String text) {
+        String typed = lineEnds(text);
+        rejectUntypeable(typed);
+        ElementHandle element = device.read(() -> target.elementHandle(
+                new Locator.ElementHandleOptions().setTimeout(ACTION_TIMEOUT_MS)));
         try {
-            Object kind = element.evaluate(EDITABLE);
+            Object kind = device.read(() -> element.evaluate(EDITABLE));
             if (kind instanceof String k && k.startsWith("segmented:")) {
-                fillSegments(page, element, k.substring("segmented:".length()), text);
+                fillSegments(page, device, element, k.substring("segmented:".length()), typed);
                 return;
             }
-            checkFillable(kind, text);
-            click(page, element);
-            if (!Boolean.TRUE.equals(element.evaluate(FOCUSED))) {
+            checkFillable(kind, typed);
+            click(page, device, element);
+            if (!Boolean.TRUE.equals(device.read(() -> element.evaluate(FOCUSED)))) {
                 throw new IllegalStateException("The click did not put the focus into the field (an overlay or label"
                         + " may have taken it). Nothing was typed and no select-all was pressed.");
             }
-            InputDevice device = InputDevice.of(page);
             device.sleep(motion.reactionPause());
             playKeys(device, typing.clearField(), false);
         } finally {
-            element.dispose();
+            device.read(() -> {
+                element.dispose();
+                return null;
+            });
         }
-        InputDevice device = InputDevice.of(page);
-        type(device, text);
+        type(device, typed);
     }
 
     /**
@@ -470,26 +487,25 @@ final class RealInput {
      * of each segment. Typing into a segment replaces it and moves on by itself. The segment order and the 12/24 hour
      * display depend on the browser locale, so the candidates are tried in turn and checked against the value.
      */
-    private void fillSegments(Page page, ElementHandle element, String type, String text) {
+    private void fillSegments(Page page, InputDevice device, ElementHandle element, String type, String text) {
         List<String> candidates = segmentKeys(type, text.strip());
-        InputDevice device = InputDevice.of(page);
         String expected = text.strip();
         for (String keys : candidates) {
             clickFirstSegment(page, device, element);
-            if (!Boolean.TRUE.equals(element.evaluate(FOCUSED))) {
+            if (!Boolean.TRUE.equals(device.read(() -> element.evaluate(FOCUSED)))) {
                 throw new IllegalStateException("The click did not put the focus into the " + type + " field."
                         + " Nothing was typed.");
             }
             device.sleep(motion.reactionPause());
             playKeys(device, typing.type(keys), false);
-            if (expected.equals(element.evaluate(VALUE))) return;
+            if (expected.equals(device.read(() -> element.evaluate(VALUE)))) return;
         }
         throw new IllegalStateException("The " + type + " field did not take \"" + expected + "\" (it now holds \""
-                + element.evaluate(VALUE) + "\"). Its segments may follow another order in this browser locale.");
+                + device.read(() -> element.evaluate(VALUE)) + "\"). Its segments may follow another order in this browser locale.");
     }
 
     private void clickFirstSegment(Page page, InputDevice device, ElementHandle element) {
-        HumanMotion.Box field = stableBox(page, element);
+        HumanMotion.Box field = stableBox(device, element);
         // The first segment sits at the left, after the padding; aim at a narrow strip there, never the centre.
         HumanMotion.Box first = new HumanMotion.Box(field.x() + Math.min(4, field.width() / 8), field.y(),
                 Math.max(1, Math.min(12, field.width() / 6)), field.height());
@@ -794,5 +810,57 @@ final class RealInput {
                 + (erased ? " The text typed so far was erased." : " Nothing was typed into the field.")
                 + " Remove the character, or opt in to INPUT_UNICODE="
                 + "transliterate (changes the text: ä -> ae) or insert (debug only, visible to the page).");
+    }
+
+    /**
+     * One random source for tabs typed into side by side: {@link java.util.SplittableRandom} is not thread-safe.
+     * Every draw delegates to the same method of the wrapped source, so a seeded run draws the same values.
+     */
+    static final class SharedRandom implements RandomGenerator {
+        private final RandomGenerator random;
+
+        SharedRandom(RandomGenerator random) {
+            this.random = random;
+        }
+
+        @Override public synchronized long nextLong() {
+            return random.nextLong();
+        }
+
+        @Override public synchronized int nextInt() {
+            return random.nextInt();
+        }
+
+        @Override public synchronized int nextInt(int bound) {
+            return random.nextInt(bound);
+        }
+
+        @Override public synchronized int nextInt(int origin, int bound) {
+            return random.nextInt(origin, bound);
+        }
+
+        @Override public synchronized double nextDouble() {
+            return random.nextDouble();
+        }
+
+        @Override public synchronized double nextDouble(double bound) {
+            return random.nextDouble(bound);
+        }
+
+        @Override public synchronized double nextDouble(double origin, double bound) {
+            return random.nextDouble(origin, bound);
+        }
+
+        @Override public synchronized boolean nextBoolean() {
+            return random.nextBoolean();
+        }
+
+        @Override public synchronized double nextGaussian() {
+            return random.nextGaussian();
+        }
+
+        @Override public synchronized double nextGaussian(double mean, double stddev) {
+            return random.nextGaussian(mean, stddev);
+        }
     }
 }

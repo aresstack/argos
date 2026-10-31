@@ -236,6 +236,98 @@ class ConvenienceBrowserTest {
         }
     }
 
+    /**
+     * #79: the engines of a parallel search type into their tabs at the same time. Each tab's search page reports
+     * its first key and the result request reaches the server when Enter submits the form; every tab must have
+     * begun typing before the first one submitted. Typed one tab after the other, the second tab's first key would
+     * only come after the first tab's Enter (Windows: result pages 9.5 s and 19.3 s apart).
+     */
+    @Test @Timeout(value = 240, unit = TimeUnit.SECONDS)
+    void typesIntoAllEngineTabsAtTheSameTime() throws Exception {
+        Assumptions.assumeTrue(Boolean.getBoolean("argos.testCamoufox"), "Opt-in real browser test");
+        ArgosConfig local = ArgosConfig.fromEnvironment();
+        local.requireBrowserConfiguration();
+        Map<String, Long> seen = new java.util.concurrent.ConcurrentHashMap<>();
+        HttpServer site = searchSite(seen);
+        try (CamoufoxBrowser browser = browser(local)) {
+            int port = site.getAddress().getPort();
+            List<String> engines = List.of("a", "b", "c");
+            List<TabLoadRequest> starts = new ArrayList<>();
+            for (String engine : engines) {
+                String url = "http://" + (engine.equals("b") ? "127.0.0.1" : "localhost") + ":" + port + "/search-"
+                        + engine;
+                starts.add(new TabLoadRequest(null, url, RegistrableDomain.of(url)));
+            }
+            List<TabLoad> loads = browser.loadTabs(starts, new DomainCoordinator(4, System::currentTimeMillis), 4,
+                    60_000);
+            for (TabLoad load : loads) assertEquals(TabLoadOutcome.OK, load.outcome(), load.toString());
+
+            String query = "parallele suche in allen tabs";
+            List<java.util.concurrent.Future<TabLoad>> searches = new ArrayList<>();
+            try (var workers = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
+                for (TabLoad load : loads) {
+                    searches.add(workers.submit(() -> browser.submitSearchInTab(load.tab(), List.of("input[name=q]"),
+                            query)));
+                }
+                for (int i = 0; i < engines.size(); i++) {
+                    TabLoad result = searches.get(i).get(120, TimeUnit.SECONDS);
+                    assertNotNull(result, "the search field of " + engines.get(i) + " was found");
+                    assertTrue(result.capture().title().startsWith("results-" + engines.get(i)), result.toString());
+                    assertTrue(result.capture().text().contains(query), "the whole query arrived: " + result);
+                }
+            }
+            long origin = engines.stream().mapToLong(engine -> seen.get("first-key-" + engine)).min().orElseThrow();
+            Map<String, Long> relative = new java.util.TreeMap<>();
+            seen.forEach((event, at) -> relative.put(event, (at - origin) / 1_000_000));
+            long lastFirstKey = engines.stream().mapToLong(engine -> seen.get("first-key-" + engine)).max()
+                    .orElseThrow();
+            long firstSubmit = engines.stream().mapToLong(engine -> seen.get("results-" + engine)).min().orElseThrow();
+            assertTrue(lastFirstKey < firstSubmit, "every tab was typing before the first Enter (ms): " + relative);
+        } finally {
+            site.stop(0);
+        }
+    }
+
+    /**
+     * /search-x: a search form whose first key is reported to /first-key-x; /results-x answers the submitted form.
+     * The arrival time (nanoTime) of each is recorded under its path.
+     */
+    private static HttpServer searchSite(Map<String, Long> seen) throws Exception {
+        HttpServer site = HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0);
+        site.createContext("/", exchange -> {
+            long at = System.nanoTime();
+            String path = exchange.getRequestURI().getPath();
+            String engine = path.substring(path.lastIndexOf('-') + 1);
+            String html;
+            if (path.startsWith("/search-")) {
+                html = "<html><head><title>search-" + engine + "</title></head><body><form action=\"/results-"
+                        + engine + "\"><input name=\"q\" autocomplete=\"off\"></form><script>"
+                        + "document.querySelector('input').addEventListener('keydown', () =>"
+                        + " navigator.sendBeacon('/first-key-" + engine + "'), {once: true});</script></body></html>";
+            } else if (path.startsWith("/first-key-") || path.startsWith("/results-")) {
+                seen.putIfAbsent(path.substring(1), at);
+                String query = exchange.getRequestURI().getQuery();
+                html = "<html><head><title>results-" + engine + "</title></head><body><p>"
+                        + (query == null ? "" : java.net.URLDecoder.decode(query.replaceFirst("^q=", ""),
+                        StandardCharsets.UTF_8)) + "</p></body></html>";
+            } else {
+                exchange.sendResponseHeaders(404, -1);
+                exchange.close();
+                return;
+            }
+            byte[] body = html.getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "text/html; charset=utf-8");
+            exchange.getResponseHeaders().add("Connection", "close");
+            exchange.sendResponseHeaders(200, body.length);
+            try (var out = exchange.getResponseBody()) {
+                out.write(body);
+            }
+        });
+        site.setExecutor(java.util.concurrent.Executors.newCachedThreadPool());
+        site.start();
+        return site;
+    }
+
     private CamoufoxBrowser browser(ArgosConfig local) {
         return new CamoufoxBrowser(new ArgosConfig("127.0.0.1", 0, local.executable(), local.launchOptions(),
                 temporary.resolve("profile"), true).withNetwork(TestNetworks.LOOPBACK));

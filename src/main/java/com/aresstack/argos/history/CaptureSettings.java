@@ -15,7 +15,7 @@ import java.util.Map;
 
 /**
  * The optional resource categories of ONE chat: {@code history/capture-settings.json} holds the chat's overrides
- * only. Effective value = the chat's override, else the server's {@code ARGOS_SEARCH_HISTORY_CAPTURE_*} variable,
+ * only. Effective value = the chat's override, else the server's {@code SEARCH_HISTORY_CAPTURE_*} variable,
  * else false. Shared by all user contexts of the chat; never read for another chat. Changes apply to responses that
  * finish afterwards; nothing is fetched again. The HTML archive is no part of these settings.
  */
@@ -44,7 +44,7 @@ public final class CaptureSettings {
         if (category == ResourceCategory.CONTENT) return new Value(true, "built-in");
         Boolean override = overrides().get(category);
         if (override != null) return new Value(override, "chat");
-        // The server's start value: the ARGOS_SEARCH_HISTORY_CAPTURE_* variable, else the built-in false.
+        // The server's start value: the SEARCH_HISTORY_CAPTURE_* variable, else the built-in false.
         return new Value(Boolean.TRUE.equals(defaults.get(category)), "server");
     }
 

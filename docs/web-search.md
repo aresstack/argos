@@ -6,7 +6,7 @@ Quelle: `Miguel0888/askai-java8`, Branch `arch`, Module `browser-search-analysis
 ## Ablauf
 
 1. `WebSearchService` geht die Suchmaschinen in der konfigurierten Reihenfolge durch
-   (`ARGOS_SEARCH_ENGINES`, Standard `duckduckgo,bing,google`). Die erste Maschine mit organischen
+   (`SEARCH_ENGINES`, Standard `duckduckgo,bing,google`). Die erste Maschine mit organischen
    Treffern beendet die Suche (AskAI `FIRST_USABLE`). Endpunkte einer Maschine (DuckDuckGo HTML → Lite)
    sind Ausweichwege desselben Anbieters.
 2. Pro Ergebnisseite: HTML über `page.content()` holen, mit jsoup parsen, extrahieren.
@@ -14,7 +14,7 @@ Quelle: `Miguel0888/askai-java8`, Branch `arch`, Module `browser-search-analysis
    erneut lesen. Erlaubt sind nur "Alle ablehnen", "Nur notwendige" und "Schließen". Bietet ein Banner
    ausschließlich "Alle akzeptieren", wird **nicht** geklickt: die Maschine endet kontrolliert mit
    `CONSENT_REQUIRED` und die nächste wird versucht. Akzeptieren nur mit ausdrücklichem Opt-in
-   `ARGOS_SEARCH_CONSENT_ACCEPT=true`. Ergebnisseiten werden nie angeklickt.
+   `SEARCH_CONSENT_ACCEPT=true`. Ergebnisseiten werden nie angeklickt.
 4. Danach erst CAPTCHA/Challenge-Prüfung. Eine Seite *mit* Treffern ist nie eine Challenge (eine Suche
    nach "captcha" darf nicht als Sperre gelten). Eine gesperrte Maschinenfamilie wird 10 Minuten
    übersprungen statt erneut angefragt; die Challenge bleibt nur sichtbar, wenn keine Ausweichmaschine
@@ -72,7 +72,7 @@ ATTEMPT: www.bing.com ORGANIC_RESULTS
   Playwright-Welt) und klickt mit `page.mouse()` auf die Bounding-Box-Mitte (WebDriver-BiDi-Eingabe).
   Keine Init-/Preload-Skripte, keine Bindings, keine Markierungsattribute.
 - **Kein automatisches "Alle akzeptieren".** AskAI fiel nach Ablehnen/Notwendig auf Akzeptieren zurück;
-  Argos tut das nur mit `ARGOS_SEARCH_CONSENT_ACCEPT=true`.
+  Argos tut das nur mit `SEARCH_CONSENT_ACCEPT=true`.
 - **Klick nur über Rohmaus.** Das Element wird per `Locator.count()`/`boundingBox()` nur vermessen; kein
   `Locator.click()` oder `scrollIntoViewIfNeeded()` (deren Actionability-Logik löst seitenseitig sichtbare
   Marker-Events aus, playwright4j #38). Gescrollt wird mit dem Mausrad. Kein `route()`.

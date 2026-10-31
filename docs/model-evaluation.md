@@ -45,7 +45,7 @@ The report goes to `build/eval/<yyyyMMdd-HHmmss>/`:
 
 ## Settings
 
-Every setting is `-Peval.<name>=...` or the environment variable `ARGOS_EVAL_<NAME>` (dashes become underscores).
+Every setting is `-Peval.<name>=...` or the environment variable `EVAL_<NAME>` (dashes become underscores).
 
 | Setting | Default | Meaning |
 |---|---|---|
@@ -92,7 +92,7 @@ Examples:
 .\gradlew.bat evalModels "-Peval.repeat=3" "-Peval.num-ctx=16384" "-Peval.tasks=dynamic-page,simple-form"
 
 # Optional large reference model over an OpenAI-compatible API (costs money; the key stays out of the report)
-$env:ARGOS_EVAL_API_KEY = "..."
+$env:EVAL_API_KEY = "..."
 .\gradlew.bat evalModels "-Peval.api=openai" "-Peval.base-url=https://openrouter.ai/api/v1" "-Peval.runs=openai/gpt-oss-120b@compact"
 ```
 

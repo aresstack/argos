@@ -107,4 +107,48 @@ final class ArgosMcpAuthorizationFilterTest {
         verify(response).setStatus(401);
         verifyNoInteractions(chain);
     }
+
+    @Test
+    void verifiedPrincipalIsHandedToTheMcpTransport() throws Exception {
+        ArgosMcpAuthorizationFilter filter = ArgosMcpAuthorizationFilter.withPrincipals(config("central-oauth"),
+                token -> "granted".equals(token) ? java.util.Optional.of("sub:issuer\u0000angelo")
+                        : java.util.Optional.empty());
+        HttpServletRequest request = mock(HttpServletRequest.class);
+        when(request.getHeader("Authorization")).thenReturn("Bearer granted");
+        FilterChain chain = mock(FilterChain.class);
+        HttpServletResponse response = mock(HttpServletResponse.class);
+
+        filter.doFilter(request, response, chain);
+
+        verify(request).setAttribute(McpCallerResolver.PRINCIPAL, "sub:issuer\u0000angelo");
+        verify(chain).doFilter(request, response);
+        when(request.getAttribute(McpCallerResolver.PRINCIPAL)).thenReturn("sub:issuer\u0000angelo");
+        assertEquals("sub:issuer\u0000angelo",
+                ArgosApplication.transportContext(request).get(McpCallerResolver.PRINCIPAL));
+    }
+
+    @Test
+    void unsecuredModeUsesTheAnonymousPrincipal() throws Exception {
+        ArgosMcpAuthorizationFilter filter = new ArgosMcpAuthorizationFilter(config("none"), token -> false);
+        HttpServletRequest request = mock(HttpServletRequest.class);
+        filter.doFilter(request, mock(HttpServletResponse.class), mock(FilterChain.class));
+        verify(request).setAttribute(McpCallerResolver.PRINCIPAL, ArgosMcpAuthorizationFilter.ANONYMOUS);
+    }
+
+    @Test
+    void rejectedRequestCarriesNoPrincipal() throws Exception {
+        HttpServletRequest request = mock(HttpServletRequest.class);
+        assertNull(ArgosApplication.transportContext(request).get(McpCallerResolver.PRINCIPAL));
+    }
+
+    @Test
+    void principalIsIssuerAndSubjectOtherwiseTheClientId() {
+        java.util.Base64.Encoder base64 = java.util.Base64.getUrlEncoder().withoutPadding();
+        String withSubject = "h." + base64.encodeToString(
+                "{\"iss\":\"https://auth\",\"sub\":\"angelo\"}".getBytes()) + ".s";
+        String withoutSubject = "h." + base64.encodeToString("{\"client_id\":\"angel\"}".getBytes()) + ".s";
+        assertEquals("sub:https://auth\u0000angelo", ArgosMcpAuthorizationFilter.principal(withSubject, "angel"));
+        assertEquals("client:angel", ArgosMcpAuthorizationFilter.principal(withoutSubject, "angel"));
+        assertEquals("client:angel", ArgosMcpAuthorizationFilter.principal("not-a-jwt", "angel"));
+    }
 }

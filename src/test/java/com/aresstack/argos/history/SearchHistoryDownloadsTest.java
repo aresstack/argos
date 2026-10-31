@@ -100,9 +100,9 @@ class SearchHistoryDownloadsTest {
     @Test void retentionIsConfigurable() {
         assertEquals(Duration.ofMinutes(60), SearchHistoryDownloads.retention(Map.of()));
         assertEquals(Duration.ofMinutes(5),
-                SearchHistoryDownloads.retention(Map.of("ARGOS_SEARCH_HISTORY_EXPORT_TTL_MINUTES", "5")));
+                SearchHistoryDownloads.retention(Map.of("SEARCH_HISTORY_EXPORT_TTL_MINUTES", "5")));
         assertThrows(IllegalArgumentException.class,
-                () -> SearchHistoryDownloads.retention(Map.of("ARGOS_SEARCH_HISTORY_EXPORT_TTL_MINUTES", "x")));
+                () -> SearchHistoryDownloads.retention(Map.of("SEARCH_HISTORY_EXPORT_TTL_MINUTES", "x")));
     }
 
     @Test void everyFormatIsHandedOutAsLinkWithoutTheLocalPath() throws Exception {

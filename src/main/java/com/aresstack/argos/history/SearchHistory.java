@@ -52,7 +52,7 @@ public final class SearchHistory {
         this(historyDirectory, Map.of());
     }
 
-    /** @param captureDefaults the server's ARGOS_SEARCH_HISTORY_CAPTURE_* values, the start of every chat */
+    /** @param captureDefaults the server's SEARCH_HISTORY_CAPTURE_* values, the start of every chat */
     public SearchHistory(Path historyDirectory, Map<ResourceCategory, Boolean> captureDefaults) {
         this.repository = new SearchHistoryRepository(historyDirectory);
         this.index = new LuceneSearchHistoryIndex(repository.luceneDirectory());

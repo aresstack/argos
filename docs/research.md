@@ -17,7 +17,7 @@ Playwright:
 | `QueryPlanner` | `QueryPlanner.VERBATIM` (Frage unverändert) | Query Expansion durch ein Modell |
 | `ResearchListener` | MCP-Progress-Notifications in `ResearchTools` | Logging, UI |
 
-Ohne `ARGOS_RESEARCH=true` wird nichts davon instanziiert; Argos verhält sich wie bisher.
+Ohne `RESEARCH_ENABLED=true` wird nichts davon instanziiert; Argos verhält sich wie bisher.
 Kein Modell ist nötig, keine bezahlte Such-API wird angesprochen.
 
 ## Ablauf eines Laufs (`ResearchLoop`)
@@ -77,15 +77,15 @@ Jeder Stop-Grund hat eine `NEXT:`-Zeile, die dem Modell den nächsten sinnvollen
 
 | Variable | Standard | Bedeutung |
 |---|---|---|
-| `ARGOS_RESEARCH` | `false` | `true` veröffentlicht `web_research` und `web_research_stop` |
-| `ARGOS_RESEARCH_MAX_SEARCHES` | 2 | Suchanfragen pro Lauf (1–5) |
-| `ARGOS_RESEARCH_MAX_PAGES` | 8 | Seitenaufrufe pro Lauf (1–50) |
-| `ARGOS_RESEARCH_MAX_SOURCES` | 5 | Quellen, bei denen der Lauf in jedem Fall endet |
-| `ARGOS_RESEARCH_MIN_SOURCES` | 3 | Quellen für `SUFFICIENT_EVIDENCE` |
-| `ARGOS_RESEARCH_MIN_SITES` | 2 | verschiedene Sites für `SUFFICIENT_EVIDENCE` |
-| `ARGOS_RESEARCH_MAX_SECONDS` | 120 | Laufzeit |
-| `ARGOS_RESEARCH_LINKS_PER_PAGE` | 3 | verfolgte Links pro relevanter Seite (0–10) |
-| `ARGOS_RESEARCH_LINK_DEPTH` | 2 | 0 = nur Suchtreffer |
+| `RESEARCH_ENABLED` | `false` | `true` veröffentlicht `web_research` und `web_research_stop` |
+| `RESEARCH_MAX_SEARCHES` | 2 | Suchanfragen pro Lauf (1–5) |
+| `RESEARCH_MAX_PAGES` | 8 | Seitenaufrufe pro Lauf (1–50) |
+| `RESEARCH_MAX_SOURCES` | 5 | Quellen, bei denen der Lauf in jedem Fall endet |
+| `RESEARCH_MIN_SOURCES` | 3 | Quellen für `SUFFICIENT_EVIDENCE` |
+| `RESEARCH_MIN_SITES` | 2 | verschiedene Sites für `SUFFICIENT_EVIDENCE` |
+| `RESEARCH_MAX_SECONDS` | 120 | Laufzeit |
+| `RESEARCH_LINKS_PER_PAGE` | 3 | verfolgte Links pro relevanter Seite (0–10) |
+| `RESEARCH_LINK_DEPTH` | 2 | 0 = nur Suchtreffer |
 
 Die Standards sind kleiner als AskAIs 30 Tool-Calls / 20 Seiten / 10 Minuten, weil ein Lauf **ein**
 MCP-Toolaufruf ist und MCP-Clients Zeitlimits haben. Fortschritt geht als MCP-Progress-Notification
@@ -123,6 +123,6 @@ Bindings, keine DOM-Markierungen, keine Klicks. Gesperrte Sites werden nicht ern
   Duplikate/Weiterleitungen/Spiegel, gesperrte Sites, Suchmaschinen-Transit, alle Budgets, Such-
   fehler vs. leere Suche vs. CAPTCHA, Dokumente, Query-Planung, Abbruch, Parallelsperre, Fortschritt).
 - `HtmlResearchPagesTest`, `ResearchUrlsTest`, `LexicalRelevanceScorerTest`, `ResearchSettingsTest`,
-  `ResearchToolsTest`, `ArgosToolsTest` (Werkzeuge nur bei `ARGOS_RESEARCH=true`).
+  `ResearchToolsTest`, `ArgosToolsTest` (Werkzeuge nur bei `RESEARCH_ENABLED=true`).
 - `CamoufoxResearchTest` (opt-in, `-PtestCamoufox=true`): Lauf über echtes Camoufox gegen einen
   lokalen `HttpServer`.

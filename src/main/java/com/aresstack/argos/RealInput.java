@@ -97,7 +97,7 @@ final class RealInput {
         this.motion = new HumanMotion(random, settings);
         this.typing = new HumanTyping(random, settings);
         if (settings.unicode() == HumanInputSettings.UnicodePolicy.INSERT) {
-            System.err.println("ARGOS_INPUT_UNICODE=insert is a debug/compatibility mode, not stealth input: characters"
+            System.err.println("INPUT_UNICODE=insert is a debug/compatibility mode, not stealth input: characters"
                     + " outside the US layout reach the page as untrusted, script-made input events.");
         }
     }
@@ -786,13 +786,13 @@ final class RealInput {
     private static IllegalStateException untypeable(int codePoint, boolean erased) {
         if (codePoint == '\t') {
             return new IllegalStateException("Cannot type a tab character as a real key: the Tab key would move the"
-                    + " focus to the next control. Remove it, or set ARGOS_INPUT_UNICODE=insert (visible to the page).");
+                    + " focus to the next control. Remove it, or set INPUT_UNICODE=insert (visible to the page).");
         }
         return new IllegalStateException("Cannot type '" + new String(Character.toChars(codePoint))
                 + "' as a real key: Playwright Core sends characters outside the US layout only through a page"
                 + " script (playwright4j#36); Playwright4J with playwright4j#59 types them as real keys."
                 + (erased ? " The text typed so far was erased." : " Nothing was typed into the field.")
-                + " Remove the character, or opt in to ARGOS_INPUT_UNICODE="
+                + " Remove the character, or opt in to INPUT_UNICODE="
                 + "transliterate (changes the text: ä -> ae) or insert (debug only, visible to the page).");
     }
 }

@@ -59,9 +59,13 @@ public final class ArgosApplication {
         List<SyncToolSpecification> tools;
         AutoCloseable browsers;
         if (isolation.perChat()) {
-            // One isolated, persistent profile (and Camoufox process) per ChatGPT conversation context. The chat's
-            // Search History is history/ next to profile/ and contexts/ (all user contexts share it).
-            ChatRoutedTools routed = new ChatRoutedTools(new ChatProfiles(isolation.chatRoot()),
+            // One isolated profile (and Camoufox process) per caller workspace: a ChatGPT conversation or an MCP
+            // transport session (McpCallerResolver). The workspace's Search History is history/ next to profile/
+            // and contexts/ (all user contexts share it).
+            ChatProfiles profiles = new ChatProfiles(isolation.chatRoot());
+            int stale = profiles.removeTransportWorkspaces();
+            if (stale > 0) System.err.println("[argos-profiles] removed " + stale + " workspace(s) of ended MCP sessions");
+            ChatRoutedTools routed = new ChatRoutedTools(profiles,
                     profile -> workspace(config.withProfile(profile), historySettings.enabled()
                             ? profile.getParent().resolve("history") : null, historySettings), isolation.maxBrowsers(),
                     java.time.Duration.ofMinutes(isolation.idleMinutes()));
@@ -91,7 +95,8 @@ public final class ArgosApplication {
         System.out.println("Argos ready: http://" + config.host() + ":" + running.port()
                 + "/ (MCP root, health: /health, tool profile: "
                 + config.toolProfile().name().toLowerCase(java.util.Locale.ROOT)
-                + ", browser profiles: " + (isolation.perChat() ? "per ChatGPT conversation" : "single") + ")");
+                + ", browser profiles: " + (isolation.perChat() ? "per ChatGPT conversation or MCP session" : "single")
+                + ")");
         running.server().join();
     }
 
@@ -100,12 +105,12 @@ public final class ArgosApplication {
         return workspace(config, null, null);
     }
 
-    static final String SINGLE_PROFILE_HISTORY = "Search History is disabled: ARGOS_PROFILE_ISOLATION=single has no "
-            + "reliable chat key, and Argos keeps no global history. Start Argos with ARGOS_PROFILE_ISOLATION=chat "
+    static final String SINGLE_PROFILE_HISTORY = "Search History is disabled: PROFILE_ISOLATION=single has no "
+            + "reliable chat key, and Argos keeps no global history. Start Argos with PROFILE_ISOLATION=chat "
             + "(the default) to use search_history, search_history_export, search_history_capture_settings and "
             + "browser_archive_html.";
     static final String HISTORY_SWITCHED_OFF = "Search History is switched off on this Argos server "
-            + "(ARGOS_SEARCH_HISTORY=false).";
+            + "(SEARCH_HISTORY_ENABLED=false).";
 
     /**
      * @param historyDirectory this chat's Search History, or null without one; then search_history and
@@ -203,7 +208,7 @@ public final class ArgosApplication {
     public static RunningServer serve(ArgosConfig config, List<SyncToolSpecification> tools) throws Exception {
         HttpServletStreamableServerTransportProvider transport =
                 HttpServletStreamableServerTransportProvider.builder()
-                        .mcpEndpoint("/").build();
+                        .mcpEndpoint("/").contextExtractor(ArgosApplication::transportContext).build();
         McpSyncServer mcp = McpServer.sync(transport)
                 .serverInfo("argos", ArgosTools.VERSION)
                 .capabilities(ServerCapabilities.builder().tools(true).build())
@@ -234,6 +239,14 @@ public final class ArgosApplication {
                 : "http://" + (config.host().contains(":") ? "[" + config.host() + "]" : config.host()) + ":" + port);
         return new RunningServer(server, mcp,
                 ((org.eclipse.jetty.server.ServerConnector) server.getConnectors()[0]).getLocalPort());
+    }
+
+    /** Hands the principal verified by {@link ArgosMcpAuthorizationFilter} to the tool handlers, nothing else. */
+    static io.modelcontextprotocol.common.McpTransportContext transportContext(HttpServletRequest request) {
+        Object principal = request.getAttribute(McpCallerResolver.PRINCIPAL);
+        return principal instanceof String value
+                ? io.modelcontextprotocol.common.McpTransportContext.create(Map.of(McpCallerResolver.PRINCIPAL, value))
+                : io.modelcontextprotocol.common.McpTransportContext.EMPTY;
     }
 
     static final class ProtectedResourceServlet extends HttpServlet {

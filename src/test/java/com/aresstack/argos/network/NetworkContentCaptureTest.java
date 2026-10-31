@@ -17,7 +17,7 @@ import static org.mockito.Mockito.*;
 /**
  * The durable content capture on the existing recorder (spec §5, Test D/E): metadata decides inside the event
  * handler, bodies are read over the protocol afterwards, within a bounded queue and budget, independent of
- * ARGOS_NETWORK_BODIES, and never as a new request.
+ * NETWORK_BODIES, and never as a new request.
  */
 class NetworkContentCaptureTest {
     private final List<String> delivered = new ArrayList<>();
@@ -39,7 +39,7 @@ class NetworkContentCaptureTest {
     };
 
     private NetworkRecorder recorder() {
-        // captureBodies=false: ARGOS_NETWORK_BODIES is off, the history capture works anyway.
+        // captureBodies=false: NETWORK_BODIES is off, the history capture works anyway.
         NetworkRecorder recorder = new NetworkRecorder(new SecretMasker(), false, () -> Instant.EPOCH, System::nanoTime);
         recorder.contentSink(sink);
         return recorder;

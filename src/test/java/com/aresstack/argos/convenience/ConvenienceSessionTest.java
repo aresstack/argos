@@ -81,6 +81,97 @@ class ConvenienceSessionTest {
         assertEquals("https://camoufox.com/", session.url("r-s1-1"));
     }
 
+    @Test void aSelectionOfOneEngineOpensOnlyThatEngine() throws Exception {
+        startPages(0, 0, 0);
+        sites.fixture(DDG, "duckduckgo-html.html", 0).fixture(BING, "bing.html", 0).fixture(GOOGLE, "google.html", 0);
+        LocalConvenienceBrowser browser = new LocalConvenienceBrowser(sites);
+        ConvenienceSession session = searching(browser, 10_000, null);
+
+        Map<String, Object> answer = session.search("camoufox", List.of("google"));
+
+        assertEquals(List.of("/", "/search"), sites.hits("www.google.com").stream().map(LocalSites.Hit::path).toList());
+        assertTrue(sites.hits("www.bing.com").isEmpty(), "Bing is neither opened nor asked");
+        assertTrue(sites.hits("html.duckduckgo.com").isEmpty(), "DuckDuckGo is neither opened nor asked");
+        assertEquals(1, browser.submitted.size(), browser.submitted.toString());
+        assertEquals(List.of("google"), list(answer, "engines").stream().map(e -> e.get("id")).toList());
+        assertEquals("COMPLETE", answer.get("status"));
+        List<Map<String, Object>> results = list(answer, "results");
+        assertFalse(results.isEmpty());
+        results.forEach(result -> assertEquals(List.of("google"), ((List<?>) result.get("sources")).stream()
+                .map(source -> ((Map<?, ?>) source).get("engine")).distinct().toList()));
+    }
+
+    @Test void aSelectionOfTwoEnginesSkipsTheThirdAndKeepsTheGivenOrder() throws Exception {
+        startPages(0, 0, 0);
+        sites.fixture(DDG, "duckduckgo-html.html", 0).fixture(BING, "bing.html", 0).fixture(GOOGLE, "google.html", 0);
+        ConvenienceSession session = searching(new LocalConvenienceBrowser(sites), 10_000, null);
+
+        Map<String, Object> answer = session.search("camoufox", List.of("google", "bing", "google"));
+
+        assertTrue(sites.hits("html.duckduckgo.com").isEmpty(), "no DuckDuckGo");
+        assertEquals(List.of("google", "bing"), list(answer, "engines").stream().map(e -> e.get("id")).toList());
+        List<Map<String, Object>> results = list(answer, "results");
+        assertEquals(List.of(Map.of("engine", "google", "rank", 1)), results.get(0).get("sources"));
+        assertEquals(List.of(Map.of("engine", "bing", "rank", 1)), results.get(1).get("sources"));
+        assertEquals("COMPLETE", answer.get("status"));
+    }
+
+    @Test void anInvalidSelectionIsRejectedBeforeTheBrowserChanges() throws Exception {
+        startPages(0, 0, 0);
+        sites.fixture(DDG, "duckduckgo-html.html", 0).fixture(BING, "bing.html", 0).fixture(GOOGLE, "google.html", 0);
+        LocalConvenienceBrowser browser = new LocalConvenienceBrowser(sites);
+        ConvenienceSession session = searching(browser, 10_000, null);
+        List<String> engineTabs = list(session.search("camoufox"), "engines").stream()
+                .map(e -> (String) e.get("tabId")).toList();
+        int requests = sites.hits.size();
+
+        for (List<String> invalid : List.of(List.<String>of(), List.of("yahoo"), List.of("google", "altavista"))) {
+            assertThrows(IllegalArgumentException.class, () -> session.search("camoufox", invalid), invalid.toString());
+        }
+
+        assertEquals(requests, sites.hits.size(), "no engine was asked");
+        engineTabs.forEach(tab -> assertTrue(browser.hasOpenTab(tab), "the last search's tabs stay open"));
+        assertEquals("s2", session.search("camoufox", List.of("bing")).get("searchId"), "a rejected call is no search");
+    }
+
+    @Test void theDefaultSelectionAppliesWithoutEnginesAndTheCallOverridesIt() throws Exception {
+        startPages(0, 0, 0);
+        sites.fixture(DDG, "duckduckgo-html.html", 0).fixture(BING, "bing.html", 0).fixture(GOOGLE, "google.html", 0);
+        LocalConvenienceBrowser browser = new LocalConvenienceBrowser(sites);
+        List<SearchEngine> available = SearchEngine.byIds("duckduckgo,bing,google");
+        ParallelWebSearch search = new ParallelWebSearch(browser, coordinator, available,
+                SearchEngine.defaults("google", available), 10, false, 10_000, 45_000);
+        ConvenienceSession session = new ConvenienceSession(browser, coordinator, UrlPolicy.off(), search, null);
+
+        Map<String, Object> byDefault = session.search("camoufox");
+        assertEquals(List.of("google"), list(byDefault, "engines").stream().map(e -> e.get("id")).toList());
+        assertTrue(sites.hits("www.bing.com").isEmpty() && sites.hits("html.duckduckgo.com").isEmpty());
+
+        Map<String, Object> explicit = session.search("camoufox", List.of("bing"));
+        assertEquals(List.of("bing"), list(explicit, "engines").stream().map(e -> e.get("id")).toList());
+        assertEquals(1, sites.hits("www.google.com").stream().filter(hit -> hit.path().equals("/")).count(),
+                "the explicit call does not add the default engine");
+        assertEquals(List.of("duckduckgo", "bing", "google"), session.engineIds(), "every available engine may be named");
+    }
+
+    @Test void concurrentSearchesWithDifferentSelectionsDoNotAffectEachOther() throws Exception {
+        startPages(300, 300, 300);
+        sites.fixture(DDG, "duckduckgo-html.html", 0).fixture(BING, "bing.html", 0).fixture(GOOGLE, "google.html", 0);
+        ConvenienceSession chatA = searching(new LocalConvenienceBrowser(sites), 10_000, null);
+        ConvenienceSession chatB = searching(new LocalConvenienceBrowser(sites), 10_000, null);
+
+        CompletableFuture<Map<String, Object>> a = CompletableFuture.supplyAsync(
+                () -> chatA.search("camoufox", List.of("google")));
+        CompletableFuture<Map<String, Object>> b = CompletableFuture.supplyAsync(
+                () -> chatB.search("camoufox", List.of("bing", "duckduckgo")));
+
+        assertEquals(List.of("google"), list(a.get(), "engines").stream().map(e -> e.get("id")).toList());
+        assertEquals(List.of("bing", "duckduckgo"), list(b.get(), "engines").stream().map(e -> e.get("id")).toList());
+        assertEquals(List.of("duckduckgo", "bing", "google"),
+                list(chatA.search("camoufox"), "engines").stream().map(e -> e.get("id")).toList(),
+                "a selection holds for its own call only");
+    }
+
     @Test void aSlowEngineTimesOutWithoutHoldingBackTheOthers() throws Exception {
         startPages(0, 0, 8_000);
         sites.fixture(DDG, "duckduckgo-html.html", 0).fixture(BING, "bing.html", 0).fixture(GOOGLE, "google.html", 0);
@@ -136,7 +227,7 @@ class ConvenienceSessionTest {
                 run("bing", plain, "https://b.example.org/x?_sg=9&_tp=2", "https://b.example.org/x?_sg=1&_tp=2#part"),
                 run("google", "https://b.example.org/x?_sg=1&_tp=2"));
         ConvenienceSession session = new ConvenienceSession(new LocalConvenienceBrowser(sites), coordinator,
-                UrlPolicy.off(), query -> runs, null);
+                UrlPolicy.off(), (query, engines) -> runs, null);
 
         Map<String, Object> answer = session.search("x");
         List<Map<String, Object>> results = list(answer, "results");
@@ -177,7 +268,7 @@ class ConvenienceSessionTest {
         RecordingHistory history = new RecordingHistory();
         LocalConvenienceBrowser browser = new LocalConvenienceBrowser(sites);
         ConvenienceSession session = new ConvenienceSession(browser, coordinator, UrlPolicy.off(),
-                query -> List.of(run("bing", "https://one.org/a", "https://two.net/b", "https://three.io/c")), history);
+                (query, engines) -> List.of(run("bing", "https://one.org/a", "https://two.net/b", "https://three.io/c")), history);
         session.search("x");
 
         long start = System.nanoTime();
@@ -213,9 +304,9 @@ class ConvenienceSessionTest {
         assertEquals("example.co.uk", RegistrableDomain.of("https://docs.example.co.uk/1"), "Public Suffix List");
 
         ConvenienceSession chatA = new ConvenienceSession(new LocalConvenienceBrowser(sites), coordinator, UrlPolicy.off(),
-                query -> List.of(run("bing", sameDomain.get(0), sameDomain.get(1), sameDomain.get(2), "https://other.org/x")), null);
+                (query, engines) -> List.of(run("bing", sameDomain.get(0), sameDomain.get(1), sameDomain.get(2), "https://other.org/x")), null);
         ConvenienceSession chatB = new ConvenienceSession(new LocalConvenienceBrowser(sites), coordinator, UrlPolicy.off(),
-                query -> List.of(run("bing", sameDomain.get(3), sameDomain.get(4))), null);
+                (query, engines) -> List.of(run("bing", sameDomain.get(3), sameDomain.get(4))), null);
         chatA.search("a");
         chatB.search("b");
 
@@ -244,9 +335,9 @@ class ConvenienceSessionTest {
             sites.page(urls.get(i), 200, page("p" + i, "text", null), 300, Map.of());
         }
         ConvenienceSession chatA = new ConvenienceSession(new LocalConvenienceBrowser(sites), coordinator, UrlPolicy.off(),
-                query -> List.of(run("bing", urls.subList(0, 4).toArray(String[]::new))), null);
+                (query, engines) -> List.of(run("bing", urls.subList(0, 4).toArray(String[]::new))), null);
         ConvenienceSession chatB = new ConvenienceSession(new LocalConvenienceBrowser(sites), coordinator, UrlPolicy.off(),
-                query -> List.of(run("bing", urls.subList(4, 8).toArray(String[]::new))), null);
+                (query, engines) -> List.of(run("bing", urls.subList(4, 8).toArray(String[]::new))), null);
         chatA.search("a");
         chatB.search("b");
 
@@ -268,7 +359,7 @@ class ConvenienceSessionTest {
                 .page("https://www.limited.org/b", 200, page("b", "text", null), 0, Map.of());
         LocalConvenienceBrowser browser = new LocalConvenienceBrowser(sites);
         ConvenienceSession session = new ConvenienceSession(browser, coordinator, UrlPolicy.off(),
-                query -> List.of(run("bing", "https://limited.org/a", "https://www.limited.org/b")), null);
+                (query, engines) -> List.of(run("bing", "https://limited.org/a", "https://www.limited.org/b")), null);
         session.search("x");
 
         Map<String, Object> first = session.selectResults("s1", List.of("r-s1-1"));
@@ -290,7 +381,7 @@ class ConvenienceSessionTest {
         String body = "<html><head><title>Long</title></head><body><p>" + "word ".repeat(6_000) + "</p>" + links + "</body></html>";
         sites.page("https://long.org/", 200, body, 0, Map.of());
         ConvenienceSession session = new ConvenienceSession(new LocalConvenienceBrowser(sites), coordinator,
-                UrlPolicy.off(), query -> List.of(run("bing", "https://long.org/")), null);
+                UrlPolicy.off(), (query, engines) -> List.of(run("bing", "https://long.org/")), null);
         session.search("x");
 
         Map<String, Object> page = list(session.selectResults("s1", List.of("r-s1-1")), "opened").get(0);
@@ -310,7 +401,7 @@ class ConvenienceSessionTest {
         sites.page("https://site.org/a", page("A", "page a", "https://site.org/b"))
                 .page("https://site.org/b", page("B", "page b", "https://site.org/c"));
         ConvenienceSession session = new ConvenienceSession(new LocalConvenienceBrowser(sites), coordinator,
-                UrlPolicy.off(), query -> List.of(run("bing", "https://site.org/a")), null);
+                UrlPolicy.off(), (query, engines) -> List.of(run("bing", "https://site.org/a")), null);
         session.search("x");
         String tab = (String) list(session.selectResults("s1", List.of("r-s1-1")), "opened").get(0).get("tabId");
 
@@ -332,7 +423,7 @@ class ConvenienceSessionTest {
         sites.page("https://one.org/", page("One", "1", "https://one.org/x"))
                 .page("https://two.org/", page("Two", "2", "https://two.org/x"));
         ConvenienceSession session = new ConvenienceSession(new LocalConvenienceBrowser(sites), coordinator,
-                UrlPolicy.off(), query -> List.of(run("bing", "https://one.org/", "https://two.org/")), null);
+                UrlPolicy.off(), (query, engines) -> List.of(run("bing", "https://one.org/", "https://two.org/")), null);
         session.search("x");
         List<Map<String, Object>> opened = list(session.selectResults("s1", List.of("r-s1-1", "r-s1-2")), "opened");
         String one = (String) opened.get(0).get("tabId"), two = (String) opened.get(1).get("tabId");
@@ -356,9 +447,9 @@ class ConvenienceSessionTest {
         sites.page("https://one.org/", page("One", "1", "https://one.org/x"));
         LocalConvenienceBrowser browserA = new LocalConvenienceBrowser(sites);
         ConvenienceSession chatA = new ConvenienceSession(browserA, coordinator, UrlPolicy.off(),
-                query -> List.of(run("bing", "https://one.org/")), null);
+                (query, engines) -> List.of(run("bing", "https://one.org/")), null);
         ConvenienceSession chatB = new ConvenienceSession(new LocalConvenienceBrowser(sites), coordinator,
-                UrlPolicy.off(), query -> List.of(), null);
+                UrlPolicy.off(), (query, engines) -> List.of(), null);
         chatA.search("x");
         String tab = (String) list(chatA.selectResults("s1", List.of("r-s1-1")), "opened").get(0).get("tabId");
 
@@ -376,7 +467,7 @@ class ConvenienceSessionTest {
             sites.page(urls.get(i), page("p" + i, "t", null));
         }
         ConvenienceSession session = new ConvenienceSession(new LocalConvenienceBrowser(sites), coordinator,
-                UrlPolicy.off(), query -> List.of(run("bing", urls.toArray(String[]::new))), null);
+                UrlPolicy.off(), (query, engines) -> List.of(run("bing", urls.toArray(String[]::new))), null);
         session.search("x");
         List<String> ids = new ArrayList<>();
         for (int i = 1; i <= 21; i++) ids.add("r-s1-" + i);
@@ -392,7 +483,7 @@ class ConvenienceSessionTest {
 
     @Test void blockedTargetsAreNeverLoaded() throws Exception {
         ConvenienceSession session = new ConvenienceSession(new LocalConvenienceBrowser(sites), coordinator,
-                UrlPolicy.publicOnly(), query -> List.of(run("bing", "http://127.0.0.1:9/secret")), null);
+                UrlPolicy.publicOnly(), (query, engines) -> List.of(run("bing", "http://127.0.0.1:9/secret")), null);
         session.search("x");
 
         Map<String, Object> answer = session.selectResults("s1", List.of("r-s1-1"));
@@ -425,7 +516,7 @@ class ConvenienceSessionTest {
         LocalConvenienceBrowser browser = new LocalConvenienceBrowser(sites);
         ConvenienceSession session = new ConvenienceSession(browser, coordinator, UrlPolicy.off(),
                 new ParallelWebSearch(browser, coordinator, SearchEngine.byIds("duckduckgo,bing,google"), 10, false,
-                        10_000, 1_000)::search, null);
+                        10_000, 1_000), null);
 
         Map<String, Object> answer = session.search("camoufox");
 
@@ -441,7 +532,7 @@ class ConvenienceSessionTest {
         LocalConvenienceBrowser browser = new LocalConvenienceBrowser(sites);
         ConvenienceSession session = new ConvenienceSession(browser, coordinator, UrlPolicy.off(),
                 new ParallelWebSearch(browser, coordinator, SearchEngine.byIds("duckduckgo,bing,google"), 10, false,
-                        10_000, 1_000)::search, null);
+                        10_000, 1_000), null);
 
         Map<String, Object> answer = session.search("camoufox");
 
@@ -463,7 +554,7 @@ class ConvenienceSessionTest {
     private ConvenienceSession searching(LocalConvenienceBrowser browser, long engineTimeout, RecordingHistory history) {
         ParallelWebSearch search = new ParallelWebSearch(browser, coordinator,
                 SearchEngine.byIds("duckduckgo,bing,google"), 10, false, engineTimeout);
-        return new ConvenienceSession(browser, coordinator, UrlPolicy.off(), search::search, history);
+        return new ConvenienceSession(browser, coordinator, UrlPolicy.off(), search, history);
     }
 
     private static EngineRun run(String engine, String... urls) {

@@ -5,6 +5,7 @@ import com.aresstack.argos.convenience.ConvenienceBrowser;
 import com.aresstack.argos.convenience.ConvenienceBrowser.TabLoad;
 import com.aresstack.argos.convenience.ConvenienceBrowser.TabLoadOutcome;
 import com.aresstack.argos.convenience.ConvenienceBrowser.TabLoadRequest;
+import com.aresstack.argos.convenience.ConvenienceSession;
 import com.aresstack.argos.convenience.NavigationGate;
 import com.aresstack.argos.convenience.RegistrableDomain;
 import com.aresstack.argos.web.PageCapture;
@@ -27,10 +28,11 @@ import java.util.concurrent.TimeoutException;
  * handling and challenge recognition. An engine's alternative endpoint (DuckDuckGo Lite) is only its own in-job
  * retry, in its own tab. An engine that fails, times out or
  * shows a challenge never holds back the others; a page that loaded but could not be understood comes back as a
- * fallback capture (text and links). The sequential {@link WebSearchService#search} loop over all engines is not
+ * fallback capture (text and links). A call may name a subset of the configured engines
+ * ({@link #search(String, List)}); then only those are opened, the others are not contacted at all. The sequential {@link WebSearchService#search} loop over all engines is not
  * used here and stays as it is for the other profiles.
  */
-public final class ParallelWebSearch {
+public final class ParallelWebSearch implements ConvenienceSession.Search {
     public enum EngineStatus {
         OK, NO_RESULTS, EXTRACTION_FAILED, CHALLENGE, CONSENT_REQUIRED, TIMEOUT, NAVIGATION_FAILED,
         /** The start page loaded, but its search field could not be found or operated with real input. */
@@ -67,6 +69,8 @@ public final class ParallelWebSearch {
     private final ConvenienceBrowser browser;
     private final NavigationGate gate;
     private final List<SearchEngine> engines;
+    /** The engines of a call that names none: all configured ones, or the default selection. */
+    private final List<SearchEngine> defaults;
     private final int resultsPerEngine;
     private final boolean acceptAllConsent;
     private final long engineTimeoutMillis;
@@ -81,10 +85,25 @@ public final class ParallelWebSearch {
     public ParallelWebSearch(ConvenienceBrowser browser, NavigationGate gate, List<SearchEngine> engines,
                              int resultsPerEngine, boolean acceptAllConsent, long engineTimeoutMillis,
                              long evaluationMillis) {
+        this(browser, gate, engines, engines, resultsPerEngine, acceptAllConsent, engineTimeoutMillis, evaluationMillis);
+    }
+
+    /**
+     * @param engines  the available engines (SEARCH_ENGINES): the only ones a call may name
+     * @param defaults the engines of a call that names none, a subset of {@code engines}
+     *                 ({@link SearchEngine#defaults})
+     */
+    public ParallelWebSearch(ConvenienceBrowser browser, NavigationGate gate, List<SearchEngine> engines,
+                             List<SearchEngine> defaults, int resultsPerEngine, boolean acceptAllConsent,
+                             long engineTimeoutMillis, long evaluationMillis) {
         if (engines.isEmpty()) throw new IllegalArgumentException("At least one search engine is required");
+        if (defaults.isEmpty() || !engines.containsAll(defaults)) {
+            throw new IllegalArgumentException("The default engines must be some of the available engines");
+        }
         this.browser = browser;
         this.gate = gate;
         this.engines = List.copyOf(engines);
+        this.defaults = List.copyOf(defaults);
         this.resultsPerEngine = Math.max(1, Math.min(MAX_RESULTS_PER_ENGINE, resultsPerEngine));
         this.acceptAllConsent = acceptAllConsent;
         this.engineTimeoutMillis = Math.max(2_000, engineTimeoutMillis);
@@ -92,8 +111,9 @@ public final class ParallelWebSearch {
     }
 
     /**
-     * Environment: SEARCH_ENGINES (the engines to use, all of them in parallel; default
-     * duckduckgo,bing,google), CONVENIENCE_RESULTS_PER_ENGINE (default 10, max 30) and
+     * Environment: SEARCH_ENGINES (the engines available, searched in parallel; default
+     * duckduckgo,bing,google), the JVM property {@value SearchEngine#DEFAULT_ENGINES_PROPERTY} (the engines of a
+     * call that names none; default all available ones), CONVENIENCE_RESULTS_PER_ENGINE (default 10, max 30) and
      * SEARCH_CONSENT_ACCEPT (as for the other profiles).
      */
     public static ParallelWebSearch fromEnvironment(ConvenienceBrowser browser, NavigationGate gate) {
@@ -107,19 +127,36 @@ public final class ParallelWebSearch {
                 throw new IllegalArgumentException("CONVENIENCE_RESULTS_PER_ENGINE must be an integer: " + perEngine);
             }
         }
-        return new ParallelWebSearch(browser, gate, SearchEngine.byIds(configured == null || configured.isBlank()
-                ? SearchSettings.DEFAULT_ENGINES : configured), results,
+        List<SearchEngine> available = SearchEngine.byIds(configured == null || configured.isBlank()
+                ? SearchSettings.DEFAULT_ENGINES : configured);
+        return new ParallelWebSearch(browser, gate, available,
+                SearchEngine.defaults(System.getProperty(SearchEngine.DEFAULT_ENGINES_PROPERTY), available), results,
                 Boolean.parseBoolean(EnvironmentVariables.system().getOrDefault("SEARCH_CONSENT_ACCEPT", "false").trim()),
-                DEFAULT_ENGINE_TIMEOUT_MILLIS);
+                DEFAULT_ENGINE_TIMEOUT_MILLIS, EVALUATION_MILLIS);
     }
 
     public List<SearchEngine> engines() {
         return engines;
     }
 
-    /** One run per configured engine, in configuration order. */
+    /** The engines of a call that names none. */
+    public List<SearchEngine> defaults() {
+        return defaults;
+    }
+
+    /** One run per default engine (all configured ones unless a default selection is set), in their order. */
     public List<EngineRun> search(String query) {
+        return search(query, null);
+    }
+
+    /**
+     * One run per selected engine, in the order of the selection; without a selection (null) the default engines.
+     * The selection holds for this call only and may name any available engine, also one outside the defaults; see
+     * {@link SearchEngine#select}.
+     */
+    public List<EngineRun> search(String query, List<String> engineIds) {
         if (query == null || query.isBlank()) throw new IllegalArgumentException("Empty search query");
+        List<SearchEngine> engines = engineIds == null ? defaults : SearchEngine.select(engineIds, this.engines);
         List<TabLoadRequest> first = new ArrayList<>();
         for (SearchEngine engine : engines) {
             String url = engine.endpoints().get(0).homeUrl();
@@ -158,6 +195,21 @@ public final class ParallelWebSearch {
             // Never wait here for an engine that ran out of time; its browser steps are bounded by their own timeouts.
             workers.shutdownNow();
         }
+    }
+
+    @Override
+    public List<EngineRun> run(String query, List<String> engineIds) {
+        return search(query, engineIds);
+    }
+
+    @Override
+    public List<String> engineIds() {
+        return engines.stream().map(SearchEngine::id).toList();
+    }
+
+    @Override
+    public void checkEngines(List<String> engineIds) {
+        SearchEngine.select(engineIds, engines);
     }
 
     private EngineRun evaluate(SearchEngine engine, String query, TabSearchPages pages) {

@@ -105,7 +105,7 @@ class BrowserClosedRecoveryTest {
         try (CamoufoxBrowser browser = browser()) {
             ConvenienceSession session = new ConvenienceSession(browser,
                     new DomainCoordinator(4, System::currentTimeMillis), UrlPolicy.from(TestNetworks.LOOPBACK),
-                    query -> List.of(), null);
+                    (query, engines) -> List.of(), null);
             String page = url("/");
             Map<String, Object> first = session.openUrl(page);
             String before = String.valueOf(((List<?>) first.get("opened")).isEmpty() ? first

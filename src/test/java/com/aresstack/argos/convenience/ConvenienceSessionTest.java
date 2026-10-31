@@ -486,7 +486,7 @@ class ConvenienceSessionTest {
         sites.page("https://b.org/", page("B", "t", null));
         LocalConvenienceBrowser browser = new LocalConvenienceBrowser(sites);
         ConvenienceSession session = new ConvenienceSession(browser, coordinator, UrlPolicy.off(),
-                query -> List.of(), null);
+                (query, engines) -> List.of(), null);
         String before = (String) list(session.openUrl("https://a.org/"), "opened").get(0).get("tabId");
         assertEquals("already open", list(session.openUrl("https://a.org/"), "skipped").get(0).get("reason"));
 
@@ -511,7 +511,7 @@ class ConvenienceSessionTest {
         }
         LocalConvenienceBrowser browser = new LocalConvenienceBrowser(sites);
         ConvenienceSession session = new ConvenienceSession(browser, coordinator, UrlPolicy.off(),
-                query -> List.of(), null);
+                (query, engines) -> List.of(), null);
         List<String> ids = new ArrayList<>();
         for (int i = 0; i < 20; i++) ids.add((String) list(session.openUrl(urls.get(i)), "opened").get(0).get("tabId"));
         assertTrue(String.valueOf(list(session.openUrl(urls.get(20)), "skipped").get(0).get("reason"))

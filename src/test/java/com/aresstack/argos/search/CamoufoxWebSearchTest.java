@@ -87,6 +87,42 @@ class CamoufoxWebSearchTest {
         }
     }
 
+    @Test @Timeout(value = 160, unit = TimeUnit.SECONDS)
+    void convenienceSearchTypesIntoEachEnginesOwnTab() throws Exception {
+        Assumptions.assumeTrue(Boolean.getBoolean("argos.testCamoufox"), "Opt-in real browser smoke");
+        ArgosConfig local = ArgosConfig.fromEnvironment();
+        local.requireBrowserConfiguration();
+        List<String> searches = java.util.Collections.synchronizedList(new java.util.ArrayList<>());
+        HttpServer site = HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0);
+        site.createContext("/", exchange -> respond(exchange, exchange.getRequestURI().getPath().equals("/") ? 200 : 404,
+                exchange.getRequestURI().getPath().equals("/") ? HOME : "<html><body>404</body></html>"));
+        site.createContext("/search", exchange -> {
+            searches.add(exchange.getRequestHeaders().getFirst("Host") + " " + exchange.getRequestURI().getRawQuery());
+            respond(exchange, 200, SerpFixtures.html("generic-cards.html"));
+        });
+        site.start();
+        int port = site.getAddress().getPort();
+        try (CamoufoxBrowser browser = new CamoufoxBrowser(new ArgosConfig("127.0.0.1", 0, local.executable(),
+                local.launchOptions(), temporary.resolve("profile"), true)
+                .withNetwork(com.aresstack.argos.TestNetworks.LOOPBACK))) {
+            // Two engines on two hosts, so both start pages load at the same time under the gate.
+            ParallelWebSearch search = new ParallelWebSearch(browser,
+                    new com.aresstack.argos.convenience.DomainCoordinator(4, System::currentTimeMillis),
+                    List.of(SearchEngine.custom("http://localhost:" + port + "/"),
+                            SearchEngine.custom("http://127.0.0.1:" + port + "/")), 10, false, 20_000);
+
+            List<ParallelWebSearch.EngineRun> runs = search.search("solar");
+
+            assertEquals(List.of(ParallelWebSearch.EngineStatus.OK, ParallelWebSearch.EngineStatus.OK),
+                    runs.stream().map(ParallelWebSearch.EngineRun::status).toList(), runs.toString());
+            assertNotEquals(runs.get(0).tab(), runs.get(1).tab());
+            assertEquals(2, searches.size(), searches.toString());
+            searches.forEach(line -> assertTrue(line.matches("\\S+ q=solar&keys=t{5,}&enter=true"), line));
+        } finally {
+            site.stop(0);
+        }
+    }
+
     private static void respond(HttpExchange exchange, int status, String body) throws IOException {
         byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
         exchange.getResponseHeaders().add("Content-Type", "text/html; charset=utf-8");

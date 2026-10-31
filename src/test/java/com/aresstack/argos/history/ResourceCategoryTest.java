@@ -51,16 +51,16 @@ class ResourceCategoryTest {
         assertTrue(none.enabled());
         assertTrue(none.captureDefaults().values().stream().noneMatch(Boolean::booleanValue));
         assertEquals(8, none.captureDefaults().size());
-        SearchHistorySettings images = SearchHistorySettings.from(Map.of("ARGOS_SEARCH_HISTORY_CAPTURE_IMAGES", "TRUE",
-                "ARGOS_SEARCH_HISTORY_CAPTURE_OTHER", "true"));
+        SearchHistorySettings images = SearchHistorySettings.from(Map.of("SEARCH_HISTORY_CAPTURE_IMAGES", "TRUE",
+                "SEARCH_HISTORY_CAPTURE_OTHER", "true"));
         assertTrue(images.captureDefaults().get(ResourceCategory.IMAGES));
         assertTrue(images.captureDefaults().get(ResourceCategory.OTHER));
         assertFalse(images.captureDefaults().get(ResourceCategory.FONTS), "OTHER never implies another category");
         IllegalArgumentException invalid = assertThrows(IllegalArgumentException.class,
-                () -> SearchHistorySettings.from(Map.of("ARGOS_SEARCH_HISTORY_CAPTURE_PDF", "yes")));
-        assertTrue(invalid.getMessage().contains("ARGOS_SEARCH_HISTORY_CAPTURE_PDF"));
+                () -> SearchHistorySettings.from(Map.of("SEARCH_HISTORY_CAPTURE_PDF", "yes")));
+        assertTrue(invalid.getMessage().contains("SEARCH_HISTORY_CAPTURE_PDF"));
         assertThrows(IllegalArgumentException.class,
-                () -> SearchHistorySettings.from(Map.of("ARGOS_SEARCH_HISTORY_CAPTURE_VIDEO", "")));
+                () -> SearchHistorySettings.from(Map.of("SEARCH_HISTORY_CAPTURE_VIDEO", "")));
         // The former activation switch has no effect any more.
         assertDoesNotThrow(() -> SearchHistorySettings.from(Map.of("ARGOS_SEARCH_HISTORY_HTML", "true")));
     }

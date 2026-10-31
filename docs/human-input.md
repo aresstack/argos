@@ -10,7 +10,7 @@ Argos bedient Seiten nur mit echter Eingabe über WebDriver BiDi `input.performA
 | `HumanTyping` | plant Tastenanschläge als Zeitachse von `keyDown`/`keyUp` inkl. Shift, Überlappung und Tippfehlern. Reine Rechnung |
 | `InputDevice` | der rohe Kanal (`page.mouse()`/`page.keyboard()`): jeder Aufruf ist ein `input.performActions` |
 | `RealInput` | misst das Element, scrollt per Mausrad, prüft Verdeckung, spielt die Pläne mit absoluten Zeitmarken ab |
-| `HumanInputSettings` | Konfiguration (`ARGOS_HUMAN_*`, `ARGOS_INPUT_UNICODE`) mit festem Seed für Tests |
+| `HumanInputSettings` | Konfiguration (`HUMAN_*`, `INPUT_UNICODE`) mit festem Seed für Tests |
 
 Die Planer sind getrennt von der Ausführung, damit sie mit festem Seed deterministisch getestet werden können. Beim Abspielen wartet `RealInput` bis zur geplanten Zeitmarke (`start + at - now`), so dass die Laufzeit der BiDi-Befehle die Zeiten nicht verschiebt.
 
@@ -33,7 +33,7 @@ Die Planer sind getrennt von der Ausführung, damit sie mit festem Seed determin
 - **Shift:** Großbuchstaben und `~!@#$%^&*()_+{}|:"<>?` werden mit gedrückter Shift-Taste getippt, Shift geht 40–110 ms vorher runter und nach dem letzten Zeichen hoch. Playwrights eigenes `keyboard.type("A")` sendet nur `A` ohne Shift, sodass `shiftKey` falsch wäre.
 - **Feld leeren:** Ctrl/Cmd+A und Backspace mit menschlichen Pausen. Der alte Wert wird nicht gelesen, weil `inputValue` Marker-Events auslöst.
 - **Vor dem Absenden** (`\n` am Ende) 150–600 ms Pause, dann Enter.
-- **Tippfehler** (`ARGOS_HUMAN_TYPO_RATE`, Standard 0): Nachbartaste der QWERTY-Reihe, 220–620 ms bis zum Bemerken, Backspace, richtiges Zeichen.
+- **Tippfehler** (`HUMAN_TYPO_RATE`, Standard 0): Nachbartaste der QWERTY-Reihe, 220–620 ms bis zum Bemerken, Backspace, richtiges Zeichen.
 - **Lange Texte** werden proportional auf 25 s gestrafft; die Reihenfolge der Ereignisse bleibt gleich.
 
 ## Einzelne Tasten und Tastenkombinationen
@@ -42,7 +42,7 @@ Die Planer sind getrennt von der Ausführung, damit sie mit festem Seed determin
 
 - **Ablauf:** Modifier gehen in der angegebenen Reihenfolge mit 40–120 ms Abstand runter, die Taste wird (bei `times` mehrfach, mit menschlichen Pausen) gedrückt, die Modifier kommen in umgekehrter Reihenfolge hoch. Scheitert eine Taste, werden alle gehaltenen Modifier losgelassen, damit späterer Text nicht zu Shortcuts wird.
 - **Vorab-Prüfung:** Die ganze Kombination wird geprüft, bevor das Ziel aufgelöst, angeklickt oder eine Taste gedrückt wird: Modifier nur `Shift`, `Control`, `Alt`, `Meta`, `ControlOrMeta` (Aliasse `Ctrl`/`Strg`, `Cmd`, `Option`, `Esc`, `Return`, `Del`/`Entf`, `Up`/`Down`/`Left`/`Right`), danach genau eine benannte Taste oder ein Zeichen (`+` als Taste: `Control++`). Unbekannte Namen, ein Modifier allein, doppelte Modifier, Steuerzeichen und die WebDriver-Codepunkte U+E000–U+E05D werden abgelehnt.
-- **Unicode streng:** Ein Zeichen außerhalb des US-Layouts (z. B. `ä`) wird nur gedrückt, wenn die Startprüfung `KEY_NAMES` ergab. `insertText` ist Text, keine Taste, und wird hier nie benutzt, auch nicht mit `ARGOS_INPUT_UNICODE=insert`.
+- **Unicode streng:** Ein Zeichen außerhalb des US-Layouts (z. B. `ä`) wird nur gedrückt, wenn die Startprüfung `KEY_NAMES` ergab. `insertText` ist Text, keine Taste, und wird hier nie benutzt, auch nicht mit `INPUT_UNICODE=insert`.
 - **Browser-Shortcuts gesperrt:** Kombinationen, die Fenster oder Tab schließen oder ersetzen würden (`Control+w/q/n/t`, `Meta+w/q/n/t`, `ControlOrMeta+…`, `Alt+F4`, `Control+F4`), werden abgelehnt; dafür gibt es die Tab-Werkzeuge.
 - Nach dem Drücken wird die Seite wie nach einem Klick abgewartet; ein neu geöffneter Tab wird übernommen.
 
@@ -50,7 +50,7 @@ Die Planer sind getrennt von der Ausführung, damit sie mit festem Seed determin
 
 Playwright Core 1.62 lehnt `keyboard.down("ä")` ab (`Unknown key`) und tippt solche Zeichen in `keyboard.type` über `window.__pw_bidiInsertText`, das ein **nicht vertrauenswürdiges** `InputEvent` auslöst ([playwright4j#36](https://github.com/aresstack/playwright4j/issues/36)). BiDi selbst würde jeden Unicode-Wert als echte Taste annehmen; die eigentliche Lösung ist der Fix in Playwright4J (`keyDown`/`keyUp` mit dem Unicode-Wert über `input.performActions`).
 
-**Entscheidung (Angelo, 2026-10-25): fail closed.** Beim Browserstart prüft Argos auf einem leeren Tab, bevor eine Website geladen ist, einmal, ob Playwright `ä` als echte Taste sendet (Core 1.62 lehnt vor dem Senden ab; eine reparierte Version schickt ein harmloses `keyDown`/`keyUp` an `about:blank`). Jeder Text wird **vollständig vor dem Fokussieren, Leeren und Tippen** geprüft. Ist der echte Unicode-Pfad nicht nachgewiesen, gilt `ARGOS_INPUT_UNICODE`:
+**Entscheidung (Angelo, 2026-10-25): fail closed.** Beim Browserstart prüft Argos auf einem leeren Tab, bevor eine Website geladen ist, einmal, ob Playwright `ä` als echte Taste sendet (Core 1.62 lehnt vor dem Senden ab; eine reparierte Version schickt ein harmloses `keyDown`/`keyUp` an `about:blank`). Jeder Text wird **vollständig vor dem Fokussieren, Leeren und Tippen** geprüft. Ist der echte Unicode-Pfad nicht nachgewiesen, gilt `INPUT_UNICODE`:
 
 | Wert | Verhalten |
 | --- | --- |

@@ -17,7 +17,7 @@ import java.util.Locale;
  * keep refused redirect targets out of tool results. It resolves like the proxy does
  * ({@link NetworkPolicy#checkUrl}), so a host the proxy would refuse is refused here as well.
  *
- * <p>With {@code ARGOS_NETWORK_POLICY=off} there is no boundary, and this check only validates
+ * <p>With {@code NETWORK_POLICY=off} there is no boundary, and this check only validates
  * the URL shape.
  */
 public final class UrlPolicy {
@@ -51,17 +51,17 @@ public final class UrlPolicy {
         return settings.strictMode() ? new UrlPolicy(settings.policy(), resolver) : off();
     }
 
-    /** Public targets only, the default of {@code ARGOS_NETWORK_POLICY=strict}. */
+    /** Public targets only, the default of {@code NETWORK_POLICY=strict}. */
     public static UrlPolicy publicOnly() {
         return new UrlPolicy(NetworkPolicy.publicOnly());
     }
 
-    /** Public targets plus the given {@code ARGOS_INTRANET_ALLOW} rules (comma separated). */
+    /** Public targets plus the given {@code INTRANET_ALLOW} rules (comma separated). */
     public static UrlPolicy allowing(String intranetRules) {
         return new UrlPolicy(NetworkPolicy.parse(intranetRules));
     }
 
-    /** URL shape only, for {@code ARGOS_NETWORK_POLICY=off} and tests against local fixtures. */
+    /** URL shape only, for {@code NETWORK_POLICY=off} and tests against local fixtures. */
     public static UrlPolicy off() {
         return new UrlPolicy(null);
     }

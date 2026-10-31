@@ -19,8 +19,8 @@ class HumanInputSettingsTest {
     }
 
     @Test void readsAllSettings() {
-        Map<String, String> values = Map.of("ARGOS_HUMAN_INPUT", "careful", "ARGOS_HUMAN_SPEED", "1.5",
-                "ARGOS_HUMAN_TYPO_RATE", "0.02", "ARGOS_HUMAN_SEED", "1234", "ARGOS_INPUT_UNICODE", "Transliterate");
+        Map<String, String> values = Map.of("HUMAN_INPUT", "careful", "HUMAN_SPEED", "1.5",
+                "HUMAN_TYPO_RATE", "0.02", "HUMAN_SEED", "1234", "INPUT_UNICODE", "Transliterate");
         HumanInputSettings settings = HumanInputSettings.from(values::get);
         assertEquals(HumanInputSettings.Mode.CAREFUL, settings.mode());
         assertEquals(1.5, settings.speed());
@@ -31,10 +31,10 @@ class HumanInputSettingsTest {
 
     @Test void rejectsNonsense() {
         assertThrows(IllegalArgumentException.class,
-                () -> HumanInputSettings.from(Map.of("ARGOS_HUMAN_INPUT", "robot")::get));
+                () -> HumanInputSettings.from(Map.of("HUMAN_INPUT", "robot")::get));
         assertThrows(IllegalArgumentException.class,
-                () -> HumanInputSettings.from(Map.of("ARGOS_HUMAN_SPEED", "10")::get));
+                () -> HumanInputSettings.from(Map.of("HUMAN_SPEED", "10")::get));
         assertThrows(IllegalArgumentException.class,
-                () -> HumanInputSettings.from(Map.of("ARGOS_HUMAN_TYPO_RATE", "0.5")::get));
+                () -> HumanInputSettings.from(Map.of("HUMAN_TYPO_RATE", "0.5")::get));
     }
 }

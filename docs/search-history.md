@@ -11,16 +11,16 @@ Seitenskript aus. Ein Single-File-HTML-Archiv entsteht nur durch den ausdrückli
 
 | Variable | Standard | Bedeutung |
 |---|---|---|
-| `ARGOS_SEARCH_HISTORY` | `true` | Search History an/aus |
-| `ARGOS_SEARCH_HISTORY_CAPTURE_IMAGES` | `false` | zusätzlich `image/*` einschließlich SVG |
-| `ARGOS_SEARCH_HISTORY_CAPTURE_FONTS` | `false` | zusätzlich `font/*` und ältere Font-Typen (`application/font-woff`, `application/x-font-ttf`, `application/vnd.ms-fontobject`, …) |
-| `ARGOS_SEARCH_HISTORY_CAPTURE_AUDIO` | `false` | zusätzlich `audio/*` |
-| `ARGOS_SEARCH_HISTORY_CAPTURE_VIDEO` | `false` | zusätzlich `video/*` |
-| `ARGOS_SEARCH_HISTORY_CAPTURE_SCRIPTS` | `false` | zusätzlich JavaScript/ECMAScript (`text/javascript`, `application/javascript`, `application/x-javascript`, `text/ecmascript`, …) |
-| `ARGOS_SEARCH_HISTORY_CAPTURE_STYLES` | `false` | zusätzlich `text/css` |
-| `ARGOS_SEARCH_HISTORY_CAPTURE_PDF` | `false` | zusätzlich `application/pdf` |
-| `ARGOS_SEARCH_HISTORY_CAPTURE_OTHER` | `false` | zusätzlich alle nicht klassifizierten Typen, auch fehlender/ungültiger `Content-Type` |
-| `ARGOS_SEARCH_HISTORY_HTML_TIMEOUT_MS` | `15000` | Höchstdauer des Collectors von `browser_archive_html` (1000–60000); **kein** Aktivierungsschalter |
+| `SEARCH_HISTORY_ENABLED` | `true` | Search History an/aus |
+| `SEARCH_HISTORY_CAPTURE_IMAGES` | `false` | zusätzlich `image/*` einschließlich SVG |
+| `SEARCH_HISTORY_CAPTURE_FONTS` | `false` | zusätzlich `font/*` und ältere Font-Typen (`application/font-woff`, `application/x-font-ttf`, `application/vnd.ms-fontobject`, …) |
+| `SEARCH_HISTORY_CAPTURE_AUDIO` | `false` | zusätzlich `audio/*` |
+| `SEARCH_HISTORY_CAPTURE_VIDEO` | `false` | zusätzlich `video/*` |
+| `SEARCH_HISTORY_CAPTURE_SCRIPTS` | `false` | zusätzlich JavaScript/ECMAScript (`text/javascript`, `application/javascript`, `application/x-javascript`, `text/ecmascript`, …) |
+| `SEARCH_HISTORY_CAPTURE_STYLES` | `false` | zusätzlich `text/css` |
+| `SEARCH_HISTORY_CAPTURE_PDF` | `false` | zusätzlich `application/pdf` |
+| `SEARCH_HISTORY_CAPTURE_OTHER` | `false` | zusätzlich alle nicht klassifizierten Typen, auch fehlender/ungültiger `Content-Type` |
+| `SEARCH_HISTORY_HTML_TIMEOUT_MS` | `15000` | Höchstdauer des Collectors von `browser_archive_html` (1000–60000); **kein** Aktivierungsschalter |
 
 Die `CAPTURE_*`-Werte akzeptieren nur `true`/`false` (Groß-/Kleinschreibung egal); jeder andere Wert, auch ein leerer,
 bricht den Start mit einer Meldung ab, die die Variable nennt. Jede Variable schaltet genau eine Kategorie;
@@ -28,16 +28,16 @@ bricht den Start mit einer Meldung ab, die die Variable nennt. Jede Variable sch
 `search_history_capture_settings` für sich ändern kann (siehe unten).
 
 `ARGOS_SEARCH_HISTORY_HTML` ist **wirkungslos** (beim Start erscheint ein Hinweis, falls sie gesetzt ist). Es gibt
-keine Variable, die die HTML-Archivierung automatisch einschaltet. `ARGOS_NETWORK_BODIES` steuert weiterhin nur die
+keine Variable, die die HTML-Archivierung automatisch einschaltet. `NETWORK_BODIES` steuert weiterhin nur die
 Diagnose von `browser_network*` und hat keinen Einfluss auf die Search History.
 
-Die Search History setzt `ARGOS_PROFILE_ISOLATION=chat` voraus (Standard). Mit `single` gibt es keinen verlässlichen
+Die Search History setzt `PROFILE_ISOLATION=chat` voraus (Standard). Mit `single` gibt es keinen verlässlichen
 Chat-Schlüssel. Argos meldet dann beim Start `Search History is disabled: ...`, zeichnet nichts auf und legt **keinen**
 globalen Index an.
 
 `search_history`, `search_history_export`, `search_history_capture_settings` und `browser_archive_html` werden in den
 Profilen `compact` und `expert` **immer** veröffentlicht, damit die Werkzeugliste für ChatGPT stabil bleibt. Ist die
-Historie aus (`single` oder `ARGOS_SEARCH_HISTORY=false`), antworten alle mit einem Fehler, der den Grund und die Abhilfe nennt (`ARGOS_PROFILE_ISOLATION=chat`). Im Profil
+Historie aus (`single` oder `SEARCH_HISTORY_ENABLED=false`), antworten alle mit einem Fehler, der den Grund und die Abhilfe nennt (`PROFILE_ISOLATION=chat`). Im Profil
 `legacy` fehlen sie. Nach einem Update muss ChatGPT die Verbindung aktualisieren, damit neue Werkzeuge erscheinen.
 
 ## Architektur (`com.aresstack.argos.history`)
@@ -192,12 +192,12 @@ den Link als Markdown-Text (das Modell gibt ihn an den Nutzer weiter) und zusät
 (Name, MIME-Typ, Größe). Der Endpunkt streamt die Datei mit `Content-Disposition: attachment` und passendem
 `Content-Type` (`text/plain`, `application/x-ndjson`, `application/zip`) – für alle drei Formate.
 
-- Ohne `PUBLIC_ORIGIN` lautet der Link `http://<ARGOS_HOST>:<Port>/…` (nur lokal brauchbar).
+- Ohne `PUBLIC_ORIGIN` lautet der Link `http://<SERVER_HOST>:<Port>/…` (nur lokal brauchbar).
 - Der Endpunkt liegt außerhalb des Bearer-Filters, weil ein Browser-Download kein Token mitsendet. Zugangsnachweis
   ist die Export-ID: 256 Zufallsbits, nur im Speicher, gebunden an das `exports/`-Verzeichnis des aufrufenden Chats
   und einen von Argos vergebenen Dateinamen. Die ID enthält keinen Pfad; aufgelöst wird nur eine reguläre Datei
   direkt in diesem Verzeichnis (keine Symlinks). Unbekannte, abgelaufene und ungültige IDs: 404.
-- Aufbewahrung: `ARGOS_SEARCH_HISTORY_EXPORT_TTL_MINUTES` (Standard 60, 1–1440). Danach ist der Link ungültig und
+- Aufbewahrung: `SEARCH_HISTORY_EXPORT_TTL_MINUTES` (Standard 60, 1–1440). Danach ist der Link ungültig und
   die Datei wird gelöscht; ältere Exporte eines Chats (z. B. aus der Zeit vor einem Neustart) werden beim nächsten
   Export dieses Chats gelöscht. Nach einem Neustart sind alte Links ungültig.
 
@@ -256,7 +256,7 @@ und `search_history_export` starten den Collector nie.
 
 Der Collector ist cam-tool `kCaptureJs` (MIT), weitgehend unverändert in `page-capture.js`. Geändert wurden nur zwei
 Dinge: Er gibt sein Ergebnis an Playwrights `evaluate()` zurück statt den Qt-Callback `window[CB]` aufzurufen, und er
-wird mit `Promise.race` auf `ARGOS_SEARCH_HISTORY_HTML_TIMEOUT_MS` begrenzt. Er deklariert keine Globals und arbeitet
+wird mit `Promise.race` auf `SEARCH_HISTORY_HTML_TIMEOUT_MS` begrenzt. Er deklariert keine Globals und arbeitet
 auf einem DOM-Klon.
 
 **Bekannte Einschränkung:** Er ist **nicht unauffällig**. Er läuft im Seitenkontext und lädt Stylesheets,
@@ -273,7 +273,7 @@ Deduplizierung, Redaktion, explizites Archiv), `SearchHistoryCaptureTest` (autom
 Variablen), `SearchHistoryResourcesTest` (Tests A–J auf Speicherseite: Allowlist, optionale Kategorien einzeln,
 dynamische Daten, Grenzen und Teilantworten, Chat-Isolation, Index-Wiederaufbau, Exporte mit Manifest,
 `browser_archive_html`-Download, `search_history_capture_settings`), `network/NetworkContentCaptureTest` (Queue,
-Budget, Body-Abfrage außerhalb der Event-Handler, unabhängig von `ARGOS_NETWORK_BODIES`).
+Budget, Body-Abfrage außerhalb der Event-Handler, unabhängig von `NETWORK_BODIES`).
 
 Mit Camoufox (lokal unter Windows):
 

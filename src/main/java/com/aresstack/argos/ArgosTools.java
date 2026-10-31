@@ -32,12 +32,12 @@ public final class ArgosTools {
     private static final ObjectMapper JSON = new ObjectMapper();
     private final CamoufoxBrowser browser;
     private final WebSession web;
-    /** Optional research orchestration; null unless ARGOS_RESEARCH=true. */
+    /** Optional research orchestration; null unless RESEARCH_ENABLED=true. */
     private final ResearchTools research;
     private final ArgosBrowsingTools browsing;
     /** browser_download, browser_document, browser_open_many; null in tests without a document store. */
     private final DocumentAndBatchTools documents;
-    /** Search History of this workspace's chat; null when it is off (single profile, ARGOS_SEARCH_HISTORY=false). */
+    /** Search History of this workspace's chat; null when it is off (single profile, SEARCH_HISTORY_ENABLED=false). */
     private final SearchHistoryCapture history;
     /** The convenience profile's tools on this workspace's research session; null outside that profile. */
     private ConvenienceTools convenience;
@@ -92,7 +92,7 @@ public final class ArgosTools {
 
     public List<SyncToolSpecification> forProfile(ToolProfile profile) {
         if (profile.convenienceBased()) {
-            // Its own tool set only: no expert browser/network tools and no ResearchTools (even with ARGOS_RESEARCH).
+            // Its own tool set only: no expert browser/network tools and no ResearchTools (even with RESEARCH_ENABLED).
             if (convenience == null) throw new IllegalStateException("The convenience profile needs its research session.");
             List<SyncToolSpecification> tools = new ArrayList<>(convenience.specifications());
             TabDiagnosticTools diagnostics = new TabDiagnosticTools(browser, convenience.session());
@@ -102,7 +102,7 @@ public final class ArgosTools {
             return List.copyOf(tools);
         }
         List<SyncToolSpecification> tools = new ArrayList<>(profileTools(profile));
-        // Opt-in (ARGOS_RESEARCH=true): one-call research suits small models, so every profile gets it.
+        // Opt-in (RESEARCH_ENABLED=true): one-call research suits small models, so every profile gets it.
         if (research != null) tools.addAll(research.specifications());
         // Search History of the calling chat (per-chat profiles only); the legacy set stays unchanged.
         if (history != null && profile != ToolProfile.LEGACY) {

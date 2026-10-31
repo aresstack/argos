@@ -8,7 +8,7 @@ if (-not (Test-Path $java)) { throw 'Set JAVA_HOME to a Java 21 installation.' }
 $artifact = Join-Path $project 'build/libs/argos.jar'
 if (-not (Test-Path $artifact)) { throw 'Standalone Argos JAR missing. Run gradlew bootJar first.' }
 
-$smokeRoot = if ($env:ARGOS_SMOKE_ROOT) { $env:ARGOS_SMOKE_ROOT } else { Join-Path $project 'build' }
+$smokeRoot = if ($env:SMOKE_ROOT) { $env:SMOKE_ROOT } else { Join-Path $project 'build' }
 New-Item -ItemType Directory -Force -Path $smokeRoot | Out-Null
 $work = Join-Path $smokeRoot ('standalone-smoke-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Force -Path $work | Out-Null
@@ -21,9 +21,9 @@ $port = $portListener.LocalEndpoint.Port
 $portListener.Stop()
 $env:SERVER_PORT = [string]$port
 $env:SECURITY_MODE = 'none' # isolated loopback smoke test only; production uses central-oauth
-$env:ARGOS_PROFILE_DIR = Join-Path $work 'profile'
-$env:ARGOS_HEADLESS = 'true'
-$env:ARGOS_INTRANET_ALLOW = '127.0.0.1' # the smoke site is on loopback; Argos' own port stays blocked
+$env:BROWSER_PROFILE_DIR = Join-Path $work 'profile'
+$env:BROWSER_HEADLESS = 'true'
+$env:INTRANET_ALLOW = '127.0.0.1' # the smoke site is on loopback; Argos' own port stays blocked
 $backend = $null
 $website = $null
 $url = 'http://127.0.0.1:' + $port + '/'
@@ -101,7 +101,7 @@ try {
     }
     if ($WithCamoufox) {
         Get-CimInstance Win32_Process -Filter "name='camoufox.exe'" |
-            Where-Object { $_.CommandLine -and $_.CommandLine.Contains($env:ARGOS_PROFILE_DIR) } |
+            Where-Object { $_.CommandLine -and $_.CommandLine.Contains($env:BROWSER_PROFILE_DIR) } |
             ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
     }
     Write-Output ('SMOKE_LOGS=' + $work)

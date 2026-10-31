@@ -9,6 +9,7 @@ import java.nio.file.Path;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -116,7 +117,7 @@ class ArgosConfigTest {
 
         ArgosConfig.BrowserInstallation environment = ArgosConfig.BrowserInstallation.fromEnvironment(
                 Map.of("BROWSER_DIR", userHome.resolve("env").toString(),
-                        "ARGOS_CAMOUFOX_DISTRIBUTION_URL", "https://mirror.example/env/"), userHome, properties);
+                        "CAMOUFOX_DISTRIBUTION_URL", "https://mirror.example/env/"), userHome, properties);
         assertEquals(userHome.resolve("env").toAbsolutePath(), environment.root());
         assertEquals("https://mirror.example/env/", environment.mirror().toString());
 
@@ -139,6 +140,41 @@ class ArgosConfigTest {
             assertEquals(Path.of("D:\\Argos Browser\\camoufox"), drive.root());
             assertEquals("D:\\", drive.root().getRoot().toString());
         }
+    }
+
+    @Test
+    void readsTheNewNamesTheDeprecatedAliasesAndThePropertyFallback() throws IOException {
+        Path argosConfig = createArgosConfig("server.port=8085" + System.lineSeparator()
+                + "security.mode=none" + System.lineSeparator()
+                + "tools.profile=compact" + System.lineSeparator()
+                + "browser.headless=true" + System.lineSeparator());
+
+        // Property fallback without any variable.
+        ArgosConfig properties = ArgosConfig.fromEnvironment(EnvironmentVariables.canonical(Map.of()), userHome,
+                argosConfig);
+        assertEquals(ToolProfile.COMPACT, properties.toolProfile());
+        assertTrue(properties.headless());
+
+        // An existing AresStack webserver configuration with the old names keeps working ...
+        ArgosConfig legacy = ArgosConfig.fromEnvironment(EnvironmentVariables.canonical(Map.of(
+                "ARGOS_TOOL_PROFILE", "expert", "ARGOS_HEADLESS", "false",
+                "ARGOS_PROFILE_DIR", userHome.resolve("legacy-profile").toString())), userHome, argosConfig);
+        assertEquals(ToolProfile.EXPERT, legacy.toolProfile());
+        assertFalse(legacy.headless());
+        assertEquals(userHome.resolve("legacy-profile").toAbsolutePath(), legacy.profile());
+
+        // ... the new names alone work the same, and win over a leftover alias.
+        ArgosConfig current = ArgosConfig.fromEnvironment(EnvironmentVariables.canonical(Map.of(
+                "TOOL_PROFILE", "legacy", "ARGOS_TOOL_PROFILE", "expert", "BROWSER_HEADLESS", "false",
+                "BROWSER_PROFILE_DIR", userHome.resolve("profile").toString())), userHome, argosConfig);
+        assertEquals(ToolProfile.LEGACY, current.toolProfile());
+        assertFalse(current.headless());
+        assertEquals(userHome.resolve("profile").toAbsolutePath(), current.profile());
+
+        IllegalArgumentException invalid = assertThrows(IllegalArgumentException.class,
+                () -> ArgosConfig.fromEnvironment(EnvironmentVariables.canonical(Map.of("ARGOS_TOOL_PROFILE", "huge")),
+                        userHome, argosConfig));
+        assertTrue(invalid.getMessage().contains("TOOL_PROFILE"), invalid.getMessage());
     }
 
     private Path createArgosConfig(String content) throws IOException {

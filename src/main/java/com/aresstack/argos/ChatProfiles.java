@@ -74,7 +74,7 @@ public final class ChatProfiles {
             throw new MissingChatIdentity("This call carries no ChatGPT conversation id (_meta[\""
                     + SESSION_META_KEY + "\"]). Argos keeps one isolated browser profile per conversation and "
                     + "uses no shared default profile, so the call was refused. Clients other than ChatGPT need "
-                    + "ARGOS_PROFILE_ISOLATION=single.");
+                    + "PROFILE_ISOLATION=single.");
         }
         return new Chat(hash(session.strip()));
     }

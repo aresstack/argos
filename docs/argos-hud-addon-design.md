@@ -25,7 +25,7 @@ Vorschlag: Argos bekommt ein eigenes WebExtension-Add-on **„Argos HUD“**, da
 - die Bedienelemente in einem **eigenen kleinen Browserfenster** (Add-on-Seite) sowie im Browser-Chrome
   (Toolbar-Badge, Fenstertitel-Präfix) zeigt, **nicht in einer Sidebar** (siehe 4.4),
 - über seinen Hintergrund-Script per **Loopback-WebSocket mit Token** mit Argos spricht,
-- **opt-in** ist (`ARGOS_HUD=addon`, Standard `off`) und im Headless-Betrieb gar nicht geladen wird.
+- **opt-in** ist (`BROWSER_HUD=addon`, Standard `off`) und im Headless-Betrieb gar nicht geladen wird.
 
 Das AskAI-Werkzeugpaar `web_hud_render` / `web_hud_poll` bleibt als Schnittstelle für das Modell bzw. den
 Recherche-Agenten erhalten; nur der Transport darunter wird ausgetauscht. Das Modell merkt keinen
@@ -267,7 +267,7 @@ solange 4.1 bis 4.5 eingehalten werden. Das wird gemessen, nicht angenommen (Abs
   Format aus AskAI `ResearchHudState` übernehmen (Java 8, MIT, AresStack, also direkt kopierbar).
   `ResearchHudOverlay` und das `exposeBinding` werden **nicht** übernommen.
 - `CamoufoxBrowser`: `moz-extension:`-Seiten filtern (4.6).
-- Konfiguration: `ARGOS_HUD=off|addon` (Standard `off`), bei `ARGOS_HEADLESS=true` immer aus.
+- Konfiguration: `BROWSER_HUD=off|addon` (Standard `off`), bei `BROWSER_HEADLESS=true` immer aus.
 - Tests: Manifest-Verbotsliste, `HudBridge` (Token, Origin, Antwort auf Fremdzugriffe gleich wie 404),
   Zustand-Roundtrip, Filterung der Add-on-Seiten.
 
@@ -295,7 +295,7 @@ Ablauf wie im Signal-Regressionstest der Analyse (opt-in, lokal mit echter Camou
 
 Die Messseiten setzen ihre Listener selbst, als wäre es eine fremde Seite; Argos injiziert dafür nichts.
 Erst wenn alle Punkte gleich ausfallen, darf das Add-on als „für Seiten unsichtbar“ bezeichnet und
-`ARGOS_HUD=addon` für den Recherche-Agenten empfohlen werden.
+`BROWSER_HUD=addon` für den Recherche-Agenten empfohlen werden.
 
 ## 7. Arbeitspakete
 

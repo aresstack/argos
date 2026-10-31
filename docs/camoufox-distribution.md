@@ -34,7 +34,7 @@ manuell:
 2. **publish**: legt das Release mit beiden Archiven und `SHA256SUMS` **einmalig** an. Ein bestehendes Release wird nie
    überschrieben; weicht ein Neubau ab, bleibt das veröffentlichte Archiv maßgeblich (Hinweis im Log).
 3. **smoke** (Linux und Windows, jeweils `playwright4j.bidi.nativeBehavior=false` und `true`): prüft, dass die in Argos
-   gepinnten Prüfsummen zum Release passen (anonymer Download), lässt Argos dann **ohne** `ARGOS_CAMOUFOX_*` den Browser
+   gepinnten Prüfsummen zum Release passen (anonymer Download), lässt Argos dann **ohne** Mirror (`CAMOUFOX_DISTRIBUTION_URL`) den Browser
    herunterladen, prüfen und starten (`CamoufoxProvisionedSmokeTest`) und führt `CamoufoxBrowserTest`,
    `CamoufoxNetworkBoundaryTest` und die Konfigurations-/Installationstests gegen die Installation aus. Der Job schlägt
    fehl, wenn ein Browsertest übersprungen wurde.
@@ -105,7 +105,7 @@ Surrogatpaar) und ergänzt sie zur geerbten Prozessumgebung. Unter Linux erzeugt
 |---|---|
 | `BROWSER_LAUNCH_CONFIG` / `browser.launch-config` | eigene `launch.json` statt des eingebauten Profils; fehlt oder ist sie ungültig, startet Argos nicht und nennt die Datei |
 | `BROWSER_DIR` / `browser.install-dir` | anderer Installationsordner als `~/.argos/browser` |
-| `ARGOS_CAMOUFOX_DISTRIBUTION_URL` / `camoufox.distributionUrl` | Spiegel der Archive (`https://…/` oder `file:///…/`); die gepinnten Prüfsummen gelten weiter |
+| `CAMOUFOX_DISTRIBUTION_URL` / `camoufox.distributionUrl` | Spiegel der Archive (`https://…/` oder `file:///…/`); die gepinnten Prüfsummen gelten weiter |
 
 Umgebungsvariablen haben Vorrang vor `~/.argos/argos.properties` (oder `-Dargos.config`). Die ausführbare Datei ermittelt
 Argos immer selbst aus der verwalteten Installation unter `BROWSER_DIR`; einen eigenen Override dafür gibt es nicht.

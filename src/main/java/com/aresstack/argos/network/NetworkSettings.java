@@ -30,10 +30,10 @@ public record NetworkSettings(Mode mode, NetworkPolicy policy, UpstreamProxy ups
 
     public static NetworkSettings parse(String mode, String intranetAllow, String upstream, String upstreamDns) {
         return new NetworkSettings(
-                parseEnum(Mode.class, mode, "ARGOS_NETWORK_POLICY", "strict", "off"),
+                parseEnum(Mode.class, mode, "NETWORK_POLICY", "strict", "off"),
                 NetworkPolicy.parse(intranetAllow),
                 upstream == null || upstream.isBlank() ? null : UpstreamProxy.parse(upstream, null, null),
-                parseEnum(UpstreamDns.class, upstreamDns, "ARGOS_UPSTREAM_DNS", "local", "remote"));
+                parseEnum(UpstreamDns.class, upstreamDns, "UPSTREAM_DNS", "local", "remote"));
     }
 
     public boolean strictMode() {

@@ -58,7 +58,7 @@ public final class ArgosUnderTest implements AutoCloseable {
 
     /**
      * Starts a fresh MCP endpoint for one task; close it when the task is done. Fixture tasks search the
-     * fixture world's engine; live tasks use the engines configured for Argos (ARGOS_SEARCH_ENGINES).
+     * fixture world's engine; live tasks use the engines configured for Argos (SEARCH_ENGINES).
      */
     public Session startSession(EvalProfile profile, boolean live) throws Exception {
         browser.clear();

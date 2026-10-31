@@ -24,7 +24,7 @@ Code. Klassen- und Methodennamen sind belegt; Pfade sind relativ zum jeweiligen 
    und Globals** – also alles, was vor den Seitenskripten läuft oder in der Seite bleibt. Bevorzugt werden
    `page.content()` (Utility-Welt) mit Java-seitigem Parsen und Klicks über Bounding-Box + echte
    BiDi-Eingaben. Flüchtige, nur lesende `page.evaluate`-Aufrufe sind erlaubt, wo das nicht reicht.
-3. **Drei Werkzeugprofile** über `ARGOS_TOOL_PROFILE` / `tools.profile`: `legacy` (Standard, heutige neun
+3. **Drei Werkzeugprofile** über `TOOL_PROFILE` / `tools.profile`: `legacy` (Standard, heutige neun
    `browser_*`), `compact` (AskAI-Sechs), `expert` (Obermenge). Abschnitt 5.
 4. **Wiederverwendung:** AskAI `browser-api` (Teile) und `browser-search-analysis` sind framework-freies Java 8
    und werden **als Quellcode nach Argos übernommen** (MIT, gleicher Rechteinhaber AresStack), nicht als
@@ -47,7 +47,7 @@ Code. Klassen- und Methodennamen sind belegt; Pfade sind relativ zum jeweiligen 
 | Einstieg | `ArgosApplication.main` | `--verify-runtime` startet den Playwright4J-Treiber aus der JAR; MCP über `HttpServletStreamableServerTransportProvider` an `/`, `/health`, `/.well-known/oauth-protected-resource`. |
 | Root-Servlet | `ArgosRootMcpServlet` | GET → 405, POST/DELETE → Transport. Pyloros-kompatibel. Unverändert lassen. |
 | Auth | `ArgosMcpAuthorizationFilter` | JWT via AnAuthentia (`JwtAccessTokenValidator.forRemoteJwks`), Scope-Prüfung, kein Fallback. Fehlertext enthält kein Token. |
-| Konfiguration | `ArgosConfig.fromEnvironment` | Env vor `~/.argos/argos.properties`; liest Camoufox-Pfade aus `~/.browser-event-hub/desktop/camoufox.properties`, nie dessen Profil. Loopback-Pflicht für `SERVER_HOST`. Hier kommt `ARGOS_TOOL_PROFILE` hinzu. |
+| Konfiguration | `ArgosConfig.fromEnvironment` | Env vor `~/.argos/argos.properties`; liest Camoufox-Pfade aus `~/.browser-event-hub/desktop/camoufox.properties`, nie dessen Profil. Loopback-Pflicht für `SERVER_HOST`. Hier kommt `TOOL_PROFILE` hinzu. |
 | Werkzeuge | `ArgosTools.all()` | **9 Werkzeuge**: `browser_status`, `browser_navigate`, `browser_snapshot`, `browser_inspect`, `browser_click`, `browser_fill`, `browser_evaluate`, `browser_network`, `browser_screenshot`. Ergebnisse als JSON-Text (`ObjectMapper.writeValueAsString`), Fehler als `isError` mit `getMessage()`. |
 | Browser | `CamoufoxBrowser` | Eine `Page` (`activePage()`), `launchPersistentContext` mit `channel=moz-firefox`, `setViewportSize(null)` und weiteren `null`-Emulationen (gut: echte Fenstergeometrie). Fingerprint-Env nur `CAMOU_*`/`FONTCONFIG*` (`activePage`). |
 | Threading | `CamoufoxBrowser.onBrowser` | `newSingleThreadExecutor`, 90 s Timeout pro Aufruf. Kein Event-Pump zwischen Aufrufen (Netzwerk-Events kommen nur während Playwright-Aufrufen an). |
@@ -59,7 +59,7 @@ Code. Klassen- und Methodennamen sind belegt; Pfade sind relativ zum jeweiligen 
 | Netzwerk | `CamoufoxBrowser.record` | `onRequest/onResponse/onRequestFailed`, Ringpuffer 200 (`MAX_NETWORK_EVENTS`), Query und UserInfo entfernt, keine IDs, keine Dauer, keine Bodies. |
 | Screenshot | `CamoufoxBrowser.screenshot` | Viewport-PNG, `browsingContext.captureScreenshot`; unsichtbar. |
 | Tests | `ArgosToolsTest` (zählt 9 Werkzeuge, Reihenfolge `browser_status` zuerst), `CamoufoxBrowserTest` (opt-in `-PtestCamoufox=true`, lokaler `HttpServer`), `ArgosMcpAuthorizationFilterTest` | Profil-Einführung muss `ArgosToolsTest` für `legacy` unverändert grün lassen. |
-| CI | `.github/workflows/build-release.yml` | Baut Playwright4J `1c11fe9` selbst, `test argosZip`, Linux-Health + `GET / → 405`, Windows-Smoke prüft `tools/list` auf `browser_navigate` und `browser_screenshot`. **Bei `ARGOS_TOOL_PROFILE=compact` würde der Windows-Smoke fehlschlagen → CI läuft mit Standardprofil `legacy`; zusätzlicher Smoke für `compact` empfohlen.** |
+| CI | `.github/workflows/build-release.yml` | Baut Playwright4J `1c11fe9` selbst, `test argosZip`, Linux-Health + `GET / → 405`, Windows-Smoke prüft `tools/list` auf `browser_navigate` und `browser_screenshot`. **Bei `TOOL_PROFILE=compact` würde der Windows-Smoke fehlschlagen → CI läuft mit Standardprofil `legacy`; zusätzlicher Smoke für `compact` empfohlen.** |
 | Packaging | `bootJar` → `argos.jar`, `verifyStandaloneRuntime`, `packageArgos`, `argosZip` | Neue Abhängigkeiten (jsoup, PDFBox) sind normale JARs in `BOOT-INF/lib`, unkritisch. |
 
 Bekannte Beobachtungen 1–7 aus dem Auftrag sind alle bestätigt. Zusätzlich gefunden:
@@ -251,7 +251,7 @@ Analyse-Pakete kennen Playwright nicht (testbar ohne Browser über HTML-Fixtures
 
 ### 5.2 Werkzeugprofile
 
-Konfiguration: `ARGOS_TOOL_PROFILE` (Env) bzw. `tools.profile` (Properties), Werte `legacy` (Standard),
+Konfiguration: `TOOL_PROFILE` (Env) bzw. `tools.profile` (Properties), Werte `legacy` (Standard),
 `compact`, `expert`. Ungültiger Wert → Startfehler. `serverInfo` meldet das Profil im Versionsstring nicht
 (Clients cachen), aber `browser_status`/`web_status` zeigt es.
 
@@ -355,7 +355,7 @@ lokalen Testport vom Proxy abgewiesen wird.
 - Pref-Namen und -Wirkung sind gegen die Firefox-Version von Camoufox zu verifizieren (Testfall:
   Redirect öffentliche → private Adresse, `<img>` auf `127.0.0.1`, Rebinding-Host mit TTL 0, WebRTC).
 - Falls die Messung zeigt, dass ein Pref ignoriert wird, ist das ein Blocker für den Start mit
-  `ARGOS_NETWORK_POLICY=strict`, keine stille Degradation.
+  `NETWORK_POLICY=strict`, keine stille Degradation.
 
 Die Vorher-/Nachher-URL-Checks aus 5.3 bleiben, aber nur für verständliche Fehlermeldungen.
 
@@ -392,7 +392,7 @@ genug für `argos.jar`.
 | R6 | Parallelität mit Single-Thread-Executor | `browser_open_many` wäre nur sequenziell | Messung mit verzögertem lokalem Server: N Tabs, `navigate(COMMIT)` nacheinander, dann Bereitschaft je Tab; Laufzeit < N × Einzelzeit nachweisen. Sonst sequenziell und so dokumentieren. Kein zweiter Playwright-Thread. | AP F |
 | R7 | Kein Idle-Event-Pump | Netzwerk-Events/Popups stauen sich zwischen Aufrufen | Pump aus `BrowserSessionActor` übernehmen, Zeitscheiben ≤ 250 ms | AP A/G |
 | R8 | Fehlertexte aus Playwright enthalten URLs mit Tokens | Geheimnisse im Werkzeugergebnis | zentrale `ErrorText.safe(e)`: erste Zeile, Query-Redaction, keine Header | Querschnitt |
-| R9 | CI-Smoke prüft feste Werkzeugnamen | Profilwechsel bricht CI | Standard `legacy`; zusätzlicher Smoke-Schritt mit `ARGOS_TOOL_PROFILE=compact` prüft `web_search` | Profil-Thread |
+| R9 | CI-Smoke prüft feste Werkzeugnamen | Profilwechsel bricht CI | Standard `legacy`; zusätzlicher Smoke-Schritt mit `TOOL_PROFILE=compact` prüft `web_search` | Profil-Thread |
 | R10 | Google-SERP reagiert empfindlich (CAPTCHA, Consent `consent.google.com`) | Suchausfälle | Google nicht an erste Stelle der Standardreihenfolge (DDG html → Bing → Google), Pausen pro Engine (`delayMillisFor`), `CHALLENGE_REQUIRED` statt Wiederholung | AP B |
 | R11 | Mehrere Threads arbeiten parallel an `ArgosTools`/`CamoufoxBrowser` | Merge-Konflikte | Profil-Thread führt `mcp/`-Pakete ein; andere Pakete ergänzen nur Methoden in `CamoufoxBrowser` mit fachlichen Namen und eigene Klassen; `legacy` nicht anfassen | alle |
 | R12 | `argos.jar`-Größe durch Parser | langsamer Start, große Releases | kein Tika-Standardpaket; PDFBox reicht zunächst | AP E |

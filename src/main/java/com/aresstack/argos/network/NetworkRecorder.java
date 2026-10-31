@@ -58,7 +58,7 @@ public final class NetworkRecorder {
     private final Map<String, NetworkEntry> byId = new LinkedHashMap<>();
     private final Map<Request, NetworkEntry> byRequest = new IdentityHashMap<>();
     private final Deque<NetworkEntry> pendingBodies = new ArrayDeque<>();
-    // Durable content capture (Search History): independent of captureBodies (ARGOS_NETWORK_BODIES), with its own
+    // Durable content capture (Search History): independent of captureBodies (NETWORK_BODIES), with its own
     // bounded queue and per-task budget; bodies are read as bytes, never cut to MAX_BODY_CHARACTERS.
     static final int MAX_PENDING_CONTENT = 64;
     static final int CONTENT_FETCHES_PER_TASK = 16;

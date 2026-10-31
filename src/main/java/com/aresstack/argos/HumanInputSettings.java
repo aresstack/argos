@@ -50,9 +50,9 @@ record HumanInputSettings(Mode mode, double speed, double typoRate, Long seed, U
     HumanInputSettings {
         if (mode == null) mode = Mode.NATURAL;
         if (unicode == null) unicode = UnicodePolicy.STRICT;
-        if (!(speed >= 0.25 && speed <= 4)) throw new IllegalArgumentException("ARGOS_HUMAN_SPEED must be 0.25 to 4");
+        if (!(speed >= 0.25 && speed <= 4)) throw new IllegalArgumentException("HUMAN_SPEED must be 0.25 to 4");
         if (!(typoRate >= 0 && typoRate <= 0.2)) {
-            throw new IllegalArgumentException("ARGOS_HUMAN_TYPO_RATE must be 0 to 0.2");
+            throw new IllegalArgumentException("HUMAN_TYPO_RATE must be 0 to 0.2");
         }
     }
 
@@ -65,7 +65,7 @@ record HumanInputSettings(Mode mode, double speed, double typoRate, Long seed, U
         return seed == null ? new SplittableRandom() : new SplittableRandom(seed);
     }
 
-    /** Reads {@code ARGOS_HUMAN_*} environment variables first, then {@code input.*} keys of argos.properties. */
+    /** Reads {@code HUMAN_*} environment variables first, then {@code input.*} keys of argos.properties. */
     static HumanInputSettings fromEnvironment() {
         Properties properties = new Properties();
         Path file = Path.of(System.getProperty("argos.config",
@@ -78,35 +78,35 @@ record HumanInputSettings(Mode mode, double speed, double typoRate, Long seed, U
             }
         }
         return from(name -> {
-            String env = System.getenv(name);
+            String env = EnvironmentVariables.system().get(name);
             if (env != null && !env.isBlank()) return env;
             return properties.getProperty(PROPERTY_KEYS.apply(name));
         });
     }
 
     private static final Function<String, String> PROPERTY_KEYS = name -> switch (name) {
-        case "ARGOS_HUMAN_INPUT" -> "input.human";
-        case "ARGOS_HUMAN_SPEED" -> "input.speed";
-        case "ARGOS_HUMAN_TYPO_RATE" -> "input.typoRate";
-        case "ARGOS_HUMAN_SEED" -> "input.seed";
-        case "ARGOS_INPUT_UNICODE" -> "input.unicode";
+        case "HUMAN_INPUT" -> "input.human";
+        case "HUMAN_SPEED" -> "input.speed";
+        case "HUMAN_TYPO_RATE" -> "input.typoRate";
+        case "HUMAN_SEED" -> "input.seed";
+        case "INPUT_UNICODE" -> "input.unicode";
         default -> name;
     };
 
     static HumanInputSettings from(Function<String, String> lookup) {
-        String mode = text(lookup, "ARGOS_HUMAN_INPUT", "natural");
-        String unicode = text(lookup, "ARGOS_INPUT_UNICODE", "strict");
-        String seed = text(lookup, "ARGOS_HUMAN_SEED", null);
+        String mode = text(lookup, "HUMAN_INPUT", "natural");
+        String unicode = text(lookup, "INPUT_UNICODE", "strict");
+        String seed = text(lookup, "HUMAN_SEED", null);
         try {
             return new HumanInputSettings(
                     Mode.valueOf(mode.toUpperCase(Locale.ROOT)),
-                    Double.parseDouble(text(lookup, "ARGOS_HUMAN_SPEED", "1")),
-                    Double.parseDouble(text(lookup, "ARGOS_HUMAN_TYPO_RATE", "0")),
+                    Double.parseDouble(text(lookup, "HUMAN_SPEED", "1")),
+                    Double.parseDouble(text(lookup, "HUMAN_TYPO_RATE", "0")),
                     seed == null ? null : Long.parseLong(seed),
                     UnicodePolicy.valueOf(unicode.toUpperCase(Locale.ROOT)));
         } catch (IllegalArgumentException invalid) {
-            throw new IllegalArgumentException("Invalid human input setting (ARGOS_HUMAN_INPUT=off|natural|careful, "
-                    + "ARGOS_INPUT_UNICODE=strict|transliterate|insert, numbers for speed, typo rate and seed): "
+            throw new IllegalArgumentException("Invalid human input setting (HUMAN_INPUT=off|natural|careful, "
+                    + "INPUT_UNICODE=strict|transliterate|insert, numbers for speed, typo rate and seed): "
                     + invalid.getMessage(), invalid);
         }
     }

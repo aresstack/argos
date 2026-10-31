@@ -93,7 +93,7 @@ public final class CamoufoxInstaller {
         this.target = target;
     }
 
-    /** The one installer of this process: {@code ~/.argos/browser}, or {@code ARGOS_CAMOUFOX_DISTRIBUTION_URL}. */
+    /** The one installer of this process: {@code ~/.argos/browser}, or {@code CAMOUFOX_DISTRIBUTION_URL}. */
     public static synchronized CamoufoxInstaller shared(Path root, URI mirror) {
         if (shared == null || !shared.root.equals(root.toAbsolutePath().normalize())) {
             CamoufoxDistribution distribution = CamoufoxDistribution.builtIn();

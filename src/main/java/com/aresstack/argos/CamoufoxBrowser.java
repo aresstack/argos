@@ -367,7 +367,7 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
                 for (String key : prefs.keySet()) {
                     if (FirefoxNetworkPrefs.ownedPrefixes().stream().anyMatch(key::startsWith)) {
                         throw new IllegalArgumentException("launch.json sets " + key + ", but Argos owns the "
-                                + "browser network settings. Configure a browser proxy as ARGOS_UPSTREAM_PROXY.");
+                                + "browser network settings. Configure a browser proxy as UPSTREAM_PROXY.");
                     }
                 }
                 // Fail closed: no proxy, no browser.
@@ -375,7 +375,7 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
                 proxy.protectLoopbackPort(config.port());
                 prefs.putAll(FirefoxNetworkPrefs.forLocalSocks(proxy.port()));
             } else {
-                System.err.println("ARGOS_NETWORK_POLICY=off: Camoufox connects directly and can reach "
+                System.err.println("NETWORK_POLICY=off: Camoufox connects directly and can reach "
                         + "loopback and intranet services.");
             }
             List<String> args = launch.args();
@@ -531,7 +531,7 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
         if (network.upstream() == null) return network.withUpstream(fromLaunch);
         if (!network.upstream().equals(fromLaunch)) {
             throw new IllegalArgumentException("launch.json proxy " + fromLaunch
-                    + " differs from ARGOS_UPSTREAM_PROXY " + network.upstream());
+                    + " differs from UPSTREAM_PROXY " + network.upstream());
         }
         return network;
     }

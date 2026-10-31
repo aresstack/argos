@@ -12,7 +12,7 @@ import java.util.function.Supplier;
 /**
  * Decides per connection, on the resolved addresses, whether the browser may connect.
  *
- * <p>Rules use the {@code ARGOS_INTRANET_ALLOW} syntax of the web_* URL check, comma separated:
+ * <p>Rules use the {@code INTRANET_ALLOW} syntax of the web_* URL check, comma separated:
  * {@code wiki.firma.local} (exact host), {@code *.firma.local} (sub-domains), {@code 10.20.0.0/16} or
  * {@code 192.168.1.5} (resolved addresses), plus {@code wiki.firma.local@10.20.0.0/16} (host only at
  * that range). A host rule admits only intranet space (private, unique-local, CGNAT); loopback,
@@ -118,7 +118,7 @@ public final class NetworkPolicy {
                     : kind == AddressClass.LOCAL_INTERFACE ? " (this machine's own address; a host rule is not enough,"
                             + " allow it with a range rule such as " + host + "@" + address.getHostAddress() + "/"
                             + (address.getAddress().length == 4 ? 32 : 128) + ")"
-                    : " (allow it explicitly with ARGOS_INTRANET_ALLOW)";
+                    : " (allow it explicitly with INTRANET_ALLOW)";
             return Decision.blocked(kind.name().toLowerCase(Locale.ROOT).replace('_', '-')
                     + " address " + address.getHostAddress() + hint);
         }

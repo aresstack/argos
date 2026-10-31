@@ -77,8 +77,8 @@ jobs:
           unzip -l build/distributions/argos-package.zip | grep -q 'argos.jar'
           java -jar build/package/argos.jar --verify-runtime | grep -F ARGOS_RUNTIME_OK
           SERVER_PORT=18082 SECURITY_MODE=none java -jar build/package/argos.jar > "$RUNNER_TEMP/argos.log" 2>&1 &
-          ARGOS_PID=$!
-          trap 'kill "$ARGOS_PID" 2>/dev/null || true' EXIT
+          argos_pid=$!
+          trap 'kill "$argos_pid" 2>/dev/null || true' EXIT
           for attempt in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:18082/health | grep -q '"UP"'; then
               echo 'Argos JAR health check passed'

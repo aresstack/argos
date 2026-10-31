@@ -1,5 +1,7 @@
 package com.aresstack.argos.history;
 
+import com.aresstack.argos.EnvironmentVariables;
+
 import java.io.IOException;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
@@ -24,7 +26,7 @@ import java.util.regex.Pattern;
  * token). It maps to the exports directory of the chat whose tool call created it plus a file name Argos chose; the
  * id never contains a path, and resolution only ever opens a regular file directly inside that one directory, so an
  * id can neither reach another chat's exports nor any other file. Ids live in memory only and expire after the
- * retention ({@code ARGOS_SEARCH_HISTORY_EXPORT_TTL_MINUTES}, default 60, 1-1440); expired exports are deleted, and
+ * retention ({@code SEARCH_HISTORY_EXPORT_TTL_MINUTES}, default 60, 1-1440); expired exports are deleted, and
  * leftover exports of a chat older than the retention (for example from before a restart) are deleted on its next
  * export.
  */
@@ -60,7 +62,7 @@ public final class SearchHistoryDownloads {
         SearchHistoryDownloads current = shared;
         if (current == null) {
             synchronized (SearchHistoryDownloads.class) {
-                if (shared == null) shared = new SearchHistoryDownloads(retention(System.getenv()), Clock.systemUTC());
+                if (shared == null) shared = new SearchHistoryDownloads(retention(EnvironmentVariables.system()), Clock.systemUTC());
                 current = shared;
             }
         }
@@ -68,10 +70,10 @@ public final class SearchHistoryDownloads {
     }
 
     static Duration retention(Map<String, String> environment) {
-        String configured = environment.getOrDefault("ARGOS_SEARCH_HISTORY_EXPORT_TTL_MINUTES", "").strip();
+        String configured = environment.getOrDefault("SEARCH_HISTORY_EXPORT_TTL_MINUTES", "").strip();
         if (configured.isEmpty()) return DEFAULT_RETENTION;
         if (!configured.matches("\\d{1,4}")) {
-            throw new IllegalArgumentException("ARGOS_SEARCH_HISTORY_EXPORT_TTL_MINUTES must be minutes: " + configured);
+            throw new IllegalArgumentException("SEARCH_HISTORY_EXPORT_TTL_MINUTES must be minutes: " + configured);
         }
         return Duration.ofMinutes(Math.max(1, Math.min(1440, Integer.parseInt(configured))));
     }

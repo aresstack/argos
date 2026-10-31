@@ -1,10 +1,10 @@
 # Convenience-Profil
 
-`ARGOS_TOOL_PROFILE=convenience` wählt dieses Profil. Standard (Variable fehlt oder leer) ist `developer`, das alle Convenience-Werkzeuge enthält (siehe unten). Es ist ein eigener, klar getrennter Pfad (`com.aresstack.argos.convenience`, `search.ParallelWebSearch`, `ConvenienceTools`). `legacy`, `compact` und `expert` bleiben unverändert, ebenso die sequenzielle Suche (`WebSearchService.search`) dieser Profile.
+`TOOL_PROFILE=convenience` wählt dieses Profil. Standard (Variable fehlt oder leer) ist `developer`, das alle Convenience-Werkzeuge enthält (siehe unten). Es ist ein eigener, klar getrennter Pfad (`com.aresstack.argos.convenience`, `search.ParallelWebSearch`, `ConvenienceTools`). `legacy`, `compact` und `expert` bleiben unverändert, ebenso die sequenzielle Suche (`WebSearchService.search`) dieser Profile.
 
 ## Werkzeuge
 
-Es gibt diese neun Werkzeuge und `web_screenshot`, dazu `search_history` und `search_history_export`, wenn die Search History aktiv ist. Expert-Browser- und Netzwerkwerkzeuge sind nicht dabei, und `ResearchTools` fehlen auch mit `ARGOS_RESEARCH=true`.
+Es gibt diese neun Werkzeuge und `web_screenshot`, dazu `search_history` und `search_history_export`, wenn die Search History aktiv ist. Expert-Browser- und Netzwerkwerkzeuge sind nicht dabei, und `ResearchTools` fehlen auch mit `RESEARCH_ENABLED=true`.
 
 | Werkzeug | Parameter |
 | --- | --- |
@@ -31,7 +31,7 @@ Die MCP-Serverinstruktion (nur in diesem Profil) lautet: *Every page response in
 
 ## web_search
 
-1. Alle konfigurierten Suchmaschinen laufen gleichzeitig, jede in einem neuen Tab. `ARGOS_SEARCH_ENGINES` gibt die Menge an (Standard `duckduckgo,bing,google`), keine Fallback-Reihenfolge, und keine Suchmaschine wird übersprungen.
+1. Alle konfigurierten Suchmaschinen laufen gleichzeitig, jede in einem neuen Tab. `SEARCH_ENGINES` gibt die Menge an (Standard `duckduckgo,bing,google`), keine Fallback-Reihenfolge, und keine Suchmaschine wird übersprungen.
 2. Die erste Navigation aller Suchmaschinen ist ein gemeinsamer paralleler Ladevorgang (Budget 20 s). Danach wertet jede Suchmaschine ihre Seite mit dem unveränderten `WebSearchService` aus, beschränkt auf diese eine Suchmaschine (Budget 15 s): Extraktion, Consent-Klick über echte BiDi-Eingabe und Challenge-Erkennung.
 3. DuckDuckGo Lite ist nur der Wiederholungsversuch innerhalb des DuckDuckGo-Jobs und läuft im DuckDuckGo-Tab.
 4. Status je Suchmaschine: `OK`, `NO_RESULTS`, `EXTRACTION_FAILED`, `CHALLENGE`, `CONSENT_REQUIRED`, `TIMEOUT` oder `NAVIGATION_FAILED`.
@@ -39,7 +39,7 @@ Die MCP-Serverinstruktion (nur in diesem Profil) lautet: *Every page response in
 6. Die Gesamtsuche hat den Status `COMPLETE`, `PARTIAL` oder `FAILED`.
 7. Die Ergebnisse werden deterministisch verschränkt: zuerst Rang 1 jeder Suchmaschine in Konfigurationsreihenfolge, dann Rang 2 und so weiter. Es gibt keinen Re-Ranker.
 8. Doppelte werden nur bei exakt gleicher URL-Zeichenkette zusammengeführt. Jedes Ergebnis trägt `sources[{engine, rank}]`.
-9. `ARGOS_CONVENIENCE_RESULTS_PER_ENGINE` legt die Zahl der Ergebnisse je Suchmaschine fest (Standard 10, höchstens 30).
+9. `CONVENIENCE_RESULTS_PER_ENGINE` legt die Zahl der Ergebnisse je Suchmaschine fest (Standard 10, höchstens 30).
 10. Zu Beginn der nächsten Suche schließen sich die Suchmaschinen-Tabs der vorherigen Suche.
 11. Search History: Jeder `web_search`-Aufruf erzeugt genau ein Ereignis. Es enthält alle Suchmaschinen mit Status als Provider und die verschränkte Trefferliste. Zusätzliche Seitenanfragen gibt es dafür nicht.
 
@@ -134,12 +134,12 @@ Echte Suchmaschinen prüft nur die Abnahme über ChatGPT.
 - Hintergrund-Tabs können von Firefox gedrosselt werden.
 - Argos vergibt den nächsten Slot einer Domain sofort nach der Freigabe (gemessen: ~30 ms). Danach braucht Firefox im Browsertest unter Windows für den dritten neuen Tab teils 2–3 s zusätzlich: Mal kommt die Anfrage später beim Server an, mal committet Firefox eine schon vollständig empfangene Antwort später. Vermutete, noch unbestätigte Ursache: Site-Isolation (Fission) startet je Site einen neuen Content-Prozess. Argos ändert dafür keine Firefox-Prefs, weil das auch die anderen Profile beträfe.
 - Anders als `web_read` gibt es kein zweites Lesen von „Loading…“-Seiten (Single-Page-Apps).
-- Ein Consent-Klick in einem Hintergrund-Tab ist auf echtem Camoufox noch nicht geprüft. Er geschieht nur mit `ARGOS_SEARCH_CONSENT_ACCEPT=true` oder bei „Ablehnen“-Schaltflächen.
+- Ein Consent-Klick in einem Hintergrund-Tab ist auf echtem Camoufox noch nicht geprüft. Er geschieht nur mit `SEARCH_CONSENT_ACCEPT=true` oder bei „Ablehnen“-Schaltflächen.
 - Die Tab-, Such- und Link-Register leben im Speicher des Chat-Workspaces und gehen bei Idle-Shutdown oder Neustart verloren. Alte IDs werden dann als unbekannt abgelehnt.
 
 ## Screenshot and the developer profile
 
-`web_screenshot` (tabId, mode viewport|full) is part of convenience. `ARGOS_TOOL_PROFILE=developer` publishes all
+`web_screenshot` (tabId, mode viewport|full) is part of convenience. `TOOL_PROFILE=developer` publishes all
 convenience tools plus `web_evaluate`, `web_inspect`, `web_extract`, `web_network`, `web_network_detail`,
 `web_network_json`, `web_network_har` and `web_network_clear`. They reuse the expert implementations and the one
 NetworkRecorder, but accept only tab ids opened by the convenience tools; the current browser tab is never used

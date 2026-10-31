@@ -24,7 +24,7 @@ Wie im AskAI-Research-Plugin (`ResearchAgentSessionFactory`: `getWorkspaceDirect
     contexts/context-2.cookies.json  Cookies des User-Contexts (über das Protokoll gelesen/geschrieben)
 ```
 
-- Je Unterhaltung läuft ein Camoufox. Höchstens `ARGOS_MAX_BROWSERS` (Standard 2) Browser laufen gleichzeitig: Bevor ein weiterer startet, wird der am längsten ungenutzte vollständig beendet. Nach `ARGOS_BROWSER_IDLE_MINUTES` ohne Aufruf wird ein Browser ebenfalls beendet. Das Profil bleibt erhalten.
+- Je Unterhaltung läuft ein Camoufox. Höchstens `MAX_BROWSERS` (Standard 2) Browser laufen gleichzeitig: Bevor ein weiterer startet, wird der am längsten ungenutzte vollständig beendet. Nach `BROWSER_IDLE_MINUTES` ohne Aufruf wird ein Browser ebenfalls beendet. Das Profil bleibt erhalten.
 - `browser_context_new` legt im Browser der Unterhaltung einen WebDriver-BiDi-User-Context an (Playwright `browser.newContext()`, in Firefox ein Container) mit eigenen Cookies, Storage und Tabs. `browser_context_select` wechselt, `browser_contexts` listet. Kontext-IDs vergibt der Server. Unbekannte IDs und IDs anderer Unterhaltungen werden abgelehnt.
 - Persistenz: Firefox speichert Container im Profil (`containers.json`, Cookies mit `userContextId`). Playwright entfernt den Container aber beim Schließen des Kontexts (`browser.removeUserContext`) und kann nach einem Neustart keinen vorhandenen Container übernehmen. Deshalb sichert Argos die Cookies jedes zusätzlichen Kontexts nach jedem Aufruf über das Protokoll (`context.cookies()`) und lädt sie beim Neuanlegen wieder (`addCookies`). localStorage übersteht einen Neustart nicht.
 
@@ -32,10 +32,10 @@ Wie im AskAI-Research-Plugin (`ResearchAgentSessionFactory`: `getWorkspaceDirect
 
 | Variable | Property | Standard |
 |---|---|---|
-| `ARGOS_PROFILE_ISOLATION` | `browser.profile-isolation` | `chat`; `single` = altes Einzelprofil `ARGOS_PROFILE_DIR` für Clients ohne `openai/session` (z. B. Claude) |
-| `ARGOS_CHAT_PROFILES_DIR` | `browser.chat-profiles` | `~/.argos/profiles/chats` |
-| `ARGOS_MAX_BROWSERS` | `browser.max-browsers` | `2` (je Browser ein Camoufox-Prozess plus ein Playwright4J-GraalJS-Treiber in der Argos-JVM) |
-| `ARGOS_BROWSER_IDLE_MINUTES` | `browser.idle-minutes` | `10`; 0 = nie wegen Leerlauf beenden |
+| `PROFILE_ISOLATION` | `browser.profile-isolation` | `chat`; `single` = altes Einzelprofil `BROWSER_PROFILE_DIR` für Clients ohne `openai/session` (z. B. Claude) |
+| `CHAT_PROFILES_DIR` | `browser.chat-profiles` | `~/.argos/profiles/chats` |
+| `MAX_BROWSERS` | `browser.max-browsers` | `2` (je Browser ein Camoufox-Prozess plus ein Playwright4J-GraalJS-Treiber in der Argos-JVM) |
+| `BROWSER_IDLE_MINUTES` | `browser.idle-minutes` | `10`; 0 = nie wegen Leerlauf beenden |
 
 ## Diagnose
 
@@ -45,7 +45,7 @@ und Seiteninhalte werden nicht geloggt.
 
 ## Abnahme mit dem echten ChatGPT-Plugin
 
-1. Argos von `develop` starten (Standard `ARGOS_PROFILE_ISOLATION=chat`) und in ChatGPT die Verbindung aktualisieren,
+1. Argos von `develop` starten (Standard `PROFILE_ISOLATION=chat`) und in ChatGPT die Verbindung aktualisieren,
    damit die neuen Tools erscheinen.
 2. Unterhaltung A: zwei beliebige Tools nacheinander aufrufen lassen, z. B. `web_open https://example.org` und `web_read`.
    Im Log müssen beide Zeilen denselben `chat=`-Wert und `context=start` zeigen (Kriterien 1 und 2).
@@ -59,4 +59,4 @@ und Seiteninhalte werden nicht geloggt.
    Mit `browser_context_select start` zurückwechseln: Dort ist das erste Konto angemeldet (Kriterium 4).
 7. In B `browser_context_select context-2` aufrufen: Das muss mit einem Fehler „Unknown context“ enden (Kriterium 5).
 8. Aus einem Client ohne `openai/session` (z. B. MCP Inspector oder Claude) ein Tool aufrufen: Fehler mit Hinweis auf `openai/session` (Kriterium 6).
-9. Regressionen: die bisherigen Abnahmeskripte mit `ARGOS_PROFILE_ISOLATION=single` ausführen (Kriterium 7).
+9. Regressionen: die bisherigen Abnahmeskripte mit `PROFILE_ISOLATION=single` ausführen (Kriterium 7).

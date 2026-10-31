@@ -124,7 +124,7 @@ public final class WebSearchService {
                 }
                 if (verdict.consentRequired()) {
                     attempts.add(new Attempt(host, AttemptOutcome.CONSENT_REQUIRED,
-                            "consent banner offers only 'accept all' (ARGOS_SEARCH_CONSENT_ACCEPT=true allows it)"));
+                            "consent banner offers only 'accept all' (SEARCH_CONSENT_ACCEPT=true allows it)"));
                     break; // controlled stop for this provider; its other endpoints show the same wall
                 }
                 SearchResultExtractor.Extraction extraction = verdict.extraction();

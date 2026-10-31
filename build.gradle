@@ -64,8 +64,8 @@ tasks.named('test') {
     }
     def provisionedTests = providers.gradleProperty('testProvisionedCamoufox')
             .map { it.trim().isEmpty() || it.trim().toBoolean() }.orElse(false).get()
-    if (!provisionedTests && !System.getenv('ARGOS_CAMOUFOX_DISTRIBUTION_URL')) {
-        environment 'ARGOS_CAMOUFOX_DISTRIBUTION_URL',
+    if (!provisionedTests && !System.getenv('CAMOUFOX_DISTRIBUTION_URL')) {
+        environment 'CAMOUFOX_DISTRIBUTION_URL',
                 layout.buildDirectory.dir('no-camoufox-download').get().asFile.toURI().toString()
     }
     systemProperty 'argos.testProvisionedCamoufox', String.valueOf(provisionedTests)
@@ -148,7 +148,7 @@ tasks.register('evalModels', JavaExec) {
     description = 'Run the Argos task set with a language model (see docs/model-evaluation.md)'
     classpath = sourceSets.eval.runtimeClasspath
     mainClass = 'com.aresstack.argos.eval.EvalMain'
-    // -Peval.model=qwen3:8b -Peval.profile=compact ... become -Dargos.eval.model=... (environment ARGOS_EVAL_* also works).
+    // -Peval.model=qwen3:8b -Peval.profile=compact ... become -Dargos.eval.model=... (environment EVAL_* also works).
     providers.gradlePropertiesPrefixedBy('eval.').get().each { key, value ->
         systemProperty "argos.${key}", value
     }

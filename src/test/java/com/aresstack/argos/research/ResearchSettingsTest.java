@@ -17,9 +17,9 @@ class ResearchSettingsTest {
 
     @Test
     void readsBudgetAndClampsIt() {
-        ResearchSettings settings = ResearchSettings.from(Map.of("ARGOS_RESEARCH", "TRUE",
-                "ARGOS_RESEARCH_MAX_PAGES", "500", "ARGOS_RESEARCH_MAX_SECONDS", "60",
-                "ARGOS_RESEARCH_MIN_SITES", "9"));
+        ResearchSettings settings = ResearchSettings.from(Map.of("RESEARCH_ENABLED", "TRUE",
+                "RESEARCH_MAX_PAGES", "500", "RESEARCH_MAX_SECONDS", "60",
+                "RESEARCH_MIN_SITES", "9"));
         assertTrue(settings.enabled());
         assertEquals(50, settings.budget().maxPagesRead());
         assertEquals(Duration.ofSeconds(60), settings.budget().maxDuration());
@@ -28,8 +28,8 @@ class ResearchSettingsTest {
 
     @Test
     void rejectsInvalidValues() {
-        assertThrows(IllegalArgumentException.class, () -> ResearchSettings.from(Map.of("ARGOS_RESEARCH", "yes")));
+        assertThrows(IllegalArgumentException.class, () -> ResearchSettings.from(Map.of("RESEARCH_ENABLED", "yes")));
         assertThrows(IllegalArgumentException.class,
-                () -> ResearchSettings.from(Map.of("ARGOS_RESEARCH_MAX_PAGES", "many")));
+                () -> ResearchSettings.from(Map.of("RESEARCH_MAX_PAGES", "many")));
     }
 }

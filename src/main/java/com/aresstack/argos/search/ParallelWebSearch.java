@@ -1,5 +1,6 @@
 package com.aresstack.argos.search;
 
+import com.aresstack.argos.EnvironmentVariables;
 import com.aresstack.argos.convenience.ConvenienceBrowser;
 import com.aresstack.argos.convenience.ConvenienceBrowser.TabLoad;
 import com.aresstack.argos.convenience.ConvenienceBrowser.TabLoadOutcome;
@@ -73,24 +74,24 @@ public final class ParallelWebSearch {
     }
 
     /**
-     * Environment: ARGOS_SEARCH_ENGINES (the engines to use, all of them in parallel; default
-     * duckduckgo,bing,google), ARGOS_CONVENIENCE_RESULTS_PER_ENGINE (default 10, max 30) and
-     * ARGOS_SEARCH_CONSENT_ACCEPT (as for the other profiles).
+     * Environment: SEARCH_ENGINES (the engines to use, all of them in parallel; default
+     * duckduckgo,bing,google), CONVENIENCE_RESULTS_PER_ENGINE (default 10, max 30) and
+     * SEARCH_CONSENT_ACCEPT (as for the other profiles).
      */
     public static ParallelWebSearch fromEnvironment(ConvenienceBrowser browser, NavigationGate gate) {
-        String configured = System.getenv("ARGOS_SEARCH_ENGINES");
-        String perEngine = System.getenv("ARGOS_CONVENIENCE_RESULTS_PER_ENGINE");
+        String configured = EnvironmentVariables.system().get("SEARCH_ENGINES");
+        String perEngine = EnvironmentVariables.system().get("CONVENIENCE_RESULTS_PER_ENGINE");
         int results = DEFAULT_RESULTS_PER_ENGINE;
         if (perEngine != null && !perEngine.isBlank()) {
             try {
                 results = Integer.parseInt(perEngine.trim());
             } catch (NumberFormatException invalid) {
-                throw new IllegalArgumentException("ARGOS_CONVENIENCE_RESULTS_PER_ENGINE must be an integer: " + perEngine);
+                throw new IllegalArgumentException("CONVENIENCE_RESULTS_PER_ENGINE must be an integer: " + perEngine);
             }
         }
         return new ParallelWebSearch(browser, gate, SearchEngine.byIds(configured == null || configured.isBlank()
                 ? SearchSettings.DEFAULT_ENGINES : configured), results,
-                Boolean.parseBoolean(System.getenv().getOrDefault("ARGOS_SEARCH_CONSENT_ACCEPT", "false").trim()),
+                Boolean.parseBoolean(EnvironmentVariables.system().getOrDefault("SEARCH_CONSENT_ACCEPT", "false").trim()),
                 DEFAULT_ENGINE_TIMEOUT_MILLIS);
     }
 

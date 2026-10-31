@@ -462,7 +462,7 @@ class SearchHistoryResourcesTest {
                 Duration.ofMinutes(1), java.time.Clock.systemUTC())).specifications().stream()
                 .filter(t -> t.tool().name().equals("search_history_capture_settings")).findFirst().orElseThrow();
         String shown = call(tool, Map.of());
-        assertTrue(shown.contains("- pdf: on (server setting ARGOS_SEARCH_HISTORY_CAPTURE_PDF)"), shown);
+        assertTrue(shown.contains("- pdf: on (server setting SEARCH_HISTORY_CAPTURE_PDF)"), shown);
         assertTrue(shown.contains("- images: off"), shown);
 
         String changed = call(tool, Map.of("set", Map.of("images", true, "pdf", false)));

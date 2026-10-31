@@ -409,7 +409,7 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
     }
 
     /** Resolve an explicit tab without changing which tab is current. */
-    private Page pageFor(String tabId) throws Exception {
+    Page pageFor(String tabId) throws Exception {
         Page current = activePage();
         return tabId == null || tabId.isBlank() ? current : tabs.get(tabId);
     }
@@ -2963,7 +2963,7 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
      * a key or button going down and up (the engine ran out of time) releases what it holds first, so the tab is not
      * left with Control or the mouse button held down.
      */
-    private InputDevice inTurns(Page page) {
+    InputDevice inTurns(Page page) {
         InputDevice direct = InputDevice.of(page);
         return new InputDevice() {
             private long clock;

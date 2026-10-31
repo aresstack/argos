@@ -289,6 +289,73 @@ class ConvenienceBrowserTest {
     }
 
     /**
+     * #80 review: a typing flow stopped while Shift and the left mouse button are down lets go of both before it
+     * gives up, even with the worker's interrupt flag set. The tab then takes plain input again (no Shift, no drag),
+     * and the other tab never sees any of it.
+     */
+    @Test @Timeout(value = 240, unit = TimeUnit.SECONDS)
+    @SuppressWarnings("unchecked")
+    void aStoppedTypingFlowReleasesWhatItHolds() throws Exception {
+        Assumptions.assumeTrue(Boolean.getBoolean("argos.testCamoufox"), "Opt-in real browser test");
+        ArgosConfig local = ArgosConfig.fromEnvironment();
+        local.requireBrowserConfiguration();
+        HttpServer site = searchSite(new java.util.concurrent.ConcurrentHashMap<>());
+        try (CamoufoxBrowser browser = browser(local)) {
+            int port = site.getAddress().getPort();
+            String a = "http://localhost:" + port + "/search-a";
+            String b = "http://127.0.0.1:" + port + "/search-b";
+            List<TabLoad> loads = browser.loadTabs(List.of(new TabLoadRequest(null, a, RegistrableDomain.of(a)),
+                    new TabLoadRequest(null, b, RegistrableDomain.of(b))),
+                    new DomainCoordinator(4, System::currentTimeMillis), 4, 60_000);
+            for (TabLoad load : loads) assertEquals(TabLoadOutcome.OK, load.outcome(), load.toString());
+            com.microsoft.playwright.Page first = browser.onBrowser(() -> browser.pageFor(loads.get(0).tab()));
+            com.microsoft.playwright.Page second = browser.onBrowser(() -> browser.pageFor(loads.get(1).tab()));
+            String record = """
+                    () => { window.seen = [];
+                      for (const type of ['keydown', 'keyup', 'mousedown', 'mouseup'])
+                        addEventListener(type, e => seen.push(type + ':' + (e.key || e.button) + ':' + e.shiftKey), true);
+                      document.querySelector('input').focus(); }""";
+            for (com.microsoft.playwright.Page page : List.of(first, second)) browser.onBrowser(() -> page.evaluate(record));
+
+            java.util.concurrent.CountDownLatch holding = new java.util.concurrent.CountDownLatch(1);
+            java.util.concurrent.atomic.AtomicReference<Throwable> ended = new java.util.concurrent.atomic.AtomicReference<>();
+            Thread worker = Thread.ofVirtual().start(() -> {
+                InputDevice device = browser.inTurns(first);
+                try {
+                    // On the field, so the press keeps the focus where the next key goes.
+                    com.microsoft.playwright.options.BoundingBox field =
+                            browser.onBrowser(() -> first.locator("input").boundingBox());
+                    device.move(field.x + 5, field.y + field.height / 2);
+                    device.keyDown("Shift");
+                    device.down(MouseButton.LEFT);
+                    holding.countDown();
+                    device.sleep(60_000); // stopped here, as an engine at its time limit
+                } catch (Throwable stopped) {
+                    ended.set(stopped);
+                }
+            });
+            assertTrue(holding.await(60, TimeUnit.SECONDS), "Shift and the button went down");
+            worker.interrupt();
+            worker.join(30_000);
+            assertInstanceOf(CamoufoxBrowser.Interrupted.class, ended.get());
+
+            List<String> held = (List<String>) browser.onBrowser(() -> first.evaluate("() => seen"));
+            assertTrue(held.contains("keyup:Shift:false"), "Shift was let go: " + held);
+            assertTrue(held.stream().anyMatch(event -> event.startsWith("mouseup:0")), "the button was let go: " + held);
+
+            InputDevice again = browser.inTurns(first);
+            again.keyDown("a");
+            again.keyUp("a");
+            List<String> after = (List<String>) browser.onBrowser(() -> first.evaluate("() => seen"));
+            assertTrue(after.contains("keydown:a:false"), "a plain key again, no Shift: " + after);
+            assertEquals("a", browser.onBrowser(() -> first.evaluate("() => document.querySelector('input').value")));
+            assertEquals(List.of(), browser.onBrowser(() -> second.evaluate("() => seen")), "the other tab saw nothing");
+        } finally {
+            site.stop(0);
+        }
+    }
+
+    /**
      * /search-x: a search form whose first key is reported to /first-key-x; /results-x answers the submitted form.
      * The arrival time (nanoTime) of each is recorded under its path.
      */

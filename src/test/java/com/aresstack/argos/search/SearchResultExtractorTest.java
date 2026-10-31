@@ -31,6 +31,33 @@ class SearchResultExtractorTest {
         assertFalse(result.candidates().get(0).snippet().contains("Stealthy Firefox for automation"));
     }
 
+    /**
+     * Issue #77: the live DuckDuckGo HTML page indents its result blocks with long runs of whitespace before the
+     * title. Those blocks are visible and must stay results; Argos must not fall back to Lite for them.
+     */
+    @Test
+    void duckDuckGoBlocksBehindDeepIndentationStayVisibleResults() {
+        var endpoint = SearchEngine.DUCKDUCKGO.endpoints().get(0);
+        String indented = SerpFixtures.html("duckduckgo-html.html").replace("\n", "\n" + " ".repeat(120) + "\n");
+        SerpDocument document = new SerpDocumentParser(SearchAnalysisSettings.defaults())
+                .parse(indented, DDG_HTML, "", endpoint.resultBlockSelector(), 1);
+
+        var result = extractor.extract(document, "query", endpoint, SearchEngine.DUCKDUCKGO.chromeDomains());
+
+        assertEquals(SearchOutcome.ORGANIC_RESULTS, result.outcome(), result.diagnostics().toString());
+        assertEquals(List.of("https://camoufox.com/", "https://github.com/daijro/camoufox",
+                "https://pypi.org/project/camoufox/"), urls(result));
+    }
+
+    @Test
+    void boundedTextSkipsIndentationBeforeTheFirstWord() {
+        var block = org.jsoup.Jsoup.parse("<div>" + "\n    ".repeat(40) + "<h2> <a>Introduction | Camoufox</a></h2></div>")
+                .selectFirst("div");
+
+        assertEquals("I", SerpDocumentParser.textOf(block, 1));
+        assertEquals("Introduction", SerpDocumentParser.textOf(block, 12));
+    }
+
     @Test
     void duckDuckGoLiteListsBareLinksThroughTheHarvest() {
         var endpoint = SearchEngine.DUCKDUCKGO.endpoints().get(1);

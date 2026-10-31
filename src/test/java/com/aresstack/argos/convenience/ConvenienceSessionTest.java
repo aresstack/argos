@@ -419,6 +419,38 @@ class ConvenienceSessionTest {
         assertEquals("PARTIAL", answer.get("status"));
     }
 
+    @Test void anEngineThatAlreadyTypedGetsAShortGraceForItsResultPage() throws Exception {
+        startPages(0, 0, 0);
+        sites.fixture(DDG, "duckduckgo-html.html", 0).fixture(BING, "bing.html", 0).fixture(GOOGLE, "google.html", 2_500);
+        LocalConvenienceBrowser browser = new LocalConvenienceBrowser(sites);
+        ConvenienceSession session = new ConvenienceSession(browser, coordinator, UrlPolicy.off(),
+                new ParallelWebSearch(browser, coordinator, SearchEngine.byIds("duckduckgo,bing,google"), 10, false,
+                        10_000, 1_000)::search, null);
+
+        Map<String, Object> answer = session.search("camoufox");
+
+        List<Map<String, Object>> engines = list(answer, "engines");
+        assertEquals("OK", engines.get(2).get("status"), engines.toString());
+        assertEquals(3, engines.get(2).get("resultCount"));
+        assertEquals("COMPLETE", answer.get("status"));
+    }
+
+    @Test void aTimeoutNamesTheStepsTheEngineGotThrough() throws Exception {
+        startPages(0, 0, 0);
+        sites.fixture(DDG, "duckduckgo-html.html", 0).fixture(BING, "bing.html", 0).fixture(GOOGLE, "google.html", 9_000);
+        LocalConvenienceBrowser browser = new LocalConvenienceBrowser(sites);
+        ConvenienceSession session = new ConvenienceSession(browser, coordinator, UrlPolicy.off(),
+                new ParallelWebSearch(browser, coordinator, SearchEngine.byIds("duckduckgo,bing,google"), 10, false,
+                        10_000, 1_000)::search, null);
+
+        Map<String, Object> answer = session.search("camoufox");
+
+        Map<String, Object> google = list(answer, "engines").get(2);
+        assertEquals("TIMEOUT", google.get("status"));
+        assertEquals("no answer in time after: start page www.google.com OK, typing", google.get("detail"));
+        assertNoUrls(answer);
+    }
+
     // ---- helpers --------------------------------------------------------------------------------------------------
 
     /** The engines' regular start pages, with their real search fields. */

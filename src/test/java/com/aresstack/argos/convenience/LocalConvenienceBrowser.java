@@ -146,24 +146,29 @@ final class LocalConvenienceBrowser implements ConvenienceBrowser {
     /**
      * What the browser does when Enter is pressed in a search field: the field's form is sent with the typed text
      * (as GET; the local sites ignore the method). Only a selector matching an editable field of the tab's page
-     * gets that far, as for the real browser.
+     * gets that far, as for the real browser. Like CamoufoxBrowser it does not hold the browser while the result
+     * page loads, so other tabs can type and load meanwhile.
      */
     @Override
-    public synchronized TabLoad submitSearchInTab(String tab, List<String> searchBoxSelectors, String query) {
+    public TabLoad submitSearchInTab(String tab, List<String> searchBoxSelectors, String query) {
         TabLoad shown = readTab(tab);
         var page = Jsoup.parse(shown.capture().html(), shown.capture().url());
         for (String selector : searchBoxSelectors) {
             Element field = page.selectFirst(selector);
             if (field == null) continue;
             if (!field.is("textarea, input:not([type=hidden])")) throw new IllegalStateException(selector + " is no field");
-            submitted.add(tab + " | " + selector + " | " + query);
+            synchronized (this) {
+                submitted.add(tab + " | " + selector + " | " + query);
+            }
             Element form = field.closest("form");
             String action = form == null || form.absUrl("action").isEmpty() ? shown.capture().url() : form.absUrl("action");
             String url = action + (action.contains("?") ? "&" : "?") + field.attr("name") + "="
                     + URLEncoder.encode(query, StandardCharsets.UTF_8);
             TabLoad load = fetch(tab, new TabLoadRequest(tab, url, RegistrableDomain.of(url)),
                     NavigationGate.OPEN.tryAcquire(RegistrableDomain.of(url)), 10_000);
-            if (load.outcome() == TabLoadOutcome.OK) tabs.get(tab).push(load);
+            synchronized (this) {
+                if (load.outcome() == TabLoadOutcome.OK) tabs.get(tab).push(load);
+            }
             return load;
         }
         return null;

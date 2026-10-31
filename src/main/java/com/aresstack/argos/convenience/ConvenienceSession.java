@@ -60,7 +60,17 @@ public final class ConvenienceSession {
     /** The parallel search behind web_search (tests replace it). */
     @FunctionalInterface
     public interface Search {
-        List<ParallelWebSearch.EngineRun> run(String query);
+        /** @param engines the engine ids the call names, or null for all configured engines */
+        List<ParallelWebSearch.EngineRun> run(String query, List<String> engines);
+
+        /** The engine ids a call may name, in configuration order; empty when not known. */
+        default List<String> engineIds() {
+            return List.of();
+        }
+
+        /** Rejects an invalid engine selection before anything in the browser changes. */
+        default void checkEngines(List<String> engines) {
+        }
     }
 
     record Source(String engine, int rank) {
@@ -117,17 +127,31 @@ public final class ConvenienceSession {
 
     // ---- web_search ---------------------------------------------------------------------------------------
 
-    public synchronized Map<String, Object> search(String query) {
+    public Map<String, Object> search(String query) {
+        return search(query, null);
+    }
+
+    /** The engine ids web_search may name, in configuration order (empty when not known). */
+    public List<String> engineIds() {
+        return search.engineIds();
+    }
+
+    /**
+     * @param engines the engines of this call only (ids, in the order to report them), or null for all configured
+     *                engines; an invalid selection is rejected before the previous search's tabs close
+     */
+    public synchronized Map<String, Object> search(String query, List<String> engines) {
         if (query == null || query.isBlank()) throw new IllegalArgumentException("Empty search query.");
+        search.checkEngines(engines);
         List<String> closed = closePreviousEngineTabs();
-        List<ParallelWebSearch.EngineRun> runs = search.run(query.trim());
+        List<ParallelWebSearch.EngineRun> runs = search.run(query.trim(), engines);
         String searchId = "s" + nextSearch++;
         List<Result> merged = merge(searchId, runs);
         Map<String, Result> byId = new LinkedHashMap<>();
         merged.forEach(result -> byId.put(result.id(), result));
         List<String> engineTabs = new ArrayList<>();
         String context = browser.contextId();
-        List<Map<String, Object>> engines = new ArrayList<>();
+        List<Map<String, Object>> engineAnswers = new ArrayList<>();
         boolean usable = false;
         boolean complete = true;
         for (ParallelWebSearch.EngineRun run : runs) {
@@ -160,7 +184,7 @@ public final class ConvenienceSession {
                 case OK, NO_RESULTS -> usable = true;
                 default -> complete = false;
             }
-            engines.add(engine);
+            engineAnswers.add(engine);
         }
         searches.put(searchId, new SearchRecord(searchId, query.trim(), byId, engineTabs));
         while (searches.size() > MAX_SEARCHES) searches.remove(searches.keySet().iterator().next());
@@ -170,7 +194,7 @@ public final class ConvenienceSession {
         answer.put("searchId", searchId);
         answer.put("query", query.trim());
         answer.put("status", complete ? "COMPLETE" : usable ? "PARTIAL" : "FAILED");
-        answer.put("engines", engines);
+        answer.put("engines", engineAnswers);
         List<Map<String, Object>> results = new ArrayList<>();
         for (Result result : merged) {
             Map<String, Object> item = new LinkedHashMap<>();
@@ -189,9 +213,10 @@ public final class ConvenienceSession {
     }
 
     /**
-     * One list from all engines, in a fixed order that is no ranking: rank 1 of every engine (in configuration
-     * order), then rank 2, and so on. Hits with the identical URL string are one result with all their sources;
-     * URLs are never normalized for this, so different query parameters stay different results.
+     * One list from all engines, in a fixed order that is no ranking: rank 1 of every engine (in the order the
+     * engines were searched: configuration order, or the call's selection), then rank 2, and so on. Hits with the
+     * identical URL string are one result with all their sources; URLs are never normalized for this, so different
+     * query parameters stay different results.
      */
     static List<Result> merge(String searchId, List<ParallelWebSearch.EngineRun> runs) {
         Map<String, Result> byUrl = new LinkedHashMap<>();

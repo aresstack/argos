@@ -34,11 +34,17 @@ public final class ConvenienceTools {
 
     public List<SyncToolSpecification> specifications() {
         List<SyncToolSpecification> tools = new ArrayList<>();
+        Map<String, Object> engineId = new LinkedHashMap<>(ArgosTools.field("string", "Search engine id"));
+        if (!session.engineIds().isEmpty()) engineId.put("enum", session.engineIds());
         tools.add(ArgosTools.tool("web_search",
-                "Search all configured search engines in parallel. Returns combined results with IDs, titles and "
-                        + "snippets. Select relevant result IDs to inspect them.",
-                Map.of("query", ArgosTools.field("string", "What to search for")), List.of("query"),
-                args -> session.search(ArgosTools.string(args, "query"))));
+                "Search the configured search engines in parallel. Returns combined results with IDs, titles and "
+                        + "snippets. Select relevant result IDs to inspect them. Optional engines limits this one "
+                        + "search to the named engines, e.g. [\"google\", \"bing\"].",
+                Map.of("query", ArgosTools.field("string", "What to search for"),
+                        "engines", array(engineId, "Only these engines, for this search only. Leave out to use the "
+                                + "default engines.")),
+                List.of("query"),
+                args -> session.search(ArgosTools.string(args, "query"), optionalStrings(args, "engines"))));
         tools.add(ArgosTools.tool("web_select_results",
                 "Select the search results you want to inspect. Argos opens the selected pages in new tabs and "
                         + "returns their text and links.",
@@ -119,6 +125,11 @@ public final class ConvenienceTools {
             throw new IllegalArgumentException("Missing list field: " + name);
         }
         return out;
+    }
+
+    /** Like {@link #strings}, but null when the field is absent: "not given" differs from an empty list. */
+    static List<String> optionalStrings(Map<String, Object> args, String name) {
+        return args.get(name) == null ? null : strings(args, name);
     }
 
     private static List<ConvenienceSession.LinkChoice> choices(Map<String, Object> args) {

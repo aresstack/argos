@@ -83,6 +83,58 @@ public record SearchEngine(String id, String displayName, List<Endpoint> endpoin
     }
 
     /**
+     * The engines of one web_search call. Without a selection ({@code null}) all available engines, in their
+     * configured order. A selection searches only the named engines, in the order given, each once; it must name at
+     * least one engine and only engines available here. A wrong id is rejected, never corrected or replaced by
+     * another engine.
+     *
+     * @param requested engine ids of the call, or null when the call names none
+     * @param available the configured engines (SEARCH_ENGINES), in their order
+     */
+    public static List<SearchEngine> select(List<String> requested, List<SearchEngine> available) {
+        if (requested == null) return List.copyOf(available);
+        String configured = String.join(", ", available.stream().map(SearchEngine::id).toList());
+        if (requested.isEmpty()) {
+            throw new IllegalArgumentException("engines is empty. Name at least one engine (" + configured
+                    + ") or leave engines out to search all of them.");
+        }
+        List<SearchEngine> selected = new ArrayList<>();
+        for (String raw : requested) {
+            String id = raw == null ? "" : raw.trim().toLowerCase(Locale.ROOT);
+            SearchEngine engine = available.stream().filter(e -> e.id().equals(id)).findFirst().orElse(null);
+            if (engine == null) {
+                boolean known = catalog().stream().anyMatch(e -> e.id().equals(id));
+                throw new IllegalArgumentException((known ? "Search engine not enabled here: " : "Unknown search engine: ")
+                        + (raw == null ? "null" : "\"" + raw.trim() + "\"") + " (available: " + configured + ")");
+            }
+            if (!selected.contains(engine)) selected.add(engine);
+        }
+        return List.copyOf(selected);
+    }
+
+    /** JVM system property: the engines of a web_search call that names none (comma-separated ids). */
+    public static final String DEFAULT_ENGINES_PROPERTY = "argos.search.defaultEngines";
+
+    /**
+     * The engines of a web_search call that names none: the value of {@link #DEFAULT_ENGINES_PROPERTY} when it is set,
+     * a subset of the available engines in its own order; otherwise all available engines. A property that is set
+     * but empty or names an engine that is not available is a configuration error, never a silent "all engines".
+     *
+     * @param property the property's value, or null when it is not set
+     */
+    public static List<SearchEngine> defaults(String property, List<SearchEngine> available) {
+        if (property == null) return List.copyOf(available);
+        List<String> ids = new ArrayList<>();
+        for (String part : property.split(",")) if (!part.isBlank()) ids.add(part);
+        try {
+            return select(ids, available);
+        } catch (IllegalArgumentException invalid) {
+            throw new IllegalArgumentException("Invalid -D" + DEFAULT_ENGINES_PROPERTY + "=" + property + ": "
+                    + invalid.getMessage(), invalid);
+        }
+    }
+
+    /**
      * A single-endpoint engine for tests and local search worlds: its start page with a search field named
      * {@code q} (or of type search); it is mechanically analysed.
      */

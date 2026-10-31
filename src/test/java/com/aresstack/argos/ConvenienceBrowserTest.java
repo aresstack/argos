@@ -128,7 +128,7 @@ class ConvenienceBrowserTest {
             String b = "http://127.0.0.1:" + port + "/slow-b";
             DomainCoordinator coordinator = new DomainCoordinator(4, System::currentTimeMillis);
             ConvenienceSession session = new ConvenienceSession(browser, coordinator, UrlPolicy.from(TestNetworks.LOOPBACK),
-                    query -> List.of(new ParallelWebSearch.EngineRun("bing", ParallelWebSearch.EngineStatus.OK, "",
+                    (query, engines) -> List.of(new ParallelWebSearch.EngineRun("bing", ParallelWebSearch.EngineStatus.OK, "",
                             List.of(new ParallelWebSearch.EngineHit(1, "A", a, ""),
                                     new ParallelWebSearch.EngineHit(2, "B", b, "")), null, "")), null);
             session.search("lokal");

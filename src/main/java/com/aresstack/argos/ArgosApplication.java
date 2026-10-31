@@ -185,7 +185,7 @@ public final class ArgosApplication {
                 history.tabPage(capture, requestedUrl, newVisit, tool, tab);
             }
         };
-        return new ConvenienceSession(browser, coordinator, urlPolicy, search::search, recorder);
+        return new ConvenienceSession(browser, coordinator, urlPolicy, search, recorder);
     }
 
     /** The started HTTP endpoint: Streamable HTTP MCP at the root, /health and protected-resource metadata. */

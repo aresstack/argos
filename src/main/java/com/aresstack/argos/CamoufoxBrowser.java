@@ -134,6 +134,8 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
     private Socks5Proxy proxy;
     private final HostResolver resolver;
     private BrowserContext context;
+    /** Processes of a closed browser that did not exit even when killed; no browser starts on the profile meanwhile. */
+    private List<ProcessHandle> leftoverProcesses = List.of();
     /** True while a download or batch runs its own background tabs on the driver thread. */
     private boolean backgroundWork;
 
@@ -350,7 +352,9 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
         } catch (RuntimeException alreadyGone) {
             // The connection is gone either way.
         }
-        if (!BrowserLiveness.awaitExit(processes, java.time.Duration.ofSeconds(15))) destroyTree(processes);
+        // Whatever outlives even the kill keeps the profile locked: the next start waits for it or refuses.
+        leftoverProcesses = BrowserLiveness.stop(processes, java.time.Duration.ofSeconds(15),
+                java.time.Duration.ofSeconds(10));
         forgetSession();
     }
 
@@ -406,6 +410,8 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
 
     private void ensureContext() throws Exception {
         if (context == null) {
+            BrowserLiveness.requireEnded(leftoverProcesses, java.time.Duration.ofSeconds(5));
+            leftoverProcesses = List.of();
             config.requireBrowserConfiguration();
             // Explicit paths are developer overrides; otherwise Argos' own verified Camoufox and built-in profile.
             ArgosConfig.BrowserInstallation installation = ArgosConfig.BrowserInstallation.fromEnvironment();

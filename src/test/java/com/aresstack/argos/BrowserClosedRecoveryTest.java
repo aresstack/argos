@@ -129,8 +129,10 @@ class BrowserClosedRecoveryTest {
                         .map(command -> command.toLowerCase(Locale.ROOT).contains("camoufox")).orElse(false))
                 .toList();
         assertFalse(camoufox.isEmpty(), "a Camoufox process runs below Argos");
-        camoufox.forEach(ProcessHandle::destroy);
-        for (ProcessHandle process : camoufox) {
+        // Its helpers, too: one that kept the browser's pipe open would hide the close from Playwright.
+        List<ProcessHandle> ended = BrowserLiveness.withDescendants(camoufox).stream().distinct().toList();
+        ended.forEach(ProcessHandle::destroy);
+        for (ProcessHandle process : ended) {
             process.onExit().get(30, TimeUnit.SECONDS);
         }
     }

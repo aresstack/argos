@@ -61,8 +61,8 @@ public final class ParallelWebSearch implements ConvenienceSession.Search {
     public static final long DEFAULT_ENGINE_TIMEOUT_MILLIS = 20_000;
     /**
      * Budget of the search that follows: typing into each engine's field, the result page, extraction, consent click,
-     * an engine's own retry endpoint. Real input goes through the one browser one engine at a time, so this budget
-     * covers all engines' typing together.
+     * an engine's own retry endpoint. The engines type at the same time: each key is a short turn of the one
+     * browser thread, the pauses between keys are spent off it (issue #79).
      */
     static final long EVALUATION_MILLIS = 45_000;
 
@@ -264,7 +264,7 @@ public final class ParallelWebSearch implements ConvenienceSession.Search {
      * being read) gets a short grace to finish: the search was done, only the page came late. If it is still not
      * done then, it is stopped (no further browser step of it starts) and its tab is read once as it is: the result
      * page may well be there while the engine's job still waits for the page to settle, or was slowed down by the
-     * other engines' typing on the one browser. Results found on that page count; nothing is typed or loaded again.
+     * other engines' work on the one browser. Results found on that page count; nothing is typed or loaded again.
      * An engine that had not typed yet, or whose tab shows no results, stays TIMEOUT. The detail names the steps the
      * engine got through, without URLs.
      */

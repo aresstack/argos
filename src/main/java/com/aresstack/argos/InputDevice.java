@@ -39,6 +39,15 @@ interface InputDevice {
 
     long now();
 
+    /**
+     * A read of the page that belongs to this input (a measurement, a transient evaluation), run where the device
+     * runs its input. Directly by default; a device that gives each step its own turn of the browser thread runs it
+     * in such a turn.
+     */
+    default <T> T read(java.util.function.Supplier<T> query) {
+        return query.get();
+    }
+
     static InputDevice of(Page page) {
         return new InputDevice() {
             @Override public void move(double x, double y) {

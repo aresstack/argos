@@ -3,8 +3,6 @@ package com.aresstack.argos.search;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 
-import java.net.URLEncoder;
-import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -18,14 +16,17 @@ import java.util.Set;
 /**
  * Runs one web search across the configured engines (port of AskAI's engine-navigation loop in
  * PlaywrightBrowserSession). Engines are tried in order until one delivers organic results; an
- * engine's endpoints are fallbacks for the same provider. Per result page: extract first, and only
+ * engine's endpoints are fallbacks for the same provider. Each endpoint is asked through its regular start page
+ * and search field with real input ({@link SearchFormInteraction}). Per result page: extract first, and only
  * when that fails resolve a consent banner (one trusted click, never "accept all" without opt-in) and
  * look for a challenge. A challenged
  * engine family is locked for a while instead of being retried, which would only escalate the block.
  */
 public final class WebSearchService {
     public enum AttemptOutcome {
-        ORGANIC_RESULTS, NO_ORGANIC_RESULTS, EXTRACTION_FAILED, CHALLENGE_PENDING, CONSENT_REQUIRED, NAVIGATION_FAILED
+        ORGANIC_RESULTS, NO_ORGANIC_RESULTS, EXTRACTION_FAILED, CHALLENGE_PENDING, CONSENT_REQUIRED, NAVIGATION_FAILED,
+        /** The start page loaded, but its search field could not be found or operated with real input. */
+        SEARCH_BOX_UNAVAILABLE
     }
 
     public record Hit(int rank, String title, String url, String snippet) {
@@ -88,7 +89,6 @@ public final class WebSearchService {
 
     public synchronized Report search(String query) throws SearchUnavailableException {
         if (query == null || query.isBlank()) throw new IllegalArgumentException("Empty search query");
-        String encoded = URLEncoder.encode(query.trim(), StandardCharsets.UTF_8);
         List<Hit> hits = new ArrayList<>();
         Set<String> seenUrls = new LinkedHashSet<>();
         Set<String> providerHosts = new LinkedHashSet<>();
@@ -105,7 +105,12 @@ public final class WebSearchService {
                 }
                 SearchPageBrowser.LoadedPage page;
                 try {
-                    page = browser.open(endpoint.url(encoded));
+                    page = SearchFormInteraction.search(browser, endpoint, query, settings.acceptAllConsent());
+                } catch (SearchFormInteraction.SearchBoxUnavailableException unusable) {
+                    anyReached = true;
+                    providerHosts.add(endpoint.host());
+                    attempts.add(new Attempt(endpoint.host(), AttemptOutcome.SEARCH_BOX_UNAVAILABLE, unusable.getMessage()));
+                    continue; // the provider's other start page may still be usable; never a direct result URL
                 } catch (Exception unreachable) {
                     attempts.add(new Attempt(endpoint.host(), AttemptOutcome.NAVIGATION_FAILED, safeMessage(unreachable)));
                     continue;

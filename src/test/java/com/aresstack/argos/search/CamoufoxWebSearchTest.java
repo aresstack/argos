@@ -22,18 +22,39 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-/** Opt-in (-PtestCamoufox=true): a local search world behind a consent wall, searched through real Camoufox. */
+/**
+ * Opt-in (-PtestCamoufox=true): a local search world behind a consent wall, searched through real Camoufox. The
+ * engine's start page records, in hidden form fields the browser itself submits, whether the typed keys and the
+ * Enter key reached the page as trusted events.
+ */
 class CamoufoxWebSearchTest {
+    /** A start page like the engines' own: one form, one field; the script only observes. */
+    private static final String HOME = """
+            <html><head><title>Local search</title></head><body>
+            <form action="/search"><input type="search" name="q" autocomplete="off">
+            <input type="hidden" name="keys" value=""><input type="hidden" name="enter" value=""></form>
+            <script>
+              const form = document.querySelector('form');
+              form.q.addEventListener('keydown', e => {
+                if (e.key === 'Enter') form.enter.value = String(e.isTrusted);
+                else form.keys.value += e.isTrusted ? 't' : 'u';
+              });
+            </script></body></html>""";
+
     @TempDir Path temporary;
 
     @Test @Timeout(value = 160, unit = TimeUnit.SECONDS)
-    void searchesALocalEngineAndPassesItsConsentWallWithTrustedInput() throws Exception {
+    void searchesALocalEngineThroughItsSearchFieldAndPassesItsConsentWallWithTrustedInput() throws Exception {
         Assumptions.assumeTrue(Boolean.getBoolean("argos.testCamoufox"), "Opt-in real browser smoke");
         ArgosConfig local = ArgosConfig.fromEnvironment();
         local.requireBrowserConfiguration();
         AtomicBoolean consented = new AtomicBoolean();
+        List<String> searches = java.util.Collections.synchronizedList(new java.util.ArrayList<>());
         HttpServer site = HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0);
+        site.createContext("/", exchange -> respond(exchange, exchange.getRequestURI().getPath().equals("/") ? 200 : 404,
+                exchange.getRequestURI().getPath().equals("/") ? HOME : "<html><body>404</body></html>"));
         site.createContext("/search", exchange -> {
+            if (exchange.getRequestURI().getRawQuery() != null) searches.add(exchange.getRequestURI().getRawQuery());
             String page = consented.get() ? SerpFixtures.html("generic-cards.html")
                     : "<html><head><title>Consent</title></head><body><div class='cookie-banner'><p>We use cookies.</p>"
                     + "<form method='post' action='/accept'><button type='submit'>Reject all</button></form>"
@@ -46,16 +67,18 @@ class CamoufoxWebSearchTest {
             respond(exchange, 303, "");
         });
         site.start();
-        String template = "http://localhost:" + site.getAddress().getPort() + "/search?q={query}";
+        String home = "http://localhost:" + site.getAddress().getPort() + "/";
         try (CamoufoxBrowser browser = new CamoufoxBrowser(new ArgosConfig("127.0.0.1", 0, local.executable(),
                 local.launchOptions(), temporary.resolve("profile"), true)
                 .withNetwork(com.aresstack.argos.TestNetworks.LOOPBACK))) {
             WebSearchService service = new WebSearchService(new CamoufoxSearchPageBrowser(browser),
-                    new SearchSettings(List.of(SearchEngine.custom(template)), 10, Duration.ofMinutes(10)),
+                    new SearchSettings(List.of(SearchEngine.custom(home)), 10, Duration.ofMinutes(10)),
                     SearchLayoutResolver.NONE, Clock.systemUTC());
 
             WebSearchService.Report report = service.search("solar");
 
+            assertTrue(searches.get(0).matches("q=solar&keys=t{5,}&enter=true"),
+                    "typed and submitted by trusted key events through the page's own form: " + searches);
             assertTrue(consented.get(), "consent button must be clicked with real input");
             assertEquals(4, report.hits().size());
             assertEquals("https://example.org/perovskite", report.hits().get(0).url());

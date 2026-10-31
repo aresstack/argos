@@ -115,7 +115,12 @@ public final class FixtureWorld implements AutoCloseable {
         return "http://" + host + ":" + server.getAddress().getPort();
     }
 
-    /** The engine's URL template for Argos' custom search engine. */
+    /** The engine's start page for Argos' custom search engine: its search field leads to {@link #searchTemplate}. */
+    public String searchHome() {
+        return base(ENGINE) + "/";
+    }
+
+    /** The URL the engine's search form produces for a query (for reading result pages directly in tests). */
     public String searchTemplate() {
         return base(ENGINE) + "/search?q={query}";
     }
@@ -150,7 +155,12 @@ public final class FixtureWorld implements AutoCloseable {
             String query = exchange.getRequestURI().getRawQuery();
             String page = host + path;
             requests.add(page + (query == null ? "" : "?" + query));
-            if (page.equals(ENGINE + "/search")) {
+            if (page.equals(ENGINE + "/")) {
+                respond(exchange, 200, "text/html; charset=utf-8", "<!DOCTYPE html><html><head><title>Kestrel Search"
+                        + "</title></head><body><h1>Kestrel Search</h1><form action=\"/search\" role=\"search\">"
+                        + "<input type=\"search\" name=\"q\" aria-label=\"Search\"><button>Search</button></form>"
+                        + "</body></html>");
+            } else if (page.equals(ENGINE + "/search")) {
                 if (failNextSearch.getAndSet(false)) {
                     respond(exchange, 503, "text/html; charset=utf-8", "<!DOCTYPE html><html><head><title>503 Service "
                             + "Unavailable</title></head><body><h1>Service Unavailable</h1><p>Search is temporarily "

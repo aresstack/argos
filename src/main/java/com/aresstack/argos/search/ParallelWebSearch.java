@@ -9,8 +9,6 @@ import com.aresstack.argos.convenience.NavigationGate;
 import com.aresstack.argos.convenience.RegistrableDomain;
 import com.aresstack.argos.web.PageCapture;
 
-import java.net.URLEncoder;
-import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -22,23 +20,30 @@ import java.util.concurrent.TimeoutException;
 
 /**
  * The convenience profile's web search: every configured engine at once, each in a new tab of its own. The first
- * navigation of all engines is one parallel load ({@link ConvenienceBrowser#loadTabs}), so no engine waits for
- * another; then each engine's page is evaluated independently by the unchanged {@link WebSearchService} restricted
- * to that one engine (extraction pipeline, consent handling, challenge recognition). An engine's alternative
- * endpoint (DuckDuckGo Lite) is only its own in-job retry, in its own tab. An engine that fails, times out or
+ * navigation of all engines, to their regular start pages, is one parallel load ({@link ConvenienceBrowser#loadTabs}),
+ * so no engine waits for another; then each engine is searched independently by the unchanged
+ * {@link WebSearchService} restricted to that one engine: the same {@link SearchFormInteraction} as for the other
+ * profiles (search field, real typing, real Enter in the engine's tab), then the extraction pipeline, consent
+ * handling and challenge recognition. An engine's alternative endpoint (DuckDuckGo Lite) is only its own in-job
+ * retry, in its own tab. An engine that fails, times out or
  * shows a challenge never holds back the others; a page that loaded but could not be understood comes back as a
  * fallback capture (text and links). The sequential {@link WebSearchService#search} loop over all engines is not
  * used here and stays as it is for the other profiles.
  */
 public final class ParallelWebSearch {
-    public enum EngineStatus { OK, NO_RESULTS, EXTRACTION_FAILED, CHALLENGE, CONSENT_REQUIRED, TIMEOUT, NAVIGATION_FAILED }
+    public enum EngineStatus {
+        OK, NO_RESULTS, EXTRACTION_FAILED, CHALLENGE, CONSENT_REQUIRED, TIMEOUT, NAVIGATION_FAILED,
+        /** The start page loaded, but its search field could not be found or operated with real input. */
+        INPUT_FAILED
+    }
 
     public record EngineHit(int rank, String title, String url, String snippet) {
     }
 
     /**
      * @param tab      the engine's tab ("" when none could be opened)
-     * @param fallback the result page as loaded, for EXTRACTION_FAILED, CHALLENGE and CONSENT_REQUIRED; else null
+     * @param fallback the page as loaded, for EXTRACTION_FAILED, CHALLENGE, CONSENT_REQUIRED and INPUT_FAILED (the
+     *                 start page); else null
      * @param detail   short diagnostic without URLs
      */
     public record EngineRun(String engine, EngineStatus status, String tab, List<EngineHit> hits, PageCapture fallback,
@@ -52,8 +57,12 @@ public final class ParallelWebSearch {
     public static final int MAX_RESULTS_PER_ENGINE = 30;
     /** Budget of the parallel first navigation of all engines. */
     public static final long DEFAULT_ENGINE_TIMEOUT_MILLIS = 20_000;
-    /** Budget of the evaluation that follows (extraction, consent click, an engine's own retry endpoint). */
-    static final long EVALUATION_MILLIS = 15_000;
+    /**
+     * Budget of the search that follows: typing into each engine's field, the result page, extraction, consent click,
+     * an engine's own retry endpoint. Real input goes through the one browser one engine at a time, so this budget
+     * covers all engines' typing together.
+     */
+    static final long EVALUATION_MILLIS = 45_000;
 
     private final ConvenienceBrowser browser;
     private final NavigationGate gate;
@@ -102,17 +111,16 @@ public final class ParallelWebSearch {
     /** One run per configured engine, in configuration order. */
     public List<EngineRun> search(String query) {
         if (query == null || query.isBlank()) throw new IllegalArgumentException("Empty search query");
-        String encoded = URLEncoder.encode(query.trim(), StandardCharsets.UTF_8);
         List<TabLoadRequest> first = new ArrayList<>();
         for (SearchEngine engine : engines) {
-            String url = engine.endpoints().get(0).url(encoded);
+            String url = engine.endpoints().get(0).homeUrl();
             first.add(new TabLoadRequest(null, url, RegistrableDomain.of(url)));
         }
         // Fan-out: all engines start together; a slow one does not delay the others' start.
         List<TabLoad> loaded = browser.loadTabs(first, gate, Math.min(4, engines.size()), engineTimeoutMillis);
         // The evaluation gets its own budget: an engine whose page was slow to load (it ends as TIMEOUT) must not
         // use up the time of the engines whose pages are already there.
-        long deadline = System.currentTimeMillis() + Math.min(engineTimeoutMillis, EVALUATION_MILLIS);
+        long deadline = System.currentTimeMillis() + Math.max(engineTimeoutMillis, EVALUATION_MILLIS);
         ExecutorService workers = Executors.newThreadPerTaskExecutor(Thread.ofVirtual().name("argos-search-", 0).factory());
         try {
             List<Future<EngineRun>> runs = new ArrayList<>();
@@ -164,7 +172,8 @@ public final class ParallelWebSearch {
         EngineStatus status = status(report);
         String detail = report.attempts().isEmpty() ? "" : report.attempts().get(report.attempts().size() - 1).outcome().name();
         PageCapture fallback = status == EngineStatus.EXTRACTION_FAILED || status == EngineStatus.CHALLENGE
-                || status == EngineStatus.CONSENT_REQUIRED ? pages.firstCapture : null;
+                || status == EngineStatus.CONSENT_REQUIRED || status == EngineStatus.INPUT_FAILED
+                ? pages.lastCapture : null;
         return new EngineRun(engine.id(), status, pages.tab, List.of(), fallback, detail);
     }
 
@@ -176,19 +185,22 @@ public final class ParallelWebSearch {
         if (outcomes.contains(WebSearchService.AttemptOutcome.CONSENT_REQUIRED)) return EngineStatus.CONSENT_REQUIRED;
         if (outcomes.contains(WebSearchService.AttemptOutcome.NO_ORGANIC_RESULTS)) return EngineStatus.NO_RESULTS;
         if (outcomes.contains(WebSearchService.AttemptOutcome.EXTRACTION_FAILED)) return EngineStatus.EXTRACTION_FAILED;
+        if (outcomes.contains(WebSearchService.AttemptOutcome.SEARCH_BOX_UNAVAILABLE)) return EngineStatus.INPUT_FAILED;
         return EngineStatus.NAVIGATION_FAILED;
     }
 
     /**
-     * The search's browser port bound to one engine's tab. The first page is the one the fan-out already loaded;
-     * a further endpoint (the engine's own retry) loads in the same tab under the navigation gate.
+     * The search's browser port bound to one engine's tab. The first start page is the one the fan-out already
+     * loaded; a further endpoint (the engine's own retry) loads in the same tab, and the navigation that pressing
+     * Enter starts runs under the navigation gate too.
      */
     private final class TabSearchPages implements SearchPageBrowser {
         private final TabLoad first;
         private final long deadline;
         private boolean firstUsed;
         String tab;
-        PageCapture firstCapture;
+        /** The page the tab showed last, start page or result page. */
+        PageCapture lastCapture;
         String lastError = "";
         boolean timedOut;
 
@@ -227,6 +239,28 @@ public final class ParallelWebSearch {
             return !tab.isEmpty() && browser.clickInTab(cssSelector, tab);
         }
 
+        @Override
+        public boolean submitQuery(List<String> searchBoxSelectors, String query) throws Exception {
+            if (tab.isEmpty()) return false;
+            String domain = RegistrableDomain.of(lastCapture == null ? first.requestedUrl() : lastCapture.url());
+            NavigationGate.Lease lease;
+            while ((lease = gate.tryAcquire(domain)) == null) {
+                if (System.currentTimeMillis() > deadline - 1_000) {
+                    timedOut = true;
+                    throw new IllegalStateException("no time left to search in the engine's tab");
+                }
+                Thread.sleep(20);
+            }
+            TabLoad load = null;
+            try {
+                load = browser.submitSearchInTab(tab, searchBoxSelectors, query);
+                return load != null;
+            } finally {
+                lease.release(load == null || load.capture() == null ? 0 : load.capture().status(),
+                        load == null ? 0 : load.retryAfterSeconds(), load != null && load.challenge());
+            }
+        }
+
         private LoadedPage page(TabLoad load) throws Exception {
             if (load.outcome() != TabLoadOutcome.OK) {
                 if (load.outcome() == TabLoadOutcome.TIMEOUT) timedOut = true;
@@ -234,7 +268,7 @@ public final class ParallelWebSearch {
                 throw new IllegalStateException(lastError);
             }
             PageCapture capture = load.capture();
-            if (firstCapture == null) firstCapture = capture;
+            lastCapture = capture;
             return new LoadedPage(capture.url(), capture.title(), capture.status(), capture.html());
         }
     }

@@ -3,12 +3,16 @@ package com.aresstack.argos.convenience;
 import com.aresstack.argos.search.ChallengeCheck;
 import com.aresstack.argos.web.PageCapture;
 import com.aresstack.argos.web.PageText;
+import org.jsoup.Jsoup;
+import org.jsoup.nodes.Element;
 
 import java.net.URI;
+import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.net.http.HttpTimeoutException;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -32,6 +36,8 @@ final class LocalConvenienceBrowser implements ConvenienceBrowser {
     private int nextTab = 1;
     String context = "start";
     final List<String> clicked = new ArrayList<>();
+    /** "tab | selector | typed text" per search typed into a field. */
+    final List<String> submitted = new ArrayList<>();
 
     LocalConvenienceBrowser(LocalSites sites) {
         this.sites = sites;
@@ -135,6 +141,32 @@ final class LocalConvenienceBrowser implements ConvenienceBrowser {
     public synchronized boolean clickInTab(String selector, String tab) {
         clicked.add(tab + " " + selector);
         return false;
+    }
+
+    /**
+     * What the browser does when Enter is pressed in a search field: the field's form is sent with the typed text
+     * (as GET; the local sites ignore the method). Only a selector matching an editable field of the tab's page
+     * gets that far, as for the real browser.
+     */
+    @Override
+    public synchronized TabLoad submitSearchInTab(String tab, List<String> searchBoxSelectors, String query) {
+        TabLoad shown = readTab(tab);
+        var page = Jsoup.parse(shown.capture().html(), shown.capture().url());
+        for (String selector : searchBoxSelectors) {
+            Element field = page.selectFirst(selector);
+            if (field == null) continue;
+            if (!field.is("textarea, input:not([type=hidden])")) throw new IllegalStateException(selector + " is no field");
+            submitted.add(tab + " | " + selector + " | " + query);
+            Element form = field.closest("form");
+            String action = form == null || form.absUrl("action").isEmpty() ? shown.capture().url() : form.absUrl("action");
+            String url = action + (action.contains("?") ? "&" : "?") + field.attr("name") + "="
+                    + URLEncoder.encode(query, StandardCharsets.UTF_8);
+            TabLoad load = fetch(tab, new TabLoadRequest(tab, url, RegistrableDomain.of(url)),
+                    NavigationGate.OPEN.tryAcquire(RegistrableDomain.of(url)), 10_000);
+            if (load.outcome() == TabLoadOutcome.OK) tabs.get(tab).push(load);
+            return load;
+        }
+        return null;
     }
 
     @Override

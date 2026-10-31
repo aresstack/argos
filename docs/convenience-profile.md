@@ -32,10 +32,10 @@ Die MCP-Serverinstruktion (nur in diesem Profil) lautet: *Every page response in
 ## web_search
 
 1. Alle konfigurierten Suchmaschinen laufen gleichzeitig, jede in einem neuen Tab. `SEARCH_ENGINES` gibt die Menge an (Standard `duckduckgo,bing,google`), keine Fallback-Reihenfolge, und keine Suchmaschine wird übersprungen.
-2. Die erste Navigation aller Suchmaschinen ist ein gemeinsamer paralleler Ladevorgang (Budget 20 s). Danach wertet jede Suchmaschine ihre Seite mit dem unveränderten `WebSearchService` aus, beschränkt auf diese eine Suchmaschine (Budget 15 s): Extraktion, Consent-Klick über echte BiDi-Eingabe und Challenge-Erkennung.
+2. Die erste Navigation aller Suchmaschinen, zu ihren regulären Startseiten, ist ein gemeinsamer paralleler Ladevorgang (Budget 20 s). Danach sucht jede Suchmaschine in ihrem Tab mit dem unveränderten `WebSearchService`, beschränkt auf diese eine Suchmaschine (Budget 45 s für alle zusammen, denn echte Eingaben laufen nacheinander durch den einen Browser): Suchfeld über Locator finden, Suchbegriff per `RealInput` tippen, Enter als echte BiDi-Taste (keine konstruierte Such-URL, kein Skript-Submit), dann Extraktion, Consent-Klick über echte BiDi-Eingabe und Challenge-Erkennung. Siehe [web-search.md](web-search.md).
 3. DuckDuckGo Lite ist nur der Wiederholungsversuch innerhalb des DuckDuckGo-Jobs und läuft im DuckDuckGo-Tab.
-4. Status je Suchmaschine: `OK`, `NO_RESULTS`, `EXTRACTION_FAILED`, `CHALLENGE`, `CONSENT_REQUIRED`, `TIMEOUT` oder `NAVIGATION_FAILED`.
-5. Bei `EXTRACTION_FAILED`, `CHALLENGE` und `CONSENT_REQUIRED` enthält `fallbackPage` den sichtbaren Text (höchstens 4000 Zeichen, mit `truncated`) und bis zu 40 Links mit IDs.
+4. Status je Suchmaschine: `OK`, `NO_RESULTS`, `EXTRACTION_FAILED`, `CHALLENGE`, `CONSENT_REQUIRED`, `TIMEOUT`, `NAVIGATION_FAILED` oder `INPUT_FAILED` (Startseite geladen, Suchfeld nicht gefunden oder nicht bedienbar).
+5. Bei `EXTRACTION_FAILED`, `CHALLENGE`, `CONSENT_REQUIRED` und `INPUT_FAILED` enthält `fallbackPage` den sichtbaren Text (höchstens 4000 Zeichen, mit `truncated`) und bis zu 40 Links mit IDs.
 6. Die Gesamtsuche hat den Status `COMPLETE`, `PARTIAL` oder `FAILED`.
 7. Die Ergebnisse werden deterministisch verschränkt: zuerst Rang 1 jeder Suchmaschine in Konfigurationsreihenfolge, dann Rang 2 und so weiter. Es gibt keinen Re-Ranker.
 8. Doppelte werden nur bei exakt gleicher URL-Zeichenkette zusammengeführt. Jedes Ergebnis trägt `sources[{engine, rank}]`.

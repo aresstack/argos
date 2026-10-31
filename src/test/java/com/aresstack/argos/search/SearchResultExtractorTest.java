@@ -56,7 +56,7 @@ class SearchResultExtractorTest {
 
     @Test
     void bingIsStillUnderstoodWhenTheAdapterSelectorNoLongerMatches() {
-        var changedLayout = new SearchEngine.Endpoint("https://www.bing.com/search?q={query}", "li.renamed_algo", false);
+        var changedLayout = new SearchEngine.Endpoint("https://www.bing.com/", List.of("#sb_form_q"), "li.renamed_algo", false);
         var result = extract("bing.html", BING, changedLayout, SearchEngine.BING);
 
         assertEquals(SearchOutcome.ORGANIC_RESULTS, result.outcome());
@@ -67,7 +67,7 @@ class SearchResultExtractorTest {
 
     @Test
     void duckDuckGoAndGoogleAreAlsoUnderstoodWithoutAdapterSelectors() {
-        var noSelector = new SearchEngine.Endpoint("https://example.invalid/?q={query}", "", false);
+        var noSelector = new SearchEngine.Endpoint("https://example.invalid/", List.of("input[name=q]"), "", false);
         var ddg = extract("duckduckgo-html.html", DDG_HTML, noSelector, SearchEngine.DUCKDUCKGO);
         var google = extract("google.html", GOOGLE, noSelector, SearchEngine.GOOGLE);
 

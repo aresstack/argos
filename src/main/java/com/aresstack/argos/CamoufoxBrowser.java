@@ -1299,11 +1299,32 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
         return onBrowser(() -> {
             activePage();
             String tab = BrowserTabs.normalize(tabId);
+            return read(tab, tabs.get(tab), 0);
+        });
+    }
+
+    private TabLoad read(String tab, Page page, int status) {
+        PageCapture capture = status > 0 ? capture(page, status) : capture(page);
+        MainDocument main = document(page).mainDocument;
+        return new TabLoad(tab, capture.url(), TabLoadOutcome.OK, capture, main == null ? null : main.contentType(),
+                0, ChallengeCheck.isChallenge(capture.html(), capture.url(), capture.text()), "");
+    }
+
+    /**
+     * {@link #submitSearchWithTrustedInput} in a given tab (the convenience profile's engines), read afterwards; null
+     * when none of the selectors matches. The tab is brought to the front first, as a person switches to it before
+     * typing. The caller holds the domain slot.
+     */
+    @Override
+    public TabLoad submitSearchInTab(String tabId, List<String> searchBoxSelectors, String query) {
+        return onBrowser(() -> {
+            activePage();
+            String tab = BrowserTabs.normalize(tabId);
             Page page = tabs.get(tab);
-            PageCapture capture = capture(page);
+            page.bringToFront();
+            if (!submitSearch(page, searchBoxSelectors, query)) return null;
             MainDocument main = document(page).mainDocument;
-            return new TabLoad(tab, capture.url(), TabLoadOutcome.OK, capture, main == null ? null : main.contentType(),
-                    0, ChallengeCheck.isChallenge(capture.html(), capture.url(), capture.text()), "");
+            return read(tab, page, main == null ? 0 : main.status());
         });
     }
 
@@ -2703,6 +2724,42 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
             settleLoad(p);
             return true;
         });
+    }
+
+    /**
+     * Searches like a person on the current tab's search page: a real click into the first present field among
+     * {@code searchBoxSelectors}, its content replaced by typing the query key by key, then a real Enter key, all
+     * WebDriver BiDi input ({@link RealInput}); never {@code fill}, {@code requestSubmit()} or a dispatched event.
+     * Waits for the result page the engine navigates to. False when no selector matches; throws when a field
+     * matched but could not take the input.
+     */
+    public boolean submitSearchWithTrustedInput(List<String> searchBoxSelectors, String query) {
+        return onBrowser(() -> submitSearch(activePage(), searchBoxSelectors, query));
+    }
+
+    private boolean submitSearch(Page p, List<String> searchBoxSelectors, String query) {
+        RuntimeException refused = null;
+        for (String selector : searchBoxSelectors) {
+            Locator box = p.locator(selector).first();
+            if (box.count() == 0) continue;
+            TabDocument tab = document(p);
+            int navigations = tab.navigations;
+            MainDocument before = tab.mainDocument;
+            try {
+                input.replaceText(p, box, query);
+            } catch (RuntimeException notUsable) {
+                refused = notUsable; // a hidden or covered match; an alternative locator may be the visible field
+                continue;
+            }
+            // The keys go to the field that now holds the focus.
+            input.press(p, null, "Enter", 1);
+            leaveSavedDocument(p);
+            awaitNavigationAfterInput(p, tab, navigations, before);
+            settleLoad(p);
+            return true;
+        }
+        if (refused != null) throw refused;
+        return false;
     }
 
     /**

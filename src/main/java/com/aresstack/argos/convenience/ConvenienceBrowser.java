@@ -41,6 +41,9 @@ public interface ConvenienceBrowser {
 
     boolean hasOpenTab(String tab);
 
+    /** The ids of the tabs the browser has open in the current context now. */
+    java.util.Set<String> openTabIds();
+
     /** Closes the tab; the context's last tab is emptied instead. */
     void closeTabQuietly(String tab);
 

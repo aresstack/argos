@@ -307,6 +307,7 @@ public final class ConvenienceSession {
      * in parallel under the domain gate; the answer keeps the order of the selection.
      */
     private Map<String, Object> openInNewTabs(List<Target> targets, List<Map<String, Object>> errors, String tool) {
+        forgetClosedTabs();
         List<Map<String, Object>> skipped = new ArrayList<>();
         List<Target> pending = new ArrayList<>();
         Set<String> refs = new HashSet<>();
@@ -632,6 +633,17 @@ public final class ConvenienceSession {
             out.add(item);
         }
         return out;
+    }
+
+    /**
+     * Drops the tabs of the current context that the browser no longer has (closed by the user, or gone with a
+     * browser that was closed and started again), so duplicates and the tab limit count only real tabs. One browser
+     * call, which also starts a closed browser again.
+     */
+    private void forgetClosedTabs() {
+        String context = browser.contextId();
+        Set<String> open = browser.openTabIds();
+        tabs.values().removeIf(tab -> tab.context.equals(context) && !open.contains(tab.id));
     }
 
     /** The open tab of this chat that shows exactly {@code url}, or null. */

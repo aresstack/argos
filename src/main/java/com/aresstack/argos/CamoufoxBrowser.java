@@ -1421,6 +1421,11 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
         return onBrowser(() -> tabs.all().containsKey(BrowserTabs.normalize(tabId)));
     }
 
+    @Override
+    public Set<String> openTabIds() {
+        return onBrowser(() -> Set.copyOf(tabs.all().keySet()));
+    }
+
     /** Closes a tab; the last tab of the context is emptied instead (about:blank). */
     @Override
     public void closeTabQuietly(String tabId) {

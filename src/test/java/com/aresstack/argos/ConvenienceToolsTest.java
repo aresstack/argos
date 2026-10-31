@@ -63,8 +63,10 @@ class ConvenienceToolsTest {
             Map<String, SyncToolSpecification> tools = new java.util.HashMap<>();
             new ConvenienceTools(session(browser)).specifications().forEach(spec -> tools.put(spec.tool().name(), spec));
 
-            assertEquals("Search all configured search engines in parallel. Returns combined results with IDs, titles "
-                    + "and snippets. Select relevant result IDs to inspect them.", tools.get("web_search").tool().description());
+            assertEquals("Search the configured search engines in parallel. Returns combined results with IDs, titles "
+                    + "and snippets. Select relevant result IDs to inspect them. Optional engines limits this one "
+                    + "search to the named engines, e.g. [\"google\", \"bing\"].", tools.get("web_search").tool().description());
+            assertEquals(List.of("query"), tools.get("web_search").tool().inputSchema().required());
             assertEquals("Return the exact stored URL for a known reference. Use only when the user asks for the URL or "
                     + "another tool requires it. Never use for normal navigation.", tools.get("web_get_url").tool().description());
             assertEquals("Close the specified tabs. Other tabs remain open.", tools.get("web_close_tabs").tool().description());
@@ -80,7 +82,50 @@ class ConvenienceToolsTest {
         }
     }
 
+    @Test void webSearchTakesAnOptionalEngineSelectionForThisCallOnly() {
+        try (CamoufoxBrowser browser = new CamoufoxBrowser(new ArgosConfig("127.0.0.1", 0, null, null, temp, true))) {
+            List<Object> calls = new java.util.ArrayList<>();
+            ConvenienceSession.Search search = new ConvenienceSession.Search() {
+                @Override
+                public List<com.aresstack.argos.search.ParallelWebSearch.EngineRun> run(String query, List<String> engines) {
+                    calls.add(engines == null ? "default" : engines);
+                    return List.of();
+                }
+
+                @Override
+                public List<String> engineIds() {
+                    return List.of("duckduckgo", "bing", "google");
+                }
+
+                @Override
+                public void checkEngines(List<String> engines) {
+                    if (engines != null && engines.isEmpty()) throw new IllegalArgumentException("engines is empty");
+                }
+            };
+            ConvenienceSession session = new ConvenienceSession(browser, NavigationGate.OPEN, UrlPolicy.publicOnly(),
+                    search, null);
+            SyncToolSpecification webSearch = new ConvenienceTools(session).specifications().stream()
+                    .filter(spec -> spec.tool().name().equals("web_search")).findFirst().orElseThrow();
+
+            Map<?, ?> engines = (Map<?, ?>) webSearch.tool().inputSchema().properties().get("engines");
+            assertEquals("array", engines.get("type"));
+            assertEquals(List.of("duckduckgo", "bing", "google"), ((Map<?, ?>) engines.get("items")).get("enum"));
+
+            assertFalse(call(webSearch, Map.of("query", "JavaParser")).isError());
+            assertFalse(call(webSearch, Map.of("query", "JavaParser", "engines", List.of("google", "bing"))).isError());
+            assertFalse(call(webSearch, Map.of("query", "JavaParser", "engines", "bing")).isError());
+            CallToolResult empty = call(webSearch, Map.of("query", "JavaParser", "engines", List.of()));
+            assertTrue(empty.isError());
+            assertTrue(((TextContent) empty.content().get(0)).text().contains("engines is empty"));
+            assertEquals(List.of("default", List.of("google", "bing"), List.of("bing")), calls);
+        }
+    }
+
+    private static CallToolResult call(SyncToolSpecification tool, Map<String, Object> args) {
+        return tool.callHandler().apply(null, new CallToolRequest(tool.tool().name(), args));
+    }
+
     private static ConvenienceSession session(CamoufoxBrowser browser) {
-        return new ConvenienceSession(browser, NavigationGate.OPEN, UrlPolicy.publicOnly(), query -> List.of(), null);
+        return new ConvenienceSession(browser, NavigationGate.OPEN, UrlPolicy.publicOnly(), (query, engines) -> List.of(), null);
     }
 }

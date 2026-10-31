@@ -1,5 +1,8 @@
 package com.aresstack.argos;
 
+import com.aresstack.argos.convenience.ConvenienceSession;
+import com.aresstack.argos.convenience.DomainCoordinator;
+import com.aresstack.argos.web.UrlPolicy;
 import com.microsoft.playwright.Page;
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.AfterEach;
@@ -15,6 +18,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -22,6 +26,7 @@ import java.util.concurrent.TimeUnit;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -92,6 +97,27 @@ class BrowserClosedRecoveryTest {
             slowReleased.countDown();
             assertEquals("Back", browser.navigate(url("/")).get("title"));
             assertEquals(1, browser.tabs().size());
+        }
+    }
+
+    @Test @Timeout(value = 240, unit = TimeUnit.SECONDS)
+    void webOpenUrlOpensTheSameUrlAgainAfterTheBrowserWasClosed() throws Exception {
+        try (CamoufoxBrowser browser = browser()) {
+            ConvenienceSession session = new ConvenienceSession(browser,
+                    new DomainCoordinator(4, System::currentTimeMillis), UrlPolicy.from(TestNetworks.LOOPBACK),
+                    (query, engines) -> List.of(), null);
+            String page = url("/");
+            Map<String, Object> first = session.openUrl(page);
+            String before = String.valueOf(((List<?>) first.get("opened")).isEmpty() ? first
+                    : ((Map<?, ?>) ((List<?>) first.get("opened")).get(0)).get("tabId"));
+            closeCamoufoxLikeTheUser();
+            // The tab went with the browser: the same URL is opened again, not reported as "already open" (#70).
+            Map<String, Object> again = session.openUrl(page);
+            assertEquals(List.of(), again.get("skipped"), again.toString());
+            List<?> opened = (List<?>) again.get("opened");
+            assertEquals(1, opened.size(), again.toString());
+            assertNotEquals(before, ((Map<?, ?>) opened.get(0)).get("tabId"));
+            assertThrows(IllegalArgumentException.class, () -> session.readTab(before, 1));
         }
     }
 

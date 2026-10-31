@@ -3,8 +3,6 @@ package com.aresstack.argos.search;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 
-import java.net.URLEncoder;
-import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -14,18 +12,22 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.Consumer;
 
 /**
  * Runs one web search across the configured engines (port of AskAI's engine-navigation loop in
  * PlaywrightBrowserSession). Engines are tried in order until one delivers organic results; an
- * engine's endpoints are fallbacks for the same provider. Per result page: extract first, and only
+ * engine's endpoints are fallbacks for the same provider. Each endpoint is asked through its regular start page
+ * and search field with real input ({@link SearchFormInteraction}). Per result page: extract first, and only
  * when that fails resolve a consent banner (one trusted click, never "accept all" without opt-in) and
  * look for a challenge. A challenged
  * engine family is locked for a while instead of being retried, which would only escalate the block.
  */
 public final class WebSearchService {
     public enum AttemptOutcome {
-        ORGANIC_RESULTS, NO_ORGANIC_RESULTS, EXTRACTION_FAILED, CHALLENGE_PENDING, CONSENT_REQUIRED, NAVIGATION_FAILED
+        ORGANIC_RESULTS, NO_ORGANIC_RESULTS, EXTRACTION_FAILED, CHALLENGE_PENDING, CONSENT_REQUIRED, NAVIGATION_FAILED,
+        /** The start page loaded, but its search field could not be found or operated with real input. */
+        SEARCH_BOX_UNAVAILABLE
     }
 
     public record Hit(int rank, String title, String url, String snippet) {
@@ -69,6 +71,7 @@ public final class WebSearchService {
     private final SearchDocumentReader reader;
     private final SearchResultExtractor extractor;
     private final Clock clock;
+    private final Consumer<Attempt> onAttempt;
     private final Map<String, Instant> lockedFamilies = new HashMap<>();
     private long generation;
 
@@ -78,17 +81,27 @@ public final class WebSearchService {
 
     public WebSearchService(SearchPageBrowser browser, SearchSettings settings, SearchLayoutResolver layoutResolver,
                             Clock clock) {
+        this(browser, settings, layoutResolver, clock, attempt -> { });
+    }
+
+    /** {@code onAttempt} hears each endpoint's verdict as it is reached, before the search moves on. */
+    WebSearchService(SearchPageBrowser browser, SearchSettings settings, Consumer<Attempt> onAttempt) {
+        this(browser, settings, SearchLayoutResolver.NONE, Clock.systemUTC(), onAttempt);
+    }
+
+    private WebSearchService(SearchPageBrowser browser, SearchSettings settings, SearchLayoutResolver layoutResolver,
+                             Clock clock, Consumer<Attempt> onAttempt) {
         SearchAnalysisSettings analysis = SearchAnalysisSettings.defaults();
         this.browser = browser;
         this.settings = settings;
         this.reader = new SearchDocumentReader(new SerpDocumentParser(analysis));
         this.extractor = new SearchResultExtractor(analysis, layoutResolver);
         this.clock = clock;
+        this.onAttempt = onAttempt;
     }
 
     public synchronized Report search(String query) throws SearchUnavailableException {
         if (query == null || query.isBlank()) throw new IllegalArgumentException("Empty search query");
-        String encoded = URLEncoder.encode(query.trim(), StandardCharsets.UTF_8);
         List<Hit> hits = new ArrayList<>();
         Set<String> seenUrls = new LinkedHashSet<>();
         Set<String> providerHosts = new LinkedHashSet<>();
@@ -100,14 +113,19 @@ public final class WebSearchService {
             for (SearchEngine.Endpoint endpoint : engine.endpoints()) {
                 String family = DomainNames.registrableDomain(endpoint.host());
                 if (isLocked(family)) {
-                    attempts.add(new Attempt(endpoint.host(), AttemptOutcome.CHALLENGE_PENDING, "family locked"));
+                    attempted(attempts, new Attempt(endpoint.host(), AttemptOutcome.CHALLENGE_PENDING, "family locked"));
                     break;
                 }
                 SearchPageBrowser.LoadedPage page;
                 try {
-                    page = browser.open(endpoint.url(encoded));
+                    page = SearchFormInteraction.search(browser, endpoint, query, settings.acceptAllConsent());
+                } catch (SearchFormInteraction.SearchBoxUnavailableException unusable) {
+                    anyReached = true;
+                    providerHosts.add(endpoint.host());
+                    attempted(attempts, new Attempt(endpoint.host(), AttemptOutcome.SEARCH_BOX_UNAVAILABLE, unusable.getMessage()));
+                    continue; // the provider's other start page may still be usable; never a direct result URL
                 } catch (Exception unreachable) {
-                    attempts.add(new Attempt(endpoint.host(), AttemptOutcome.NAVIGATION_FAILED, safeMessage(unreachable)));
+                    attempted(attempts, new Attempt(endpoint.host(), AttemptOutcome.NAVIGATION_FAILED, safeMessage(unreachable)));
                     continue;
                 }
                 anyReached = true;
@@ -119,16 +137,16 @@ public final class WebSearchService {
                     lockedFamilies.put(challengedFamily, clock.instant().plus(settings.challengeLock()));
                     challenges.add(new ChallengeNotice(challengedFamily, verdict.page().url(),
                             verdict.challenge().get().evidence()));
-                    attempts.add(new Attempt(host, AttemptOutcome.CHALLENGE_PENDING, verdict.challenge().get().evidence()));
+                    attempted(attempts, new Attempt(host, AttemptOutcome.CHALLENGE_PENDING, verdict.challenge().get().evidence()));
                     break; // never retry a challenged provider through its other endpoints
                 }
                 if (verdict.consentRequired()) {
-                    attempts.add(new Attempt(host, AttemptOutcome.CONSENT_REQUIRED,
+                    attempted(attempts, new Attempt(host, AttemptOutcome.CONSENT_REQUIRED,
                             "consent banner offers only 'accept all' (SEARCH_CONSENT_ACCEPT=true allows it)"));
                     break; // controlled stop for this provider; its other endpoints show the same wall
                 }
                 SearchResultExtractor.Extraction extraction = verdict.extraction();
-                attempts.add(new Attempt(host, AttemptOutcome.valueOf(extraction.outcome().name()), lastDiagnostic(extraction)));
+                attempted(attempts, new Attempt(host, AttemptOutcome.valueOf(extraction.outcome().name()), lastDiagnostic(extraction)));
                 if (extraction.outcome() == SearchOutcome.ORGANIC_RESULTS) {
                     for (SearchResultExtractor.Candidate candidate : extraction.candidates()) {
                         if (hits.size() >= settings.maxResults()) break;
@@ -148,6 +166,33 @@ public final class WebSearchService {
                     .map(attempt -> attempt.host() + " " + attempt.detail()).toList());
         }
         return new Report(hits, List.copyOf(providerHosts), attempts, challenges);
+    }
+
+    private void attempted(List<Attempt> attempts, Attempt attempt) {
+        attempts.add(attempt);
+        onAttempt.accept(attempt);
+    }
+
+    /**
+     * The organic results on a page that is already loaded in answer to the query, for the endpoint that asked:
+     * extraction only, without any browser action (no click, no navigation) and without touching the challenge
+     * locks. Empty when the page shows none. Not synchronized: it may read while a {@link #search} of this service
+     * is still waiting for its browser.
+     */
+    List<Hit> resultsOn(SearchPageBrowser.LoadedPage page, String query, SearchEngine engine,
+                        SearchEngine.Endpoint endpoint) {
+        SearchDocumentReader.Read read = reader.read(page, endpoint, 0);
+        SearchResultExtractor.Extraction extraction = extractor.extract(read.serp(), query, endpoint, engine.chromeDomains());
+        if (extraction.outcome() != SearchOutcome.ORGANIC_RESULTS) return List.of();
+        List<Hit> hits = new ArrayList<>();
+        Set<String> seenUrls = new LinkedHashSet<>();
+        for (SearchResultExtractor.Candidate candidate : extraction.candidates()) {
+            if (hits.size() >= settings.maxResults()) break;
+            if (seenUrls.add(candidate.url())) {
+                hits.add(new Hit(hits.size() + 1, candidate.title(), candidate.url(), candidate.snippet()));
+            }
+        }
+        return hits;
     }
 
     private record PageVerdict(SearchPageBrowser.LoadedPage page, SearchResultExtractor.Extraction extraction,

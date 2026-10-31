@@ -128,7 +128,7 @@ class ConvenienceBrowserTest {
             String b = "http://127.0.0.1:" + port + "/slow-b";
             DomainCoordinator coordinator = new DomainCoordinator(4, System::currentTimeMillis);
             ConvenienceSession session = new ConvenienceSession(browser, coordinator, UrlPolicy.from(TestNetworks.LOOPBACK),
-                    query -> List.of(new ParallelWebSearch.EngineRun("bing", ParallelWebSearch.EngineStatus.OK, "",
+                    (query, engines) -> List.of(new ParallelWebSearch.EngineRun("bing", ParallelWebSearch.EngineStatus.OK, "",
                             List.of(new ParallelWebSearch.EngineHit(1, "A", a, ""),
                                     new ParallelWebSearch.EngineHit(2, "B", b, "")), null, "")), null);
             session.search("lokal");
@@ -149,6 +149,250 @@ class ConvenienceBrowserTest {
         } finally {
             site.stop(0);
         }
+    }
+
+    /**
+     * #72: the window's own blank start tab is used by the first load instead of standing empty next to the pages;
+     * of a parallel fan-out exactly one load gets it, a used tab is never navigated again, and the last tab emptied
+     * on close is free again under a new id.
+     */
+    @Test @Timeout(value = 240, unit = TimeUnit.SECONDS)
+    void theUnusedStartTabIsLoadedFirstAndOnlyOnce() throws Exception {
+        Assumptions.assumeTrue(Boolean.getBoolean("argos.testCamoufox"), "Opt-in real browser test");
+        ArgosConfig local = ArgosConfig.fromEnvironment();
+        local.requireBrowserConfiguration();
+        HttpServer site = site(Collections.synchronizedList(new ArrayList<>()), null);
+        try (CamoufoxBrowser browser = browser(local)) {
+            int port = site.getAddress().getPort();
+            String a = "http://localhost:" + port + "/slow-a";
+            String b = "http://127.0.0.1:" + port + "/slow-b";
+            String c = "http://localhost:" + port + "/slow-c";
+            DomainCoordinator coordinator = new DomainCoordinator(4, System::currentTimeMillis);
+            List<Map<String, Object>> fresh = browser.tabs();
+            assertEquals(1, fresh.size(), "a fresh window has its start tab: " + fresh);
+            String start = (String) fresh.get(0).get("tab");
+
+            List<TabLoad> loads = browser.loadTabs(List.of(
+                    new TabLoadRequest(null, a, RegistrableDomain.of(a)),
+                    new TabLoadRequest(null, b, RegistrableDomain.of(b)),
+                    new TabLoadRequest(null, c, RegistrableDomain.of(c))), coordinator, 4, 30_000);
+            for (TabLoad load : loads) assertEquals(TabLoadOutcome.OK, load.outcome(), load.toString());
+            List<String> ids = loads.stream().map(TabLoad::tab).toList();
+            assertEquals(3, ids.stream().distinct().count(), "one tab each: " + ids);
+            assertEquals(start, ids.get(0), "the start tab took the first page: " + ids);
+            assertEquals(3, browser.tabs().size(), "three pages, no empty New Tab: " + browser.tabs());
+            assertEquals(start, browser.tabs().stream().filter(tab -> Boolean.TRUE.equals(tab.get("current")))
+                    .findFirst().orElseThrow().get("tab"), "no tab switch");
+
+            // Every tab is in use now: the next page gets a tab of its own, the others keep their pages.
+            String next = "http://127.0.0.1:" + port + "/next";
+            TabLoad another = browser.loadTabs(List.of(new TabLoadRequest(null, next, RegistrableDomain.of(next))),
+                    coordinator, 1, 30_000).get(0);
+            assertEquals(TabLoadOutcome.OK, another.outcome(), another.toString());
+            assertFalse(ids.contains(another.tab()), another.tab() + " is new");
+            assertEquals("localhost/slow-a", browser.readTab(start).capture().title());
+
+            for (String id : List.of(ids.get(1), ids.get(2), another.tab())) browser.closeTabQuietly(id);
+            browser.closeTabQuietly(start); // the last tab is emptied, not closed
+            assertFalse(browser.hasOpenTab(start), "its id went with the closed page");
+            assertEquals(1, browser.tabs().size());
+            TabLoad again = browser.loadTabs(List.of(new TabLoadRequest(null, a, RegistrableDomain.of(a))),
+                    coordinator, 1, 30_000).get(0);
+            assertEquals(TabLoadOutcome.OK, again.outcome(), again.toString());
+            assertNotEquals(start, again.tab());
+            assertEquals(1, browser.tabs().size(), "the emptied tab was used: " + browser.tabs());
+            assertTrue(coordinator.activeDomains().isEmpty(), "every slot is released");
+        } finally {
+            site.stop(0);
+        }
+    }
+
+    /** #72: web_open_url on a fresh window navigates its start tab; a second URL does not overwrite the first. */
+    @Test @Timeout(value = 240, unit = TimeUnit.SECONDS)
+    void webOpenUrlUsesTheStartTabThenNewTabs() throws Exception {
+        Assumptions.assumeTrue(Boolean.getBoolean("argos.testCamoufox"), "Opt-in real browser test");
+        ArgosConfig local = ArgosConfig.fromEnvironment();
+        local.requireBrowserConfiguration();
+        HttpServer site = site(Collections.synchronizedList(new ArrayList<>()), null);
+        try (CamoufoxBrowser browser = browser(local)) {
+            int port = site.getAddress().getPort();
+            String a = "http://localhost:" + port + "/slow-a";
+            String b = "http://127.0.0.1:" + port + "/slow-b";
+            ConvenienceSession session = new ConvenienceSession(browser,
+                    new DomainCoordinator(4, System::currentTimeMillis), UrlPolicy.from(TestNetworks.LOOPBACK),
+                    (query, engines) -> List.of(), null);
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> first = (List<Map<String, Object>>) session.openUrl(a).get("opened");
+            assertEquals(1, first.size(), first.toString());
+            assertEquals(1, browser.tabs().size(), "no second, empty tab: " + browser.tabs());
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> second = (List<Map<String, Object>>) session.openUrl(b).get("opened");
+            assertEquals(1, second.size(), second.toString());
+            assertNotEquals(first.get(0).get("tabId"), second.get(0).get("tabId"));
+            assertEquals(2, browser.tabs().size());
+            assertEquals("localhost/slow-a", session.readTab((String) first.get(0).get("tabId"), 1).get("title"));
+        } finally {
+            site.stop(0);
+        }
+    }
+
+    /**
+     * #79: the engines of a parallel search type into their tabs at the same time. Each tab's search page reports
+     * its first key and the result request reaches the server when Enter submits the form; every tab must have
+     * begun typing before the first one submitted. Typed one tab after the other, the second tab's first key would
+     * only come after the first tab's Enter (Windows: result pages 9.5 s and 19.3 s apart).
+     */
+    @Test @Timeout(value = 240, unit = TimeUnit.SECONDS)
+    void typesIntoAllEngineTabsAtTheSameTime() throws Exception {
+        Assumptions.assumeTrue(Boolean.getBoolean("argos.testCamoufox"), "Opt-in real browser test");
+        ArgosConfig local = ArgosConfig.fromEnvironment();
+        local.requireBrowserConfiguration();
+        Map<String, Long> seen = new java.util.concurrent.ConcurrentHashMap<>();
+        HttpServer site = searchSite(seen);
+        try (CamoufoxBrowser browser = browser(local)) {
+            int port = site.getAddress().getPort();
+            List<String> engines = List.of("a", "b", "c");
+            List<TabLoadRequest> starts = new ArrayList<>();
+            for (String engine : engines) {
+                String url = "http://" + (engine.equals("b") ? "127.0.0.1" : "localhost") + ":" + port + "/search-"
+                        + engine;
+                starts.add(new TabLoadRequest(null, url, RegistrableDomain.of(url)));
+            }
+            List<TabLoad> loads = browser.loadTabs(starts, new DomainCoordinator(4, System::currentTimeMillis), 4,
+                    60_000);
+            for (TabLoad load : loads) assertEquals(TabLoadOutcome.OK, load.outcome(), load.toString());
+
+            String query = "parallele suche in allen tabs";
+            List<java.util.concurrent.Future<TabLoad>> searches = new ArrayList<>();
+            try (var workers = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
+                for (TabLoad load : loads) {
+                    searches.add(workers.submit(() -> browser.submitSearchInTab(load.tab(), List.of("input[name=q]"),
+                            query)));
+                }
+                for (int i = 0; i < engines.size(); i++) {
+                    TabLoad result = searches.get(i).get(120, TimeUnit.SECONDS);
+                    assertNotNull(result, "the search field of " + engines.get(i) + " was found");
+                    assertTrue(result.capture().title().startsWith("results-" + engines.get(i)), result.toString());
+                    assertTrue(result.capture().text().contains(query), "the whole query arrived: " + result);
+                }
+            }
+            long origin = engines.stream().mapToLong(engine -> seen.get("first-key-" + engine)).min().orElseThrow();
+            Map<String, Long> relative = new java.util.TreeMap<>();
+            seen.forEach((event, at) -> relative.put(event, (at - origin) / 1_000_000));
+            long lastFirstKey = engines.stream().mapToLong(engine -> seen.get("first-key-" + engine)).max()
+                    .orElseThrow();
+            long firstSubmit = engines.stream().mapToLong(engine -> seen.get("results-" + engine)).min().orElseThrow();
+            assertTrue(lastFirstKey < firstSubmit, "every tab was typing before the first Enter (ms): " + relative);
+        } finally {
+            site.stop(0);
+        }
+    }
+
+    /**
+     * #80 review: a typing flow stopped while Shift and the left mouse button are down lets go of both before it
+     * gives up, even with the worker's interrupt flag set. The tab then takes plain input again (no Shift, no drag),
+     * and the other tab never sees any of it.
+     */
+    @Test @Timeout(value = 240, unit = TimeUnit.SECONDS)
+    @SuppressWarnings("unchecked")
+    void aStoppedTypingFlowReleasesWhatItHolds() throws Exception {
+        Assumptions.assumeTrue(Boolean.getBoolean("argos.testCamoufox"), "Opt-in real browser test");
+        ArgosConfig local = ArgosConfig.fromEnvironment();
+        local.requireBrowserConfiguration();
+        HttpServer site = searchSite(new java.util.concurrent.ConcurrentHashMap<>());
+        try (CamoufoxBrowser browser = browser(local)) {
+            int port = site.getAddress().getPort();
+            String a = "http://localhost:" + port + "/search-a";
+            String b = "http://127.0.0.1:" + port + "/search-b";
+            List<TabLoad> loads = browser.loadTabs(List.of(new TabLoadRequest(null, a, RegistrableDomain.of(a)),
+                    new TabLoadRequest(null, b, RegistrableDomain.of(b))),
+                    new DomainCoordinator(4, System::currentTimeMillis), 4, 60_000);
+            for (TabLoad load : loads) assertEquals(TabLoadOutcome.OK, load.outcome(), load.toString());
+            com.microsoft.playwright.Page first = browser.onBrowser(() -> browser.pageFor(loads.get(0).tab()));
+            com.microsoft.playwright.Page second = browser.onBrowser(() -> browser.pageFor(loads.get(1).tab()));
+            String record = """
+                    () => { window.seen = [];
+                      for (const type of ['keydown', 'keyup', 'mousedown', 'mouseup'])
+                        addEventListener(type, e => seen.push(type + ':' + (e.key || e.button) + ':' + e.shiftKey), true);
+                      document.querySelector('input').focus(); }""";
+            for (com.microsoft.playwright.Page page : List.of(first, second)) browser.onBrowser(() -> page.evaluate(record));
+
+            java.util.concurrent.CountDownLatch holding = new java.util.concurrent.CountDownLatch(1);
+            java.util.concurrent.atomic.AtomicReference<Throwable> ended = new java.util.concurrent.atomic.AtomicReference<>();
+            Thread worker = Thread.ofVirtual().start(() -> {
+                InputDevice device = browser.inTurns(first);
+                try {
+                    // On the field, so the press keeps the focus where the next key goes.
+                    com.microsoft.playwright.options.BoundingBox field =
+                            browser.onBrowser(() -> first.locator("input").boundingBox());
+                    device.move(field.x + 5, field.y + field.height / 2);
+                    device.keyDown("Shift");
+                    device.down(MouseButton.LEFT);
+                    holding.countDown();
+                    device.sleep(60_000); // stopped here, as an engine at its time limit
+                } catch (Throwable stopped) {
+                    ended.set(stopped);
+                }
+            });
+            assertTrue(holding.await(60, TimeUnit.SECONDS), "Shift and the button went down");
+            worker.interrupt();
+            worker.join(30_000);
+            assertInstanceOf(CamoufoxBrowser.Interrupted.class, ended.get());
+
+            List<String> held = (List<String>) browser.onBrowser(() -> first.evaluate("() => seen"));
+            assertTrue(held.contains("keyup:Shift:false"), "Shift was let go: " + held);
+            assertTrue(held.stream().anyMatch(event -> event.startsWith("mouseup:0")), "the button was let go: " + held);
+
+            InputDevice again = browser.inTurns(first);
+            again.keyDown("a");
+            again.keyUp("a");
+            List<String> after = (List<String>) browser.onBrowser(() -> first.evaluate("() => seen"));
+            assertTrue(after.contains("keydown:a:false"), "a plain key again, no Shift: " + after);
+            assertEquals("a", browser.onBrowser(() -> first.evaluate("() => document.querySelector('input').value")));
+            assertEquals(List.of(), browser.onBrowser(() -> second.evaluate("() => seen")), "the other tab saw nothing");
+        } finally {
+            site.stop(0);
+        }
+    }
+
+    /**
+     * /search-x: a search form whose first key is reported to /first-key-x; /results-x answers the submitted form.
+     * The arrival time (nanoTime) of each is recorded under its path.
+     */
+    private static HttpServer searchSite(Map<String, Long> seen) throws Exception {
+        HttpServer site = HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0);
+        site.createContext("/", exchange -> {
+            long at = System.nanoTime();
+            String path = exchange.getRequestURI().getPath();
+            String engine = path.substring(path.lastIndexOf('-') + 1);
+            String html;
+            if (path.startsWith("/search-")) {
+                html = "<html><head><title>search-" + engine + "</title></head><body><form action=\"/results-"
+                        + engine + "\"><input name=\"q\" autocomplete=\"off\"></form><script>"
+                        + "document.querySelector('input').addEventListener('keydown', () =>"
+                        + " navigator.sendBeacon('/first-key-" + engine + "'), {once: true});</script></body></html>";
+            } else if (path.startsWith("/first-key-") || path.startsWith("/results-")) {
+                seen.putIfAbsent(path.substring(1), at);
+                String query = exchange.getRequestURI().getQuery();
+                html = "<html><head><title>results-" + engine + "</title></head><body><p>"
+                        + (query == null ? "" : java.net.URLDecoder.decode(query.replaceFirst("^q=", ""),
+                        StandardCharsets.UTF_8)) + "</p></body></html>";
+            } else {
+                exchange.sendResponseHeaders(404, -1);
+                exchange.close();
+                return;
+            }
+            byte[] body = html.getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "text/html; charset=utf-8");
+            exchange.getResponseHeaders().add("Connection", "close");
+            exchange.sendResponseHeaders(200, body.length);
+            try (var out = exchange.getResponseBody()) {
+                out.write(body);
+            }
+        });
+        site.setExecutor(java.util.concurrent.Executors.newCachedThreadPool());
+        site.start();
+        return site;
     }
 
     private CamoufoxBrowser browser(ArgosConfig local) {

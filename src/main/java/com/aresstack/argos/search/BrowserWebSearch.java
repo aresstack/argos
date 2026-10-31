@@ -54,7 +54,9 @@ public final class BrowserWebSearch implements WebSearchPort {
                     + " (solve it in the Argos browser window, then search again)");
         }
         for (WebSearchService.Attempt attempt : report.attempts()) {
-            notes.add("ATTEMPT: " + attempt.host() + " " + attempt.outcome());
+            notes.add("ATTEMPT: " + attempt.host() + " " + attempt.outcome()
+                    + (attempt.outcome() == WebSearchService.AttemptOutcome.SEARCH_BOX_UNAVAILABLE
+                    && !attempt.detail().isBlank() ? " (" + attempt.detail() + ")" : ""));
         }
         return notes;
     }

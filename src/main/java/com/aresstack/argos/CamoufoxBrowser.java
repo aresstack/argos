@@ -105,6 +105,8 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
     private BrowserTabs tabs = new BrowserTabs();
     /** The persistent profile's own context ("start") and its tabs while another user context is active. */
     private BrowserContext startContext;
+    /** Blank tabs a load may use before it opens a new one (the start tab, an emptied last tab). */
+    private final FreeTabs freeTabs = new FreeTabs();
     private final BrowserTabs startTabs = tabs;
     /** Additional WebDriver BiDi user contexts in this browser, by context id. */
     private final Map<String, UserContext> userContexts = new java.util.LinkedHashMap<>();
@@ -360,6 +362,7 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
 
     /** Forgets the whole browser session: tabs, user contexts, transport and proxy. The profile stays on disk. */
     private void forgetSession() {
+        freeTabs.clear();
         context = null;
         startContext = null;
         forgetUserContexts();
@@ -397,13 +400,16 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
         Optional<Page> current = tabs.current();
         if (current.isPresent()) return current.get();
         ensureContext();
-        Page first = context.pages().stream().filter(p -> !p.isClosed()).findFirst()
-                .orElseGet(context::newPage);
-        return tabs.select(adopt(first));
+        Optional<Page> open = context.pages().stream().filter(p -> !p.isClosed()).findFirst();
+        Page first = open.orElseGet(context::newPage);
+        String id = adopt(first);
+        // A tab opened only to have a current one is as unused as the start tab.
+        if (open.isEmpty()) freeTabs.offer(first, document(first).navigations);
+        return tabs.select(id);
     }
 
     /** Resolve an explicit tab without changing which tab is current. */
-    private Page pageFor(String tabId) throws Exception {
+    Page pageFor(String tabId) throws Exception {
         Page current = activePage();
         return tabId == null || tabId.isBlank() ? current : tabs.get(tabId);
     }
@@ -478,6 +484,9 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
                 throw error;
             }
             probeUnicode();
+            // The window's own "New Tab" is used by the first load instead of standing next to it empty (#72).
+            context.pages().stream().filter(p -> !p.isClosed() && "about:blank".equals(p.url()))
+                    .forEach(p -> freeTabs.offer(p, document(p).navigations));
             // Tabs opened by websites (target=_blank, window.open) are adopted like our own.
             observe(context);
         }
@@ -548,6 +557,7 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
         // Protocol-level BiDi network events only; nothing is injected into the page.
         network.attach(page);
         page.onClose(closed -> {
+            freeTabs.withdraw(closed);
             tabs.forget(closed);
             controlSnapshots.remove(closed);
             documents.remove(closed);
@@ -1061,6 +1071,8 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
         NavigationGate.Lease lease;
         Page page;
         String tab;
+        /** The page is a free blank tab the job took instead of opening one; it is never closed on failure. */
+        boolean reused;
         int status;
         MainDocument previousDocument;
         MainDocument previousDownload;
@@ -1182,7 +1194,11 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
         try {
             Page page;
             if (job.request.tab() == null) {
-                page = context.newPage();
+                // An unused blank tab first (at most one job gets it: claims run on this thread), else a new one.
+                // Neither is brought to the front: which tab the user watches stays the user's choice.
+                Optional<Page> free = freeTabs.claim(context, p -> document(p).navigations);
+                job.reused = free.isPresent();
+                page = free.orElseGet(context::newPage);
                 job.tab = adopt(page);
             } else {
                 job.tab = BrowserTabs.normalize(job.request.tab());
@@ -1316,13 +1332,18 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
     }
 
     /**
-     * A failed new tab is closed, which stops its navigation (the context's last tab goes to about:blank); an
-     * existing tab keeps whatever it shows, so a failed link never throws away the agent's page.
+     * A failed new tab is closed, which stops its navigation (the context's last tab goes to about:blank); a reused
+     * start tab goes back to about:blank instead of being closed; an existing tab keeps whatever it shows, so a failed
+     * link never throws away the agent's page.
      */
     private void abandon(LoadJob job) {
         if (job.page == null) return;
         try {
-            if (job.request.tab() == null && tabs.size() > 1) {
+            if (job.reused) {
+                // The user's start tab stays; stopping the navigation is enough. It belongs to the job's caller
+                // now (an engine keeps its tab), so it is not offered to other loads again.
+                job.page.navigate("about:blank");
+            } else if (job.request.tab() == null && tabs.size() > 1) {
                 job.page.close();
                 tabs.forget(job.page);
             } else if (job.request.tab() == null) {
@@ -1366,12 +1387,96 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
         return onBrowser(() -> {
             activePage();
             String tab = BrowserTabs.normalize(tabId);
-            Page page = tabs.get(tab);
-            PageCapture capture = capture(page);
-            MainDocument main = document(page).mainDocument;
-            return new TabLoad(tab, capture.url(), TabLoadOutcome.OK, capture, main == null ? null : main.contentType(),
-                    0, ChallengeCheck.isChallenge(capture.html(), capture.url(), capture.text()), "");
+            return read(tab, tabs.get(tab), false);
         });
+    }
+
+    /** {@code navigated}: the page was just navigated, so its status and Retry-After count. */
+    private TabLoad read(String tab, Page page, boolean navigated) {
+        MainDocument main = document(page).mainDocument;
+        int status = navigated && main != null ? main.status() : 0;
+        PageCapture capture = status > 0 ? capture(page, status) : capture(page);
+        return new TabLoad(tab, capture.url(), TabLoadOutcome.OK, capture, main == null ? null : main.contentType(),
+                navigated ? retryAfterSeconds(page) : 0,
+                ChallengeCheck.isChallenge(capture.html(), capture.url(), capture.text()), "");
+    }
+
+    /**
+     * {@link #submitSearchWithTrustedInput} in a given tab (the convenience profile's engines), read afterwards; null
+     * when none of the selectors matches. The tab is not brought to the front: BiDi input goes to its browsing
+     * context while the visible tab stays as it is (Juggler's focus emulation keeps every tab focused and visible
+     * for the page). Every input step (one key, one pointer move, one measurement) is a turn of its own on the
+     * browser thread, and the human pauses between them are spent off it ({@link #inTurns}): engines searched side
+     * by side type into their tabs at the same time. The result page loads in short waits that let the other
+     * engines' tabs type and load meanwhile. The caller holds the domain slot.
+     */
+    @Override
+    public TabLoad submitSearchInTab(String tabId, List<String> searchBoxSelectors, String query) {
+        String tab = BrowserTabs.normalize(tabId);
+        Submitted submitted;
+        try {
+            submitted = typeAndEnterInTurns(tab, searchBoxSelectors, query);
+        } catch (PlaywrightException failed) {
+            // Unwrapped by inTurns for RealInput; masked as onBrowser does for every other failure.
+            throw new IllegalStateException("Camoufox operation failed: " + masker.text(String.valueOf(
+                    failed.getMessage())), failed);
+        }
+        if (submitted == null) return null;
+        Page p = submitted.page();
+        TabDocument doc = submitted.document();
+        boolean navigated = awaitInSlices(p, 1_500, () -> doc.navigations > submitted.navigations());
+        if (navigated) {
+            awaitInSlices(p, 15_000, () -> {
+                MainDocument main = doc.mainDocument;
+                return main != null && main != submitted.before() && (main.status() < 300 || main.status() >= 400)
+                        && main.finished;
+            });
+        }
+        awaitLoadInSlices(p, 5_000);
+        return onBrowser(() -> read(tab, p, navigated));
+    }
+
+    /** The input part of a search: the field typed into and Enter pressed; what the navigation waits compare. */
+    private record Submitted(Page page, TabDocument document, int navigations, MainDocument before) {
+    }
+
+    private static final int SLICE_MS = 100;
+
+    /**
+     * Waits up to {@code millis} for {@code condition} in short browser-thread turns, so other work interleaves.
+     * Waits on the tab's own page, never on the current one.
+     */
+    private boolean awaitInSlices(Page p, long millis, java.util.function.BooleanSupplier condition) {
+        long until = System.currentTimeMillis() + millis;
+        do {
+            boolean met = onBrowser(() -> {
+                try {
+                    // Waiting on a page lets Playwright dispatch the protocol events that update the tab documents.
+                    p.waitForCondition(condition, new Page.WaitForConditionOptions().setTimeout(SLICE_MS));
+                    return true;
+                } catch (PlaywrightException notYet) {
+                    return false;
+                }
+            });
+            if (met) return true;
+        } while (System.currentTimeMillis() < until);
+        return false;
+    }
+
+    /** {@link #settleLoad} in short turns of the browser thread. */
+    private void awaitLoadInSlices(Page p, long millis) {
+        long until = System.currentTimeMillis() + millis;
+        do {
+            boolean loaded = onBrowser(() -> {
+                try {
+                    p.waitForLoadState(LoadState.LOAD, new Page.WaitForLoadStateOptions().setTimeout(SLICE_MS));
+                    return true;
+                } catch (PlaywrightException notYet) {
+                    return false;
+                }
+            });
+            if (loaded) return;
+        } while (System.currentTimeMillis() < until);
     }
 
     /** Goes back one history entry in a tab and reads it; null without history. The caller holds the domain slot. */
@@ -1421,6 +1526,11 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
         return onBrowser(() -> tabs.all().containsKey(BrowserTabs.normalize(tabId)));
     }
 
+    @Override
+    public Set<String> openTabIds() {
+        return onBrowser(() -> Set.copyOf(tabs.all().keySet()));
+    }
+
     /** Closes a tab; the last tab of the context is emptied instead (about:blank). */
     @Override
     public void closeTabQuietly(String tabId) {
@@ -1430,6 +1540,9 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
             if (page == null) return null;
             if (tabs.size() <= 1) {
                 page.navigate("about:blank");
+                // The closed tab's id is gone as if the tab were; the empty tab is free for the next load.
+                tabs.reissue(page);
+                freeTabs.offer(page, document(page).navigations);
             } else {
                 page.close();
                 tabs.forget(page);
@@ -2770,6 +2883,237 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
             settleLoad(p);
             return true;
         });
+    }
+
+    /**
+     * Searches like a person on the current tab's search page: a real click into the first present field among
+     * {@code searchBoxSelectors}, its content replaced by typing the query key by key, then a real Enter key, all
+     * WebDriver BiDi input ({@link RealInput}); never {@code fill}, {@code requestSubmit()} or a dispatched event.
+     * Waits for the result page the engine navigates to. False when no selector matches; throws when a field
+     * matched but could not take the input.
+     */
+    public boolean submitSearchWithTrustedInput(List<String> searchBoxSelectors, String query) {
+        return onBrowser(() -> submitSearch(activePage(), searchBoxSelectors, query));
+    }
+
+    private boolean submitSearch(Page p, List<String> searchBoxSelectors, String query) {
+        Submitted submitted = typeAndEnter(p, searchBoxSelectors, query);
+        if (submitted == null) return false;
+        awaitNavigationAfterInput(p, submitted.document(), submitted.navigations(), submitted.before());
+        settleLoad(p);
+        return true;
+    }
+
+    /**
+     * {@link #typeAndEnter} with each input step in its own turn of the browser thread ({@link #inTurns}), so that
+     * typing into one tab never holds up the input of another.
+     */
+    private Submitted typeAndEnterInTurns(String tab, List<String> searchBoxSelectors, String query) {
+        RealInput.KeyChord enter = input.chord("Enter");
+        Page p = onBrowser(() -> {
+            activePage();
+            return tabs.get(tab);
+        });
+        InputDevice device = inTurns(p);
+        RuntimeException refused = null;
+        for (String selector : searchBoxSelectors) {
+            Locator box = onBrowser(() -> {
+                Locator first = p.locator(selector).first();
+                return first.count() == 0 ? null : first;
+            });
+            if (box == null) continue;
+            Submitted before = onBrowser(() -> {
+                TabDocument doc = document(p);
+                return new Submitted(p, doc, doc.navigations, doc.mainDocument);
+            });
+            try {
+                input.replaceText(device, p, box, query);
+            } catch (BrowserClosed | BrowserStalled | Interrupted gone) {
+                throw gone;
+            } catch (RuntimeException notUsable) {
+                refused = notUsable; // a hidden or covered match; an alternative locator may be the visible field
+                continue;
+            }
+            // The keys go to the field that now holds the focus.
+            input.press(device, enter, 1);
+            onBrowser(() -> {
+                leaveSavedDocument(p);
+                return null;
+            });
+            return before;
+        }
+        if (refused != null) throw refused;
+        return null;
+    }
+
+    /** The input of a tab given up while it was typed into: its job was stopped, nothing more is typed. */
+    static final class Interrupted extends IllegalStateException {
+        Interrupted(InterruptedException cause) {
+            super("Input stopped: the task was cancelled", cause);
+        }
+    }
+
+    /**
+     * Real input to one tab in many short turns of the browser thread instead of one long one: every key, pointer
+     * move and page measurement is its own {@link #onBrowser} call, and the human pauses between them are slept by
+     * the calling thread. Other tabs' input and loads run in those pauses. The device's clock counts only the
+     * planned pauses: a turn that waited behind another tab's step shifts the following keys, it never shortens a
+     * pause to catch up, so no keys are fired back to back. Playwright's own exceptions reach {@link RealInput}
+     * unwrapped (it recognizes refused keys and pointer samples outside the viewport by them). A flow stopped between
+     * a key or button going down and up (the engine ran out of time) releases what it holds first, so the tab is not
+     * left with Control or the mouse button held down.
+     */
+    InputDevice inTurns(Page page) {
+        InputDevice direct = InputDevice.of(page);
+        return new InputDevice() {
+            private long clock;
+            private final Set<String> heldKeys = new java.util.LinkedHashSet<>();
+            private final Set<MouseButton> heldButtons = java.util.EnumSet.noneOf(MouseButton.class);
+
+            /** Lets go of every held key (last first) and button in one turn, whatever the interrupt flag says. */
+            private void releaseHeld() {
+                if (heldKeys.isEmpty() && heldButtons.isEmpty()) return;
+                List<String> keys = new ArrayList<>(heldKeys);
+                Collections.reverse(keys);
+                List<MouseButton> buttons = List.copyOf(heldButtons);
+                heldKeys.clear();
+                heldButtons.clear();
+                boolean interrupted = Thread.interrupted();
+                try {
+                    onBrowser(() -> {
+                        for (String key : keys) {
+                            try {
+                                direct.keyUp(key);
+                            } catch (RuntimeException ignored) {
+                                // keep releasing the others
+                            }
+                        }
+                        for (MouseButton button : buttons) {
+                            try {
+                                direct.up(button);
+                            } catch (RuntimeException ignored) {
+                                // keep releasing the others
+                            }
+                        }
+                        return null;
+                    });
+                } catch (RuntimeException unreleased) {
+                    // The browser is gone or busy; nothing more can be done for this tab.
+                } finally {
+                    if (interrupted) Thread.currentThread().interrupt();
+                }
+            }
+
+            private Interrupted stopped(InterruptedException cause) {
+                releaseHeld();
+                return new Interrupted(cause);
+            }
+
+            private <T> T turn(java.util.function.Supplier<T> step) {
+                try {
+                    return onBrowser(step::get);
+                } catch (BrowserClosed | BrowserStalled gone) {
+                    throw gone;
+                } catch (IllegalStateException failed) {
+                    if (Thread.currentThread().isInterrupted() && failed.getCause() instanceof InterruptedException i) {
+                        throw stopped(i);
+                    }
+                    if (failed.getClass() == IllegalStateException.class
+                            && failed.getCause() instanceof PlaywrightException playwright) throw playwright;
+                    throw failed;
+                }
+            }
+
+            private void turn(Runnable step) {
+                turn(() -> {
+                    step.run();
+                    return null;
+                });
+            }
+
+            @Override public void move(double x, double y) {
+                turn(() -> direct.move(x, y));
+            }
+
+            @Override public void down(MouseButton button) {
+                // Held from before the turn: an interrupt while it runs may leave it pressed.
+                heldButtons.add(button);
+                turn(() -> direct.down(button));
+            }
+
+            @Override public void up(MouseButton button) {
+                turn(() -> direct.up(button));
+                heldButtons.remove(button);
+            }
+
+            @Override public void wheel(double deltaX, double deltaY) {
+                turn(() -> direct.wheel(deltaX, deltaY));
+            }
+
+            @Override public void keyDown(String key) {
+                heldKeys.add(key);
+                try {
+                    turn(() -> direct.keyDown(key));
+                } catch (Interrupted stopped) {
+                    throw stopped;
+                } catch (RuntimeException refused) {
+                    heldKeys.remove(key); // not pressed (a key Playwright does not know, say)
+                    throw refused;
+                }
+            }
+
+            @Override public void keyUp(String key) {
+                turn(() -> direct.keyUp(key));
+                heldKeys.remove(key);
+            }
+
+            @Override public void insertText(String text) {
+                turn(() -> direct.insertText(text));
+            }
+
+            @Override public void sleep(long millis) {
+                if (millis <= 0) return;
+                try {
+                    Thread.sleep(millis);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    throw stopped(interrupted);
+                }
+                clock += millis;
+            }
+
+            @Override public long now() {
+                return clock;
+            }
+
+            @Override public <T> T read(java.util.function.Supplier<T> query) {
+                return turn(query);
+            }
+        };
+    }
+
+    /** Types into the first usable field and presses Enter; null when no selector matches. */
+    private Submitted typeAndEnter(Page p, List<String> searchBoxSelectors, String query) {
+        RuntimeException refused = null;
+        for (String selector : searchBoxSelectors) {
+            Locator box = p.locator(selector).first();
+            if (box.count() == 0) continue;
+            TabDocument tab = document(p);
+            int navigations = tab.navigations;
+            MainDocument before = tab.mainDocument;
+            try {
+                input.replaceText(p, box, query);
+            } catch (RuntimeException notUsable) {
+                refused = notUsable; // a hidden or covered match; an alternative locator may be the visible field
+                continue;
+            }
+            // The keys go to the field that now holds the focus.
+            input.press(p, null, "Enter", 1);
+            leaveSavedDocument(p);
+            return new Submitted(p, tab, navigations, before);
+        }
+        if (refused != null) throw refused;
+        return null;
     }
 
     /**

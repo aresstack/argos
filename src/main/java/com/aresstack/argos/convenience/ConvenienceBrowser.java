@@ -39,7 +39,18 @@ public interface ConvenienceBrowser {
     /** A real (BiDi input) click in the tab; false when the element is missing. */
     boolean clickInTab(String selector, String tab);
 
+    /**
+     * Searches in the tab like a person: a real click into the first present field among {@code searchBoxSelectors},
+     * the query typed key by key and a real Enter (BiDi input, no script submit); the tab is read once the result
+     * page has loaded. Null when no selector matches; an exception when a field matched but could not take the
+     * input. The caller holds the domain slot.
+     */
+    TabLoad submitSearchInTab(String tab, List<String> searchBoxSelectors, String query);
+
     boolean hasOpenTab(String tab);
+
+    /** The ids of the tabs the browser has open in the current context now. */
+    java.util.Set<String> openTabIds();
 
     /** Closes the tab; the context's last tab is emptied instead. */
     void closeTabQuietly(String tab);

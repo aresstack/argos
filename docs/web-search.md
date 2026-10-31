@@ -9,13 +9,24 @@ Quelle: `Miguel0888/askai-java8`, Branch `arch`, Module `browser-search-analysis
    (`SEARCH_ENGINES`, Standard `duckduckgo,bing,google`). Die erste Maschine mit organischen
    Treffern beendet die Suche (AskAI `FIRST_USABLE`). Endpunkte einer Maschine (DuckDuckGo HTML → Lite)
    sind Ausweichwege desselben Anbieters.
-2. Pro Ergebnisseite: HTML über `page.content()` holen, mit jsoup parsen, extrahieren.
-3. Nur wenn das nicht zu Treffern führt: Consent-Banner suchen, **einmal** mit echter Eingabe klicken,
+2. Jede Maschine wird wie von einer Benutzerin bedient (`SearchFormInteraction`, Issue #67): ihre reguläre
+   Startseite öffnen (`https://www.bing.com/`, `https://www.google.com/`, `https://html.duckduckgo.com/html/`,
+   `https://lite.duckduckgo.com/lite/`), das Suchfeld über die Locatoren des Endpunkts finden (Alternativen für
+   Layoutänderungen, z. B. Bing `#sb_form_q`, dann `textarea[name=q]`, `input[name=q]`), per `RealInput` mit
+   echtem Klick hineinklicken, den Inhalt ersetzen, den Suchbegriff Taste für Taste tippen und **Enter als echte
+   Taste über WebDriver BiDi** drücken. Argos baut keine Such-URL (`?q=`), sendet kein Formular per Skript
+   (`requestSubmit()`, `dispatchEvent()`) und fällt auch bei einem Fehler nicht auf eine direkte URL zurück.
+   Verdeckt ein Consent-Banner das Suchfeld, wird es wie unter 4. behandelt und das Feld einmal erneut versucht;
+   eine Challenge oder eine reine „Alle akzeptieren“-Wand auf der Startseite wird als solche gemeldet. Ist kein
+   Suchfeld bedienbar, endet der Endpunkt mit `SEARCH_BOX_UNAVAILABLE`.
+3. Pro Ergebnisseite (die nach Enter geladene Seite): HTML über `page.content()` holen, mit jsoup parsen,
+   extrahieren.
+4. Nur wenn das nicht zu Treffern führt: Consent-Banner suchen, **einmal** mit echter Eingabe klicken,
    erneut lesen. Erlaubt sind nur "Alle ablehnen", "Nur notwendige" und "Schließen". Bietet ein Banner
    ausschließlich "Alle akzeptieren", wird **nicht** geklickt: die Maschine endet kontrolliert mit
    `CONSENT_REQUIRED` und die nächste wird versucht. Akzeptieren nur mit ausdrücklichem Opt-in
    `SEARCH_CONSENT_ACCEPT=true`. Ergebnisseiten werden nie angeklickt.
-4. Danach erst CAPTCHA/Challenge-Prüfung. Eine Seite *mit* Treffern ist nie eine Challenge (eine Suche
+5. Danach erst CAPTCHA/Challenge-Prüfung. Eine Seite *mit* Treffern ist nie eine Challenge (eine Suche
    nach "captcha" darf nicht als Sperre gelten). Eine gesperrte Maschinenfamilie wird 10 Minuten
    übersprungen statt erneut angefragt; die Challenge bleibt nur sichtbar, wenn keine Ausweichmaschine
    mehr folgt.
@@ -30,10 +41,11 @@ Quelle: `Miguel0888/askai-java8`, Branch `arch`, Module `browser-search-analysis
 | `CHALLENGE_PENDING` | CAPTCHA erkannt oder Familie gesperrt | nächste Maschine |
 | `CONSENT_REQUIRED` | Banner bietet nur "Alle akzeptieren", kein Opt-in | nächste Maschine |
 | `NAVIGATION_FAILED` | Seite nicht erreichbar | nächster Endpunkt |
+| `SEARCH_BOX_UNAVAILABLE` | Startseite geladen, aber kein Suchfeld gefunden oder bedienbar (verdeckt, kein Fokus, nicht tippbarer Text) | nächster Endpunkt, nie eine direkte Such-URL |
 
 `web_search` meldet einen **Fehler** (mit allen `ATTEMPT:`-Zeilen), wenn keine Maschine erreichbar war
 oder keine erreichte Seite lesbar war (alle `EXTRACTION_FAILED`, `CHALLENGE_PENDING`,
-`CONSENT_REQUIRED`). "Keine Treffer" gibt es nur, wenn eine Maschine das ausdrücklich gesagt hat
+`CONSENT_REQUIRED`, `SEARCH_BOX_UNAVAILABLE`). "Keine Treffer" gibt es nur, wenn eine Maschine das ausdrücklich gesagt hat
 (`NO_ORGANIC_RESULTS`).
 
 ## Ausgabe für kleine Modelle

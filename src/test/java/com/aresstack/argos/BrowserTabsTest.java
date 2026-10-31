@@ -44,4 +44,17 @@ class BrowserTabsTest {
         IllegalArgumentException error = assertThrows(IllegalArgumentException.class, () -> tabs.select("t9"));
         assertTrue(error.getMessage().contains("[t1]"));
     }
+
+    @Test void aReissuedTabDropsItsOldIdAndStaysCurrent() {
+        BrowserTabs tabs = new BrowserTabs();
+        Page first = mock(Page.class);
+        tabs.adopt(first);
+        tabs.adopt(mock(Page.class));
+        assertEquals("t3", tabs.reissue(first));
+        assertEquals("t3", tabs.currentId());
+        assertSame(first, tabs.get("t3"));
+        assertThrows(IllegalArgumentException.class, () -> tabs.get("t1"));
+        assertEquals(List.of("t2", "t3"), List.copyOf(tabs.all().keySet()));
+        assertEquals("t4", tabs.reissue(mock(Page.class)), "an unknown page is adopted");
+    }
 }

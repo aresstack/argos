@@ -298,10 +298,16 @@ final class SerpDocumentParser {
         return truncate(clean(out.toString()), limit);
     }
 
+    /**
+     * Appends each text node already whitespace-normalised, so the bound counts text, not markup indentation: a
+     * result block whose title follows a run of indented lines would otherwise stop before its first word and read
+     * as empty (and invisible), issue #77.
+     */
     private static void appendText(Node node, StringBuilder out, int limit) {
         if (out.length() > (long) limit + 64) return;
         if (node instanceof TextNode text) {
-            out.append(text.getWholeText()).append(' ');
+            String words = clean(text.getWholeText());
+            if (!words.isEmpty()) out.append(words).append(' ');
             return;
         }
         if (node instanceof Element element) {

@@ -3,12 +3,16 @@ package com.aresstack.argos.convenience;
 import com.aresstack.argos.search.ChallengeCheck;
 import com.aresstack.argos.web.PageCapture;
 import com.aresstack.argos.web.PageText;
+import org.jsoup.Jsoup;
+import org.jsoup.nodes.Element;
 
 import java.net.URI;
+import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.net.http.HttpTimeoutException;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -32,6 +36,16 @@ final class LocalConvenienceBrowser implements ConvenienceBrowser {
     private int nextTab = 1;
     String context = "start";
     final List<String> clicked = new ArrayList<>();
+    /** "tab | selector | typed text" per search typed into a field. */
+    final List<String> submitted = new ArrayList<>();
+    /**
+     * Per host: how long a result page keeps the search waiting after its document is in the tab (readable), as a
+     * real page does while its load event or late subresources are outstanding.
+     */
+    final Map<String, Long> settlesAfter = new java.util.concurrent.ConcurrentHashMap<>();
+    /** Hosts whose result page leaves the browser busy: later reads of the tab block for 30 s. */
+    final java.util.Set<String> busyAfterResult = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    private final java.util.Set<String> busyTabs = java.util.concurrent.ConcurrentHashMap.newKeySet();
 
     LocalConvenienceBrowser(LocalSites sites) {
         this.sites = sites;
@@ -117,7 +131,19 @@ final class LocalConvenienceBrowser implements ConvenienceBrowser {
     }
 
     @Override
-    public synchronized TabLoad readTab(String tab) {
+    public TabLoad readTab(String tab) {
+        if (busyTabs.contains(tab)) {
+            try {
+                Thread.sleep(30_000);
+            } catch (InterruptedException stopped) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("stopped while the browser was busy");
+            }
+        }
+        return shown(tab);
+    }
+
+    private synchronized TabLoad shown(String tab) {
         Deque<TabLoad> history = tabs.get(tab);
         if (history == null || history.isEmpty()) throw new IllegalArgumentException("Unknown tab " + tab);
         return history.peek();
@@ -137,14 +163,65 @@ final class LocalConvenienceBrowser implements ConvenienceBrowser {
         return false;
     }
 
+    /**
+     * What the browser does when Enter is pressed in a search field: the field's form is sent with the typed text
+     * (as GET; the local sites ignore the method). Only a selector matching an editable field of the tab's page
+     * gets that far, as for the real browser. Like CamoufoxBrowser it does not hold the browser while the result
+     * page loads, so other tabs can type and load meanwhile.
+     */
+    @Override
+    public TabLoad submitSearchInTab(String tab, List<String> searchBoxSelectors, String query) {
+        TabLoad shown = readTab(tab);
+        var page = Jsoup.parse(shown.capture().html(), shown.capture().url());
+        for (String selector : searchBoxSelectors) {
+            Element field = page.selectFirst(selector);
+            if (field == null) continue;
+            if (!field.is("textarea, input:not([type=hidden])")) throw new IllegalStateException(selector + " is no field");
+            synchronized (this) {
+                submitted.add(tab + " | " + selector + " | " + query);
+            }
+            Element form = field.closest("form");
+            String action = form == null || form.absUrl("action").isEmpty() ? shown.capture().url() : form.absUrl("action");
+            String url = action + (action.contains("?") ? "&" : "?") + field.attr("name") + "="
+                    + URLEncoder.encode(query, StandardCharsets.UTF_8);
+            TabLoad load = fetch(tab, new TabLoadRequest(tab, url, RegistrableDomain.of(url)),
+                    NavigationGate.OPEN.tryAcquire(RegistrableDomain.of(url)), 10_000);
+            synchronized (this) {
+                if (load.outcome() == TabLoadOutcome.OK) tabs.get(tab).push(load);
+            }
+            if (busyAfterResult.contains(URI.create(url).getHost())) busyTabs.add(tab);
+            long settle = settlesAfter.getOrDefault(URI.create(url).getHost(), 0L);
+            if (settle > 0) {
+                try {
+                    Thread.sleep(settle);
+                } catch (InterruptedException stopped) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException("stopped while the result page settled");
+                }
+            }
+            return load;
+        }
+        return null;
+    }
+
     @Override
     public synchronized boolean hasOpenTab(String tab) {
         return tabs.containsKey(tab);
     }
 
     @Override
+    public synchronized java.util.Set<String> openTabIds() {
+        return java.util.Set.copyOf(tabs.keySet());
+    }
+
+    @Override
     public synchronized void closeTabQuietly(String tab) {
         tabs.remove(tab);
+    }
+
+    /** The browser was closed outside Argos and started again: every tab is gone, ids keep counting up. */
+    synchronized void restartAfterClose() {
+        tabs.clear();
     }
 
     @Override

@@ -48,6 +48,14 @@ alle Werkzeuge einschließlich `browser_context_*` fragen denselben Resolver.
 > Argos werden alle `s-`-Verzeichnisse gelöscht. Eine dauerhafte Search History wie bei ChatGPT gibt es für diese
 > Clients erst, wenn sie eine stabile, verifizierbare Unterhaltungskennung mitschicken.
 
+> **Geltungsgrenze (Einzelbenutzer-Setup):** Mit der aktuellen AnAuthentia-Tokenausstellung ist `sub` die OAuth-`client_id`
+> (z. B. `angel`), kein Endnutzerkonto. Die `owner`-Datei trennt deshalb verschiedene OAuth-Principals, aber **nicht**
+> mehrere Menschen, die dieselbe Client-ID verwenden. Außerdem bleibt `_meta["openai/session"]` Client-Eingabe: Ein
+> anderer Client mit derselben OAuth-Identität, der eine Conversation-ID kennt, erreicht denselben ChatGPT-Arbeitsbereich.
+> Für ein selbst betriebenes Setup mit einem Benutzer ist das vertretbar. Vor einer Mehrbenutzer- oder Mandantenfreigabe
+> muss eine echte serverseitige Benutzer- bzw. Clientbindung (eigene `sub` je Benutzer, getrennte Clients je Anwendung)
+> diese Annahme ersetzen.
+
 Ein Client mit nachweislich stabiler Unterhaltungskennung kann später als weitere Quelle vor Schritt 2 eingetragen werden.
 
 ## Profile und Kontexte

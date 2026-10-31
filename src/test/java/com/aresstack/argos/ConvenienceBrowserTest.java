@@ -220,7 +220,7 @@ class ConvenienceBrowserTest {
             String b = "http://127.0.0.1:" + port + "/slow-b";
             ConvenienceSession session = new ConvenienceSession(browser,
                     new DomainCoordinator(4, System::currentTimeMillis), UrlPolicy.from(TestNetworks.LOOPBACK),
-                    query -> List.of(), null);
+                    (query, engines) -> List.of(), null);
             @SuppressWarnings("unchecked")
             List<Map<String, Object>> first = (List<Map<String, Object>>) session.openUrl(a).get("opened");
             assertEquals(1, first.size(), first.toString());

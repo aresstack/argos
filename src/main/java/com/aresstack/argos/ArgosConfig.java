@@ -63,10 +63,11 @@ public record ArgosConfig(
     }
 
     /**
-     * How browser profiles are assigned: {@code chat} (default) gives each ChatGPT conversation its own
-     * profiles under {@code chatRoot}, keyed by {@code _meta["openai/session"]}; {@code single} keeps the one
-     * profile {@link #profile()} for clients that send no conversation id. {@code maxBrowsers} caps how many
-     * Camoufox processes run at once.
+     * How browser profiles are assigned: {@code chat} (default) gives each caller workspace its own profiles
+     * under {@code chatRoot}: a ChatGPT conversation ({@code _meta["openai/session"]}) or, for every other MCP
+     * client, the MCP transport session (see {@link McpCallerResolver}); {@code single} is the explicit legacy
+     * opt-in that shares the one profile {@link #profile()} between all callers. {@code maxBrowsers} caps how
+     * many Camoufox processes run at once.
      */
     public record ProfileIsolation(boolean perChat, Path chatRoot, int maxBrowsers, int idleMinutes) {
         public static ProfileIsolation fromEnvironment() throws IOException {

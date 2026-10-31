@@ -12,28 +12,29 @@ import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.List;
-import java.util.Map;
 import java.util.Properties;
 import java.util.regex.Pattern;
 
 /**
- * Persistent browser profiles per ChatGPT conversation. The conversation is identified ONLY by
- * {@code _meta["openai/session"]} of the actual {@code tools/call} request (never by a tool argument, never by
- * the transport's {@code Mcp-Session-Id}, never by {@code openai/subject}). Like AskAI's
+ * Persistent browser profiles per caller workspace: a ChatGPT conversation or an MCP transport session, as
+ * {@link McpCallerResolver} identifies it (never by a tool argument, never by {@code openai/subject}). Like AskAI's
  * {@code ResearchBotSessionDirectory}, a missing identity is an error: there is no shared default profile and
- * no fallback to another conversation.
+ * no fallback to another workspace.
  * <p>
  * Like AskAI's research plugin ({@code ResearchAgentSessionFactory}: one workspace directory per chat, handed to
- * the browser at start), each conversation owns one directory, {@code <root>/<chat key>/profile}, which is the
- * Camoufox profile its browser starts with; {@code <chat key>} is a truncated SHA-256 of the conversation id, so
+ * the browser at start), each workspace owns one directory, {@code <root>/<key>/profile}, which is the
+ * Camoufox profile its browser starts with; {@code <key>} is a truncated SHA-256 of the identity, so
  * neither the id nor anything derived from model input becomes a path. Additional user contexts are WebDriver
- * BiDi user contexts inside that browser; {@code <root>/<chat key>/contexts.properties} lists them and the
- * active one, and {@code <root>/<chat key>/contexts/<id>.cookies.json} keeps each one's cookies across restarts.
+ * BiDi user contexts inside that browser; {@code <root>/<key>/contexts.properties} lists them and the
+ * active one, and {@code <root>/<key>/contexts/<id>.cookies.json} keeps each one's cookies across restarts.
  */
 public final class ChatProfiles {
     public static final String SESSION_META_KEY = "openai/session";
+    /** Directory prefix of workspaces that belong to one MCP transport session. */
+    public static final String TRANSPORT_PREFIX = "s-";
     static final String START_CONTEXT = "start";
     private static final Pattern CONTEXT_ID = Pattern.compile("start|context-[1-9][0-9]{0,3}");
+    private static final Pattern TRANSPORT_KEY = Pattern.compile(TRANSPORT_PREFIX + "[0-9a-f]{32}");
     private static final int MAX_CONTEXTS = 20;
 
     private final Path root;
@@ -42,55 +43,120 @@ public final class ChatProfiles {
         this.root = root.toAbsolutePath().normalize();
     }
 
-    /** A conversation as Argos keys it: the hashed directory key plus a short form for logs and answers. */
-    public record Chat(String key) {
+    /**
+     * A workspace as Argos keys it: the hashed directory key plus a short form for logs and answers, where the
+     * identity came from ({@code chatgpt} or {@code mcp-session}), the client's sanitized name for diagnostics and
+     * the hashed verified principal that must own the workspace (see {@link #ownerOf(String)}).
+     */
+    public record Chat(String key, String source, String client, String owner) {
         /** At most this much of the hash appears in logs or answers. */
         public String shortKey() {
             return key.substring(0, 10);
         }
     }
 
-    /** One context of a conversation: its id, where its cookies are kept (null for start), whether active. */
+    /** One context of a workspace: its id, where its cookies are kept (null for start), whether active. */
     public record Context(String id, Path cookies, boolean active) { }
 
-    /** The conversation's browser profile directory, handed to Camoufox at start. */
-    public Path profile(Chat chat) throws IOException {
+    /** The workspace's browser profile directory, handed to Camoufox at start. */
+    public synchronized Path profile(Chat chat) throws IOException {
+        claim(chat);
         Path profile = root.resolve(chat.key()).resolve("profile");
         Files.createDirectories(profile);
         return profile;
     }
 
-    /** Thrown when a call does not carry the conversation id; the message is safe for the model. */
+    /** Thrown when a call cannot be tied to a workspace; the message is safe for the model. */
     public static final class MissingChatIdentity extends IllegalStateException {
         MissingChatIdentity(String message) {
             super(message);
         }
     }
 
-    /** The conversation of a {@code tools/call}, read from its request metadata only. */
-    public static Chat chatOf(Map<String, Object> meta) {
-        Object value = meta == null ? null : meta.get(SESSION_META_KEY);
-        if (!(value instanceof String session) || session.isBlank()) {
-            throw new MissingChatIdentity("This call carries no ChatGPT conversation id (_meta[\""
-                    + SESSION_META_KEY + "\"]). Argos keeps one isolated browser profile per conversation and "
-                    + "uses no shared default profile, so the call was refused. Clients other than ChatGPT need "
-                    + "PROFILE_ISOLATION=single.");
+    /** Thrown when a workspace belongs to another verified principal; the message is safe for the model. */
+    public static final class ForeignWorkspace extends IllegalStateException {
+        ForeignWorkspace(String message) {
+            super(message);
         }
-        return new Chat(hash(session.strip()));
     }
 
-    static String hash(String session) {
+    /** What {@code <root>/<key>/owner} holds for a principal: a hash, never the principal itself. */
+    static String ownerOf(String principal) {
+        return digest("argos-workspace-owner\u0000" + principal);
+    }
+
+    /**
+     * Binds the workspace to its verified principal. The first access writes {@code <root>/<key>/owner}; this is
+     * also the migration of profiles created before owners existed (their directory and key stay unchanged, the
+     * first verified principal after the update claims them). Every later access by another principal is refused,
+     * so two principals never share cookies, history or profile, even with the same conversation id.
+     */
+    private void claim(Chat chat) throws IOException {
+        if (chat.owner() == null || chat.owner().isBlank()) {
+            throw new ForeignWorkspace("This call has no verified principal, so Argos refused it.");
+        }
+        Path file = root.resolve(chat.key()).resolve("owner");
+        Files.createDirectories(file.getParent());
         try {
-            byte[] digest = MessageDigest.getInstance("SHA-256")
-                    .digest(("argos-chat-profile\u0000" + session).getBytes(StandardCharsets.UTF_8));
+            Files.writeString(file, chat.owner(), StandardCharsets.UTF_8, java.nio.file.StandardOpenOption.CREATE_NEW);
+            return;
+        } catch (java.nio.file.FileAlreadyExistsException owned) {
+            // compare below
+        }
+        if (!Files.readString(file, StandardCharsets.UTF_8).strip().equals(chat.owner())) {
+            throw new ForeignWorkspace("This browser workspace belongs to another signed-in account, so Argos "
+                    + "refused the call. Workspaces are never shared between accounts.");
+        }
+    }
+
+    /** The key of a ChatGPT conversation; unchanged, so existing profiles keep their directory. */
+    static String hash(String session) {
+        return digest("argos-chat-profile\u0000" + session);
+    }
+
+    /** The key of one MCP transport session of one verified principal; its own namespace and prefix. */
+    static String transportKey(String principal, String sessionId) {
+        return TRANSPORT_PREFIX + digest("argos-mcp-session\u0000" + principal + "\u0000" + sessionId);
+    }
+
+    private static String digest(String text) {
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256").digest(text.getBytes(StandardCharsets.UTF_8));
             return HexFormat.of().formatHex(digest, 0, 16);
         } catch (NoSuchAlgorithmException impossible) {
             throw new IllegalStateException(impossible);
         }
     }
 
-    /** The active context; on first access the conversation's start profile is created. */
+    /**
+     * Deletes all transport-session workspaces. Called once at startup: MCP sessions live only in the memory of
+     * the running server, so after a restart no client can ever reach these workspaces again. ChatGPT
+     * conversation profiles are never touched.
+     *
+     * @return how many workspaces were removed
+     */
+    public int removeTransportWorkspaces() throws IOException {
+        if (!Files.isDirectory(root)) return 0;
+        List<Path> stale;
+        try (var children = Files.list(root)) {
+            stale = children.filter(Files::isDirectory)
+                    .filter(dir -> TRANSPORT_KEY.matcher(dir.getFileName().toString()).matches()).toList();
+        }
+        for (Path workspace : stale) deleteTree(workspace);
+        return stale.size();
+    }
+
+    private static void deleteTree(Path directory) throws IOException {
+        try (var paths = Files.walk(directory)) {
+            for (Path path : paths.sorted(java.util.Comparator.reverseOrder()).toList()) {
+                Files.deleteIfExists(path);
+            }
+        }
+    }
+
+    /** The active context; on first access the workspace's start profile is created. */
     public synchronized Context active(Chat chat) throws IOException {
+        claim(chat);
         State state = load(chat);
         if (state.contexts.isEmpty()) {
             state.contexts.add(START_CONTEXT);
@@ -100,7 +166,7 @@ public final class ChatProfiles {
         return context(chat, state, state.active);
     }
 
-    /** All contexts of this conversation, in creation order; another conversation's are never visible. */
+    /** All contexts of this workspace, in creation order; another workspace's are never visible. */
     public synchronized List<Context> list(Chat chat) throws IOException {
         active(chat);
         State state = load(chat);
@@ -114,7 +180,7 @@ public final class ChatProfiles {
         active(chat);
         State state = load(chat);
         if (state.contexts.size() >= MAX_CONTEXTS) {
-            throw new IllegalStateException("This conversation already has " + MAX_CONTEXTS + " contexts.");
+            throw new IllegalStateException("This workspace already has " + MAX_CONTEXTS + " contexts.");
         }
         int number = 2;
         while (state.contexts.contains("context-" + number)) number++;
@@ -125,14 +191,14 @@ public final class ChatProfiles {
         return context(chat, state, id);
     }
 
-    /** Activates an existing context of THIS conversation. Unknown ids (or another chat's) are refused. */
+    /** Activates an existing context of THIS workspace. Unknown ids (or another workspace's) are refused. */
     public synchronized Context select(Chat chat, String id) throws IOException {
         active(chat);
         State state = load(chat);
         String wanted = id == null ? "" : id.strip();
         if (!CONTEXT_ID.matcher(wanted).matches() || !state.contexts.contains(wanted)) {
             throw new IllegalArgumentException("Unknown context \"" + abbreviate(wanted)
-                    + "\". Use browser_contexts to list this conversation's contexts.");
+                    + "\". Use browser_contexts to list this workspace's contexts.");
         }
         state.active = wanted;
         save(chat, state);
@@ -179,7 +245,7 @@ public final class ChatProfiles {
         properties.setProperty("active", state.active);
         Path temporary = file.resolveSibling("contexts.properties.tmp");
         try (Writer writer = Files.newBufferedWriter(temporary, StandardCharsets.UTF_8)) {
-            properties.store(writer, "Argos browser contexts of one conversation");
+            properties.store(writer, "Argos browser contexts of one workspace");
         }
         Files.move(temporary, file, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
     }

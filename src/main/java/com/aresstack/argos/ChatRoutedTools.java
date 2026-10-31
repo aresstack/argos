@@ -1,6 +1,7 @@
 package com.aresstack.argos;
 
 import io.modelcontextprotocol.server.McpServerFeatures.SyncToolSpecification;
+import io.modelcontextprotocol.server.McpSyncServerExchange;
 import io.modelcontextprotocol.spec.McpSchema.CallToolRequest;
 import io.modelcontextprotocol.spec.McpSchema.CallToolResult;
 
@@ -13,7 +14,8 @@ import java.util.function.BiConsumer;
 import java.util.function.Function;
 
 /**
- * Routes every {@code tools/call} to the browser of the calling ChatGPT conversation's active context.
+ * Routes every {@code tools/call} to the browser of the caller's workspace (a ChatGPT conversation or an MCP
+ * transport session, see {@link McpCallerResolver}) and its active context.
  * <p>
  * No second browser architecture: each conversation's profile directory gets the unchanged Argos tool stack
  * (one {@link CamoufoxBrowser} = one Camoufox process started with that profile, plus its WebSession and
@@ -30,7 +32,13 @@ public final class ChatRoutedTools implements AutoCloseable {
     public record Workspace(List<SyncToolSpecification> tools, BiConsumer<String, Path> contexts,
                             AutoCloseable resources) { }
 
+    /** Which workspace a call belongs to; every routed tool and every browser_context_* tool asks this. */
+    public interface CallerResolver {
+        ChatProfiles.Chat resolve(McpSyncServerExchange exchange, CallToolRequest request);
+    }
+
     private final ChatProfiles profiles;
+    private final CallerResolver resolver;
     private final Function<Path, Workspace> factory;
     private final int maxBrowsers;
     private final long idleNanos;
@@ -62,7 +70,13 @@ public final class ChatRoutedTools implements AutoCloseable {
      */
     public ChatRoutedTools(ChatProfiles profiles, Function<Path, Workspace> factory, int maxBrowsers,
                            java.time.Duration idle) {
+        this(profiles, McpCallerResolver::resolve, factory, maxBrowsers, idle);
+    }
+
+    public ChatRoutedTools(ChatProfiles profiles, CallerResolver resolver, Function<Path, Workspace> factory,
+                           int maxBrowsers, java.time.Duration idle) {
         this.profiles = profiles;
+        this.resolver = resolver;
         this.factory = factory;
         this.maxBrowsers = Math.max(1, maxBrowsers);
         this.idleNanos = idle.toNanos();
@@ -86,21 +100,21 @@ public final class ChatRoutedTools implements AutoCloseable {
         return List.copyOf(routed);
     }
 
-    private CallToolResult route(String name, io.modelcontextprotocol.server.McpSyncServerExchange exchange,
-                                 CallToolRequest request) {
+    private CallToolResult route(String name, McpSyncServerExchange exchange, CallToolRequest request) {
         ChatProfiles.Chat chat;
         ChatProfiles.Context context;
         Path profile;
         try {
-            chat = ChatProfiles.chatOf(request.meta());
+            chat = resolver.resolve(exchange, request);
             context = profiles.active(chat);
             profile = profiles.profile(chat);
         } catch (Exception error) {
-            log("refused " + name + ": " + (error instanceof ChatProfiles.MissingChatIdentity
-                    ? "no openai/session" : error.getClass().getSimpleName()));
+            log("refused " + name + ": " + (error instanceof ChatProfiles.MissingChatIdentity ? "no caller identity"
+                    : error instanceof ChatProfiles.ForeignWorkspace ? "workspace of another principal"
+                    : error.getClass().getSimpleName()));
             return ArgosTools.failure(error);
         }
-        log(name + " chat=" + chat.shortKey() + " context=" + context.id());
+        log(name + " " + describe(chat) + " context=" + context.id());
         Entry entry;
         try {
             entry = acquire(profile);
@@ -108,7 +122,7 @@ public final class ChatRoutedTools implements AutoCloseable {
             // Never an opaque JSON-RPC internal error: the model and the log both get the reason.
             log("failed " + name + " chat=" + chat.shortKey() + ": could not set up the browser: " + describe(error));
             return ArgosTools.failure(new IllegalStateException(
-                    "Argos could not set up this conversation's browser: " + describe(error), error));
+                    "Argos could not set up this workspace's browser: " + describe(error), error));
         }
         try {
             entry.contexts.accept(context.id(), context.cookies());
@@ -227,14 +241,14 @@ public final class ChatRoutedTools implements AutoCloseable {
         String apply(ChatProfiles.Chat chat, Map<String, Object> arguments) throws Exception;
     }
 
-    private static SyncToolSpecification contextTool(String name, String description, Map<String, Object> properties,
-                                                      List<String> required, ContextHandler handler) {
+    private SyncToolSpecification contextTool(String name, String description, Map<String, Object> properties,
+                                              List<String> required, ContextHandler handler) {
         return SyncToolSpecification.builder()
                 .tool(io.modelcontextprotocol.spec.McpSchema.Tool.builder().name(name).description(description)
                         .inputSchema(ArgosTools.schema(properties, required)).build())
                 .callHandler((exchange, request) -> {
                     try {
-                        ChatProfiles.Chat chat = ChatProfiles.chatOf(request.meta());
+                        ChatProfiles.Chat chat = resolver.resolve(exchange, request);
                         String answer = handler.apply(chat,
                                 request.arguments() == null ? Map.of() : request.arguments());
                         return CallToolResult.builder().addTextContent(answer).build();
@@ -244,7 +258,12 @@ public final class ChatRoutedTools implements AutoCloseable {
                 }).build();
     }
 
-    /** Diagnostics: only the shortened hash of the conversation id, never the id, a path or page data. */
+    /** Diagnostics: source, client name and the shortened hash of the workspace key, never an id or a token. */
+    private static String describe(ChatProfiles.Chat chat) {
+        return "source=" + chat.source() + " client=" + chat.client() + " chat=" + chat.shortKey();
+    }
+
+    /** Diagnostics: only the shortened hash of the workspace key, never the id, a path or page data. */
     private static void log(String line) {
         System.err.println("[argos-profiles] " + line);
     }

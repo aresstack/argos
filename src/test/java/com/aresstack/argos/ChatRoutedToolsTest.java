@@ -17,7 +17,10 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-/** Routing by _meta["openai/session"], with fake tool stacks instead of Camoufox. */
+/**
+ * Routing by _meta["openai/session"] (ChatGPT) and by MCP transport session plus principal (every other client),
+ * with fake tool stacks instead of Camoufox.
+ */
 class ChatRoutedToolsTest {
 
     @TempDir
@@ -66,8 +69,13 @@ class ChatRoutedToolsTest {
                 closed::incrementAndGet);
     }
 
+    /** The transport session and verified principal of the next calls, as the MCP SDK would deliver them. */
+    private String transportSession;
+    private String principal = "sub:issuer\u0000angelo";
+
     private ChatRoutedTools routed(int max) {
-        return new ChatRoutedTools(new ChatProfiles(root), this::fake, max);
+        return new ChatRoutedTools(new ChatProfiles(root), (exchange, request) -> McpCallerResolver.resolve(
+                request.meta(), transportSession, principal, "claude-ai"), this::fake, max, java.time.Duration.ZERO);
     }
 
     private Map<String, SyncToolSpecification> tools(ChatRoutedTools routed) {
@@ -106,11 +114,11 @@ class ChatRoutedToolsTest {
     }
 
     @Test
-    void missingConversationIdIsRefusedWithoutStartingAnyBrowser() {
+    void callWithoutAnyIdentityIsRefusedWithoutStartingAnyBrowser() {
         Map<String, SyncToolSpecification> tools = tools(routed(4));
         CallToolResult result = call(tools, "whoami", null, Map.of());
         assertTrue(result.isError());
-        assertTrue(text(result).contains("openai/session"));
+        assertTrue(text(result).contains("no shared default profile"));
         CallToolResult blank = call(tools, "browser_contexts", " ", Map.of());
         assertTrue(blank.isError());
         assertTrue(started.isEmpty());
@@ -164,7 +172,8 @@ class ChatRoutedToolsTest {
 
     @Test
     void browsersUnusedForTheIdleTimeAreStopped() throws Exception {
-        ChatRoutedTools routed = new ChatRoutedTools(new ChatProfiles(root), this::fake, 4,
+        ChatRoutedTools routed = new ChatRoutedTools(new ChatProfiles(root), (exchange, request) ->
+                McpCallerResolver.resolve(request.meta(), null, principal, null), this::fake, 4,
                 java.time.Duration.ofMillis(100));
         Map<String, SyncToolSpecification> tools = tools(routed);
         call(tools, "whoami", "conv-A", Map.of());
@@ -175,10 +184,129 @@ class ChatRoutedToolsTest {
 
     @Test
     void chatKeyIsAStableHash() {
-        assertEquals(ChatProfiles.chatOf(Map.of("openai/session", "x")),
-                ChatProfiles.chatOf(Map.of("openai/session", " x ")));
-        assertEquals(32, ChatProfiles.chatOf(Map.of("openai/session", "x")).key().length());
+        ChatProfiles.Chat chat = McpCallerResolver.resolve(Map.of("openai/session", "x"), null, "p", null);
+        assertEquals(chat, McpCallerResolver.resolve(Map.of("openai/session", " x "), null, "p", null));
+        // The key existing ChatGPT profile directories were created with: they must not be orphaned.
+        assertEquals("da0ee7af19fd421953bf538a0a58ad75", chat.key());
+        assertEquals("chatgpt", chat.source());
         assertThrows(ChatProfiles.MissingChatIdentity.class,
-                () -> ChatProfiles.chatOf(Map.of("openai/subject", "user")));
+                () -> McpCallerResolver.resolve(Map.of("openai/subject", "user"), null, "p", null));
+    }
+
+    @Test
+    void clientWithoutConversationIdGetsOneWorkspacePerTransportSession() {
+        Map<String, SyncToolSpecification> tools = tools(routed(4));
+        transportSession = "session-1";
+        String first = text(call(tools, "whoami", null, Map.of()));
+        assertEquals(first, text(call(tools, "whoami", null, Map.of())), "same session, same workspace");
+        assertTrue(first.startsWith(root.resolve(ChatProfiles.TRANSPORT_PREFIX).toString()));
+        assertFalse(first.contains("session-1"), "the session id must not appear in the path");
+        call(tools, "set", null, Map.of("value", "login-1"));
+
+        transportSession = "session-2"; // a second Claude connection, or the first one after a reconnect
+        String second = text(call(tools, "whoami", null, Map.of()));
+        assertNotEquals(first, second);
+        assertEquals("null", text(call(tools, "get", null, Map.of())), "a new session starts empty");
+
+        transportSession = "session-1";
+        assertEquals("login-1", text(call(tools, "get", null, Map.of())));
+    }
+
+    @Test
+    void transportWorkspacesAreBoundToThePrincipalAndNeverMeetChatGptProfiles() {
+        Map<String, SyncToolSpecification> tools = tools(routed(4));
+        transportSession = "same-id";
+        String angelo = text(call(tools, "whoami", null, Map.of()));
+        principal = "sub:issuer\u0000someone-else";
+        String other = text(call(tools, "whoami", null, Map.of()));
+        assertNotEquals(angelo, other, "a known session id does not open another principal's workspace");
+
+        // ChatGPT on the same principal and even on the same transport session id: never the same profile.
+        String chatGpt = text(call(tools, "whoami", "same-id", Map.of()));
+        assertNotEquals(angelo, chatGpt);
+        assertNotEquals(other, chatGpt);
+        assertFalse(Path.of(chatGpt.split("\\|")[0]).getParent().getFileName().toString()
+                .startsWith(ChatProfiles.TRANSPORT_PREFIX));
+    }
+
+    @Test
+    void chatGptConversationIdNeverOpensAnotherPrincipalsWorkspace() {
+        Map<String, SyncToolSpecification> tools = tools(routed(4));
+        call(tools, "set", "conv-A", Map.of("value", "login-A"));
+        String owner = text(call(tools, "whoami", "conv-A", Map.of()));
+
+        principal = "sub:issuer\u0000someone-else"; // a valid token of another account, same _meta value
+        CallToolResult foreign = call(tools, "get", "conv-A", Map.of());
+        assertTrue(foreign.isError());
+        assertTrue(text(foreign).contains("another signed-in account"));
+        assertFalse(text(foreign).contains("login-A"));
+        assertTrue(call(tools, "browser_contexts", "conv-A", Map.of()).isError());
+        assertTrue(call(tools, "browser_context_new", "conv-A", Map.of()).isError());
+
+        principal = null;
+        assertTrue(call(tools, "whoami", "conv-A", Map.of()).isError(), "no verified principal, no workspace");
+
+        principal = "sub:issuer\u0000angelo";
+        assertEquals(owner, text(call(tools, "whoami", "conv-A", Map.of())));
+        assertEquals("login-A", text(call(tools, "get", "conv-A", Map.of())));
+    }
+
+    @Test
+    void existingChatGptProfileWithoutOwnerIsClaimedInPlace() throws Exception {
+        // A profile created before owners existed: same directory, same contexts, no owner file.
+        Path old = root.resolve(ChatProfiles.hash("conv-A"));
+        Files.createDirectories(old.resolve("profile"));
+        Files.writeString(old.resolve("contexts.properties"), "contexts=start,context-2\nactive=context-2\n");
+        Map<String, SyncToolSpecification> tools = tools(routed(4));
+        assertEquals(old.resolve("profile") + "|context-2", text(call(tools, "whoami", "conv-A", Map.of())));
+        assertEquals(ChatProfiles.ownerOf("sub:issuer\u0000angelo"), Files.readString(old.resolve("owner")));
+        assertFalse(Files.readString(old.resolve("owner")).contains("angelo"), "only a hash is stored");
+        principal = "sub:issuer\u0000someone-else";
+        assertTrue(call(tools, "whoami", "conv-A", Map.of()).isError());
+    }
+
+    @Test
+    void transportSessionWithoutVerifiedPrincipalIsRefused() {
+        Map<String, SyncToolSpecification> tools = tools(routed(4));
+        transportSession = "session-1";
+        principal = null;
+        CallToolResult result = call(tools, "whoami", null, Map.of());
+        assertTrue(result.isError());
+        assertTrue(text(result).contains("no verified principal"));
+        assertTrue(call(tools, "browser_contexts", null, Map.of()).isError());
+        assertTrue(started.isEmpty());
+    }
+
+    @Test
+    void contextToolsUseTheSameResolverForTransportSessions() {
+        Map<String, SyncToolSpecification> tools = tools(routed(4));
+        transportSession = "session-1";
+        assertEquals("Created and activated context context-2.",
+                text(call(tools, "browser_context_new", null, Map.of())));
+        assertTrue(text(call(tools, "whoami", null, Map.of())).endsWith("|context-2"));
+        transportSession = "session-2";
+        assertEquals("* start (active)", text(call(tools, "browser_contexts", null, Map.of())));
+        assertTrue(call(tools, "browser_context_select", null, Map.of("context", "context-2")).isError());
+    }
+
+    @Test
+    void endedTransportWorkspacesAreRemovedAtStartupChatGptProfilesStay() throws Exception {
+        Map<String, SyncToolSpecification> tools = tools(routed(4));
+        transportSession = "session-1";
+        Path transport = Path.of(text(call(tools, "whoami", null, Map.of())).split("\\|")[0]).getParent();
+        Path chatGpt = Path.of(text(call(tools, "whoami", "conv-A", Map.of())).split("\\|")[0]).getParent();
+        Path unrelated = Files.createDirectories(root.resolve("s-not-a-key"));
+        assertEquals(1, new ChatProfiles(root).removeTransportWorkspaces());
+        assertFalse(Files.exists(transport));
+        assertTrue(Files.isDirectory(chatGpt));
+        assertTrue(Files.isDirectory(unrelated));
+    }
+
+    @Test
+    void clientNameOnlyAppearsSanitized() {
+        assertEquals("claude-ai", McpCallerResolver.label("claude-ai"));
+        assertEquals("unknown", McpCallerResolver.label(null));
+        assertEquals("a_b_c", McpCallerResolver.label("a b\nc"));
+        assertEquals(32, McpCallerResolver.label("x".repeat(100)).length());
     }
 }

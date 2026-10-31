@@ -2959,12 +2959,55 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
      * the calling thread. Other tabs' input and loads run in those pauses. The device's clock counts only the
      * planned pauses: a turn that waited behind another tab's step shifts the following keys, it never shortens a
      * pause to catch up, so no keys are fired back to back. Playwright's own exceptions reach {@link RealInput}
-     * unwrapped (it recognizes refused keys and pointer samples outside the viewport by them).
+     * unwrapped (it recognizes refused keys and pointer samples outside the viewport by them). A flow stopped between
+     * a key or button going down and up (the engine ran out of time) releases what it holds first, so the tab is not
+     * left with Control or the mouse button held down.
      */
     private InputDevice inTurns(Page page) {
         InputDevice direct = InputDevice.of(page);
         return new InputDevice() {
             private long clock;
+            private final Set<String> heldKeys = new java.util.LinkedHashSet<>();
+            private final Set<MouseButton> heldButtons = java.util.EnumSet.noneOf(MouseButton.class);
+
+            /** Lets go of every held key (last first) and button in one turn, whatever the interrupt flag says. */
+            private void releaseHeld() {
+                if (heldKeys.isEmpty() && heldButtons.isEmpty()) return;
+                List<String> keys = new ArrayList<>(heldKeys);
+                Collections.reverse(keys);
+                List<MouseButton> buttons = List.copyOf(heldButtons);
+                heldKeys.clear();
+                heldButtons.clear();
+                boolean interrupted = Thread.interrupted();
+                try {
+                    onBrowser(() -> {
+                        for (String key : keys) {
+                            try {
+                                direct.keyUp(key);
+                            } catch (RuntimeException ignored) {
+                                // keep releasing the others
+                            }
+                        }
+                        for (MouseButton button : buttons) {
+                            try {
+                                direct.up(button);
+                            } catch (RuntimeException ignored) {
+                                // keep releasing the others
+                            }
+                        }
+                        return null;
+                    });
+                } catch (RuntimeException unreleased) {
+                    // The browser is gone or busy; nothing more can be done for this tab.
+                } finally {
+                    if (interrupted) Thread.currentThread().interrupt();
+                }
+            }
+
+            private Interrupted stopped(InterruptedException cause) {
+                releaseHeld();
+                return new Interrupted(cause);
+            }
 
             private <T> T turn(java.util.function.Supplier<T> step) {
                 try {
@@ -2973,7 +3016,7 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
                     throw gone;
                 } catch (IllegalStateException failed) {
                     if (Thread.currentThread().isInterrupted() && failed.getCause() instanceof InterruptedException i) {
-                        throw new Interrupted(i);
+                        throw stopped(i);
                     }
                     if (failed.getClass() == IllegalStateException.class
                             && failed.getCause() instanceof PlaywrightException playwright) throw playwright;
@@ -2993,11 +3036,14 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
             }
 
             @Override public void down(MouseButton button) {
+                // Held from before the turn: an interrupt while it runs may leave it pressed.
+                heldButtons.add(button);
                 turn(() -> direct.down(button));
             }
 
             @Override public void up(MouseButton button) {
                 turn(() -> direct.up(button));
+                heldButtons.remove(button);
             }
 
             @Override public void wheel(double deltaX, double deltaY) {
@@ -3005,11 +3051,20 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
             }
 
             @Override public void keyDown(String key) {
-                turn(() -> direct.keyDown(key));
+                heldKeys.add(key);
+                try {
+                    turn(() -> direct.keyDown(key));
+                } catch (Interrupted stopped) {
+                    throw stopped;
+                } catch (RuntimeException refused) {
+                    heldKeys.remove(key); // not pressed (a key Playwright does not know, say)
+                    throw refused;
+                }
             }
 
             @Override public void keyUp(String key) {
                 turn(() -> direct.keyUp(key));
+                heldKeys.remove(key);
             }
 
             @Override public void insertText(String text) {
@@ -3020,9 +3075,9 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
                 if (millis <= 0) return;
                 try {
                     Thread.sleep(millis);
-                } catch (InterruptedException stopped) {
+                } catch (InterruptedException interrupted) {
                     Thread.currentThread().interrupt();
-                    throw new Interrupted(stopped);
+                    throw stopped(interrupted);
                 }
                 clock += millis;
             }

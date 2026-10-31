@@ -176,8 +176,20 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
             startedAt.set(System.nanoTime());
             if (!claimed.compareAndSet(false, true)) return null; // the caller was already told nothing was done
             try {
+                // Closed before this call (the user closed its windows, say): start it again, then do the work.
+                if (startContext != null && !browserAnswers()) resetAfterClose();
                 switchToWantedContext();
                 return action.call();
+            } catch (Exception failure) {
+                // Closed while this call ran: whatever the call did so far is not repeated (it may have clicked or
+                // submitted), but the next call gets a fresh browser instead of the dead session.
+                // A stalled call is recovered by its own watchdog.
+                if (restartRequested || startContext == null
+                        || !BrowserLiveness.gone(startContext, driverProcesses)) throw failure;
+                resetAfterClose();
+                throw new BrowserClosed("Camoufox was closed while this call ran (its window was closed, say);"
+                        + " nothing was repeated. The next call starts the browser again with the same profile.",
+                        failure);
             } finally {
                 // Outside Playwright event handlers, so protocol calls are safe here.
                 if (context != null) network.captureQueuedBodies();
@@ -216,6 +228,7 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
         } catch (java.util.concurrent.ExecutionException e) {
             // Report the browser task's own message, not the executor's wrapper text.
             Throwable cause = e.getCause() == null ? e : e.getCause();
+            if (cause instanceof BrowserClosed closed) throw closed;
             // Playwright errors can quote URLs with tokens or credentials; never pass them through raw.
             String detail = cause.getMessage() == null ? cause.getClass().getSimpleName() : masker.text(cause.getMessage());
             throw new IllegalStateException("Camoufox operation failed: " + detail, cause);
@@ -240,6 +253,13 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
     /** A browser call that missed its deadline after it started; the browser is restarted. */
     static final class BrowserStalled extends IllegalStateException {
         BrowserStalled(String message, Throwable cause) {
+            super(message, cause);
+        }
+    }
+
+    /** The browser went away under a running call (window closed, crash); the next call starts it again. */
+    static final class BrowserClosed extends IllegalStateException {
+        BrowserClosed(String message, Throwable cause) {
             super(message, cause);
         }
     }
@@ -295,6 +315,47 @@ public final class CamoufoxBrowser implements BrowserPagePort, BrowserContextAcc
                 // Interrupted by a later stall: go on with the reset.
             }
         }
+        forgetSession();
+    }
+
+    /**
+     * True while the persistent browser still answers. Playwright reports a closed browser through events it only
+     * reads while a call waits, so a closed window shows up here only after one cheap protocol round trip (the
+     * cookies of an unused address; nothing a website could see). Any other failure of that call is not taken as a
+     * closed browser.
+     */
+    private boolean browserAnswers() {
+        if (BrowserLiveness.gone(startContext, driverProcesses)) return false;
+        try {
+            startContext.cookies(LIVENESS_PROBE_URL);
+            return true;
+        } catch (PlaywrightException failure) {
+            if (BrowserLiveness.gone(startContext, driverProcesses)) return false;
+            throw failure;
+        }
+    }
+
+    private static final String LIVENESS_PROBE_URL = "https://argos-liveness.invalid/";
+
+    /**
+     * On the driver thread, once the browser was closed outside Argos: ends what is left of the old session (the
+     * driver, a Camoufox still shutting down) before anything starts again, since the persistent profile stays
+     * locked until the old browser has exited. Cookies, logins and history stay in the profile.
+     */
+    private void resetAfterClose() {
+        System.err.println("Argos: Camoufox was closed outside Argos; starting it again with the same profile.");
+        List<ProcessHandle> processes = BrowserLiveness.withDescendants(driverProcesses);
+        try {
+            if (playwright != null) playwright.close(); // its driver ends, and with it any browser it still runs
+        } catch (RuntimeException alreadyGone) {
+            // The connection is gone either way.
+        }
+        if (!BrowserLiveness.awaitExit(processes, java.time.Duration.ofSeconds(15))) destroyTree(processes);
+        forgetSession();
+    }
+
+    /** Forgets the whole browser session: tabs, user contexts, transport and proxy. The profile stays on disk. */
+    private void forgetSession() {
         context = null;
         startContext = null;
         forgetUserContexts();

@@ -195,7 +195,7 @@ den Link als Markdown-Text (das Modell gibt ihn an den Nutzer weiter) und zusät
 (Name, MIME-Typ, Größe). Der Endpunkt streamt die Datei mit `Content-Disposition: attachment` und passendem
 `Content-Type` (`text/plain`, `application/x-ndjson`, `application/zip`) – für alle drei Formate.
 
-- Ohne `PUBLIC_ORIGIN` lautet der Link `http://<ARGOS_HOST>:<Port>/…` (nur lokal brauchbar).
+- Ohne `PUBLIC_ORIGIN` lautet der Link `http://<SERVER_HOST>:<Port>/…` (nur lokal brauchbar).
 - Der Endpunkt liegt außerhalb des Bearer-Filters, weil ein Browser-Download kein Token mitsendet. Zugangsnachweis
   ist die Export-ID: 256 Zufallsbits, nur im Speicher, gebunden an das `exports/`-Verzeichnis des aufrufenden Chats
   und einen von Argos vergebenen Dateinamen. Die ID enthält keinen Pfad; aufgelöst wird nur eine reguläre Datei

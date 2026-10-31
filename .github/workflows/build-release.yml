@@ -58,8 +58,10 @@ jobs:
               echo "Invalid semantic release tag: $GITHUB_REF_NAME" >&2
               exit 1
             fi
+          elif [[ "$GITHUB_REF" == "refs/heads/main" ]]; then
+            VERSION="1.1.0"
           else
-            VERSION="0.1.0-SNAPSHOT"
+            VERSION="1.1.0-SNAPSHOT"
           fi
           echo "value=$VERSION" >> "$GITHUB_OUTPUT"
 
@@ -202,6 +204,50 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          files: |
+            argos.jar
+            argos-package.zip
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+
+  publish-v1-1-0:
+    name: Publish Argos v1.1.0 from verified main
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [build, windows-smoke]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check existing v1.1.0 release
+        id: existing
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view v1.1.0 --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo 'published=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'published=false' >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download verified Argos distribution
+        if: steps.existing.outputs.published == 'false'
+        uses: actions/download-artifact@v4
+        with:
+          name: argos-distribution
+
+      - name: Download verified standalone Argos JAR
+        if: steps.existing.outputs.published == 'false'
+        uses: actions/download-artifact@v4
+        with:
+          name: argos-standalone-jar
+
+      - name: Create v1.1.0 tag and GitHub Release
+        if: steps.existing.outputs.published == 'false'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.1.0
+          target_commitish: ${{ github.sha }}
+          name: Argos v1.1.0
           files: |
             argos.jar
             argos-package.zip

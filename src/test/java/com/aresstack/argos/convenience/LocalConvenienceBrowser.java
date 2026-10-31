@@ -180,8 +180,18 @@ final class LocalConvenienceBrowser implements ConvenienceBrowser {
     }
 
     @Override
+    public synchronized java.util.Set<String> openTabIds() {
+        return java.util.Set.copyOf(tabs.keySet());
+    }
+
+    @Override
     public synchronized void closeTabQuietly(String tab) {
         tabs.remove(tab);
+    }
+
+    /** The browser was closed outside Argos and started again: every tab is gone, ids keep counting up. */
+    synchronized void restartAfterClose() {
+        tabs.clear();
     }
 
     @Override

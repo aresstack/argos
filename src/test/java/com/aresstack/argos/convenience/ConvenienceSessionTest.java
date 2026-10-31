@@ -481,6 +481,49 @@ class ConvenienceSessionTest {
         assertThrows(IllegalArgumentException.class, () -> session.selectResults("s1", ids.subList(0, 11)));
     }
 
+    @Test void aUrlWhoseTabWentWithTheClosedBrowserOpensAgain() throws Exception {
+        sites.page("https://a.org/", page("A", "t", null));
+        sites.page("https://b.org/", page("B", "t", null));
+        LocalConvenienceBrowser browser = new LocalConvenienceBrowser(sites);
+        ConvenienceSession session = new ConvenienceSession(browser, coordinator, UrlPolicy.off(),
+                query -> List.of(), null);
+        String before = (String) list(session.openUrl("https://a.org/"), "opened").get(0).get("tabId");
+        assertEquals("already open", list(session.openUrl("https://a.org/"), "skipped").get(0).get("reason"));
+
+        browser.restartAfterClose(); // Camoufox closed by the user, started again by the next call (#65)
+
+        Map<String, Object> again = session.openUrl("https://a.org/");
+        assertTrue(list(again, "skipped").isEmpty(), again.toString());
+        String after = (String) list(again, "opened").get(0).get("tabId");
+        assertNotEquals(before, after);
+        assertEquals("A", session.readTab(after, 1).get("title"));
+        assertThrows(IllegalArgumentException.class, () -> session.readTab(before, 1));
+        assertEquals(1, list(session.openUrl("https://b.org/"), "opened").size());
+        // Duplicates are still recognised among the tabs that really are open.
+        assertEquals("already open", list(session.openUrl("https://a.org/"), "skipped").get(0).get("reason"));
+    }
+
+    @Test void aTabTheUserClosedNeitherBlocksItsUrlNorCountsTowardsTheLimit() throws Exception {
+        List<String> urls = new ArrayList<>();
+        for (int i = 0; i < 21; i++) {
+            urls.add("https://s" + i + ".org/");
+            sites.page(urls.get(i), page("p" + i, "t", null));
+        }
+        LocalConvenienceBrowser browser = new LocalConvenienceBrowser(sites);
+        ConvenienceSession session = new ConvenienceSession(browser, coordinator, UrlPolicy.off(),
+                query -> List.of(), null);
+        List<String> ids = new ArrayList<>();
+        for (int i = 0; i < 20; i++) ids.add((String) list(session.openUrl(urls.get(i)), "opened").get(0).get("tabId"));
+        assertTrue(String.valueOf(list(session.openUrl(urls.get(20)), "skipped").get(0).get("reason"))
+                .contains("tab limit"));
+
+        browser.closeTabQuietly(ids.get(0)); // closed in the browser window, not through web_close_tabs
+
+        assertEquals(1, list(session.openUrl(urls.get(0)), "opened").size());
+        browser.restartAfterClose();
+        assertEquals(1, list(session.openUrl(urls.get(20)), "opened").size());
+    }
+
     @Test void blockedTargetsAreNeverLoaded() throws Exception {
         ConvenienceSession session = new ConvenienceSession(new LocalConvenienceBrowser(sites), coordinator,
                 UrlPolicy.publicOnly(), (query, engines) -> List.of(run("bing", "http://127.0.0.1:9/secret")), null);
